@@ -206,7 +206,7 @@
   (setup
     {:Type 'JFrame
     :Title "See menu items"
-    :below-actionPerformed (fn [s e o] (assoc s :Title (str "Menu choosen: " (:ActionCommand e))))
+    :below-actionPerformed (fn [s e o] (println e) (assoc s :Title (str "Menu choosen: " (:ActionCommand e))))
     :Children
     [{:Type 'JMenuBar
       :Children

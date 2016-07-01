@@ -17,15 +17,18 @@
 (defn is-dir [^String file] ; No, type hints are not always evil, these are strings.
   (.isDirectory (File. file)))
 
+(defn is-file [^String file]
+  (.isFile (File. file)))
+
 ; conversion functions:
 
 (defn file2namespace [^String file]
   "./src/clooj/java/file.clj into clooj.java.file, etc"
   (string/replace (subs file 6 (- (count file) 4)) (sep) "."))
 
-(defn namespace2file [^String file]
+(defn namespace2file [^String namesp]
   "inverse of file2namespace."
-  (str "." (sep) "src" (sep) (string/replace file "." (sep)) ".clj"))
+  (str "." (sep) "src" (sep) (string/replace namesp "." (sep)) ".clj"))
 
 (defn file2folder [^String file]
   "extracts the folder that the file (which is NOT a folder) is in."

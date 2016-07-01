@@ -250,6 +250,7 @@
                  tree-path (node-to-treePath node-ob) ; IS a TreePath.
                  ; Make sure we still disagree:
                  new-expanded? (boolean (get (:leaf-state jtree-st) :Expanded?))
+                 ;_ (println "expanded? " new-expanded? (mapv str (.getPath tree-path)))
                  fn!! (if new-expanded? #(.expandPath jtree tree-path) #(.collapsePath jtree tree-path))
                  blocked? (if jtree (.getClientProperty jtree "JTree-expand-collapse-blocked?") false)
                  ]
@@ -302,7 +303,7 @@
              (let [jtree (:obj (obj-to-root-jtree obj))
                    out (if jtree (boolean (.getClientProperty jtree "JTree-events-blocked?")) false)]
                 out))
-  ; the parents and children are JTrees, but it's theier getTreeNode that is the buisness end.
+  ; the parents and children are JTrees, but it's their getTreeNode that is the buisness end.
   :add-child!
   (fn [parent-obj child-obj state path-to-parent]
     (if (instance? JTree child-obj) ; add the node to the node.
@@ -316,20 +317,24 @@
   ; Changing the structure has to go on daycare!
   :daycare!
   (fn [obj old new]
+    ;(println "daycare: " (str obj))
     (let [colexpand-spin-atom (atom true) colexpand-spin-fcn!! (colexpand obj old new colexpand-spin-atom true)
           root-tree-path (.getClientProperty obj "getJTreeRootPath")
           node-ob (.getClientProperty obj "getJTreeNode")
-          select-spin-atom (atom true)]
+          select-spin-atom (atom true)
+          jtree (:obj (obj-to-root-jtree obj))]
       ;((colexpand obj old new spin-atom false))
       (if (not= (:Selected? old) (:Selected? new))
         (thread/pulse!! (selecty obj (:Selected? new) select-spin-atom) #(* (inc %) 30) (str "tree selection is a modest pain:" root-tree-path)))
       (thread/pulse!! colexpand-spin-fcn!! #(* (inc %) 30) (str "tree expansion is a big pain:" root-tree-path) colexpand-spin-atom)
-      )
-    )
+      (if (= jtree obj) ; are we the root tree?
+          ; Preserve the selection paths.
+          (let [old-sel-paths (.getSelectionPaths obj)]
+            (.reload (.getModel obj))
+            (.setSelectionPaths obj old-sel-paths))))) ; we really only need to update the last level.
   ; We basically are replacing all of the builtin updater here:
   :extra-update! 
   (fn [obj old new]
-  
     (let [node-ob (.getClientProperty obj "getJTreeNode")
           root-tree-path (.getClientProperty obj "getJTreeRootPath")
           spin-atom (atom true)
@@ -345,7 +350,6 @@
             root-path (.getClientProperty obj "path")
             paths-added? (mapv #(.isAddedPath e %) (range (count leaf-paths)))
             jtreedescs (mapv #(subvec (into [] %) (count root-path)) leaf-paths)]
-        ;(println "tree selection:" leaf-paths path-added?) 
         {:jtree-descendents jtreedescs :jtree-added? paths-added?
          :jtree-descendents-selected (reduce #(if (nth paths-added? %2) (conj %1 (nth jtreedescs %2)) %1) [] (range (count paths-added?)))
          :jtree-descendents-unselected (reduce #(if (not (nth paths-added? %2)) (conj %1 (nth jtreedescs %2)) %1) [] (range (count paths-added?)))}))

@@ -32,7 +32,7 @@
 ;(def confusions (mapv first (filterv #(> (count (second %)) 1) (mapv vector (keys gmethods) (vals gmethods)))))
 
 (defn paint! [g cmds]
-  ; This calss conversion stuff is a MESS:
+  ; This class conversion stuff is a MESS:
   (let [long2int #(if (= (type %) Long) (int %) %) ; clojure likes longs but java's graphics likes ints. 
         float2double #(if (= (type %) Float) (double %) %) ; graphics2D decides randomally whether to use doubles or floats.
         double2float #(if (= (type %) Double) (float %) %)
@@ -49,36 +49,34 @@
                       (mapv #(let [a (mapv % (mapv long2int args))]
                           (try {:method (.getMethod g-class name (args2cl a)) :args a}
                             (catch Exception e nil))) [identity float2double double2float])))))
-        
-        draw!! (fn [cname prefix args0]
-                 (let [name (str prefix (subs (str cname) 1))
+        ; Both drawing and setting the state of the graphics:
+        draw!! (fn [cname prefix args0] ; cname is a keyword.
+                 (let [args0 (if (not (coll? args0)) [args0] args0) ; in case the user doen't wrap it.
+                       name (str prefix (subs (str cname) 1))
                        args-and-method (arg-m name args0) args (:args args-and-method)
                        ^java.lang.reflect.Method m (:method args-and-method)]
                    (if (nil? m) (throw (Exception. (str "Not recognized command: " cname ", " args0))))
                    (.invoke m g (into-array Object args))))
-        ; Sets the graphics state approapiatly so that changes aren't persistant.
+        ; Sets/resets the graphics state so that changes aren't persistant (more functional).
         ; gmods (a map) keeps track of any modifications, opts is your options (or empty [] if no options).
         ; returns the new gmods.
         ; It only changes the state of graphics if opts changed, so it is not innefficient.
         set-to!! (fn [opts gmods inits] 
+                   (if (not (map? opts)) (throw (Exception. (str "Options not a map (it's a " (type opts) ")"))))
                    (let [optk (apply hash-set (keys opts)) modk (apply hash-set (keys gmods))
-                         changes (mapv #(not= (%1 opts) (%1 gmods)) (set/union optk modk))
+                         changes (filterv #(not= (%1 opts) (%1 gmods)) (set/union optk modk))
                          news (set/difference optk modk)
                          reverts (set/difference modk optk)
                          ; command the graphics and update gmods:
-                         gmods (reduce #(do (draw!! %1 "set" (%1 opts)) (assoc %2 %1 (%1 opts))) 
-                                 gmods (concat changes news))
-                         gmods (reduce #(do (draw!! %1 "set" (%1 inits)) (dissoc %2 %1)) 
+                         gmods (reduce #(do (draw!! %2 "set" (%2 opts)) (assoc %1 %2 (%1 opts))) 
+                                 gmods (apply hash-set (concat changes news)))
+                         gmods (reduce #(do (draw!! %2 "set" (%2 inits)) (dissoc %1 %2)) 
                                  gmods reverts)] gmods))
         gfx-init-state gdefaults] ; Use our canned defaults for inits to avoid a slow? scan through the reflection.
     (loop [ix 0 gmods {}]
       (if (= ix (count cmds)) "DONE!"
         (let [ci (nth cmds ix) ; this particular draw command.
-              opts (if (> (count ci) 2) (nth ci 2) []) ; linewidth, etc (other optional stuff)
+              opts (if (> (count ci) 2) (nth ci 2) {}) ; linewidth, etc (other optional stuff)
               gmods1 (set-to!! opts gmods gfx-init-state)] ; .setColor, etc.
           (draw!! (first ci) "" (second ci));the main thing we draw.
           (recur (inc ix) gmods1))))))
-          
-
-;(eval (list (symbol (str "." (subs (str :contains) 1))) "planet" "p"))
-

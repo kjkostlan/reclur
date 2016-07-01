@@ -234,7 +234,6 @@
       (let [root-state @root-atom]
         (if root-state
           (let [t0 (thread/get-time-ns)
-    
                 ; Processing is always false since this is a seperate thing.
                 ; To avoid timing issues, all :every frame events hapen on thier states:
                 new-state (reduce #(process-event (assoc root-state :state %1) %2 
