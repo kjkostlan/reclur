@@ -17,6 +17,7 @@
             [clooj.java.listener :as listener]
             [clooj.java.updater :as updater]
             [clooj.coder.grammer :as grammer]
+            [clooj.java.errcatch :as errcatch]
             [clooj.java.thread :as thread]
             [clooj.java.clojurize :as clojurize])
   (:import [javax.swing SwingUtilities] [java.awt Window]))
@@ -89,7 +90,7 @@
         
         root-atom (atom {:state stated :setting-up? true :updating-java-components? true})
         _ (if (:debug-java-changes opts) (swap! root-atom assoc :debug-java-changes [])) ; track changes to the different java objects.
-        IaW #(SwingUtilities/invokeAndWait %)
+        IaW #(SwingUtilities/invokeAndWait (errcatch/wrap %)) ; takes in a function.
         setup-gui!! (fn [] ; ran NOT on the edt.
                      ; invoke-and-wait all our calls.
                      ; this allows using invokeAndWait, ensuring all events have been fired, etc.
@@ -107,12 +108,12 @@
                        (swap! root-atom assoc :setting-up? false)))]
     ; If we are not on the edt, the deref has negligable effect but makes sure that we are fully done modifying the atom and with the edt queue.
     ; if we are on the edt, derefing would deadlock with the IaW call.
-    (let [f (control-edt? setup-gui!! false)] (if (not edt?) @f)) root-atom))
+    (let [f (control-edt? (errcatch/wrap setup-gui!!) false)] (if (not edt?) @f)) root-atom))
 
 (defn delete! [root-atom]
   "Deletes 'everything' by removing the top level GUI component and nilling the atom. The GC should handle the rest.
    IMPORTANT: delete! must be called upon bieng finished or else there will be a memory leak (window closings will call delete)."
-  (control-edt? #(updater/delete! root-atom) true))
+  (control-edt? (errcatch/wrap #(updater/delete! root-atom)) true))
 
 (defn get-state [root-atom]
   "Gets state describing the gui, not the java objects themselves. This will be immutable (though it may contain mutables).
@@ -121,7 +122,7 @@
 
 (defn update! [root-atom new-state]
   "Updates a state. Does not return anything."
-  (control-edt? #(updater/update! root-atom (updater/add-defaults-recursive new-state) "gui/update call") true))
+  (control-edt? (errcatch/wrap #(updater/update! root-atom (updater/add-defaults-recursive new-state) "gui/update call")) true))
 
 (defn debug-munge-java-changes [debug-java-changes munge-java?]
   "Represents the java changes in a terse format that does not generate infinite loops.

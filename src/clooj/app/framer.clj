@@ -201,7 +201,8 @@
    [{:Type 'JTextArea :Text "REPL input" :Font (Font. "monospaced" Font/PLAIN 12)
      :id :input}]})
 
-(declare reload)
+(declare reset-app) ; reset app -> menu -> window -> reset-app circle.
+(declare reload-fn)
 
 ; Menus:
 (defn menu [] 
@@ -238,7 +239,8 @@
                          (str "No file is open to delete.")))))}]}
     {:Type 'JMenu :Text "window"
      :Children
-     [{:Type 'JMenuItem :Text "reset app" :callback reload}]}]})
+     [{:Type 'JMenuItem :Text "reload fcns" :callback reload-fn}
+      {:Type 'JMenuItem :Text "reset app" :callback reset-app}]}]})
 
 ; The main window with everything:
 (defn _window []
@@ -274,7 +276,7 @@
                                     ]
                                 ; tell the user about external changes:
                                 (if (> (count changes) 0)
-                                  (assoc-in s-new (concat opath [:Text]) (apply str "External files changed (rename = add+remove): " 
+                                  (assoc-in s-new (concat opath [:Text]) (apply str "External files changed (rename = add+remove), these namespaces are NOT reloaded: " 
                                                                            (mapv #(str % "\n") changes))) s-new))
                                s1)))
   ; Mainly menues here:
@@ -308,6 +310,21 @@
      {:out (output) :in (input)}}}}}})
 (defn window [] (let [w (_window)] (assoc w :id-paths (id-paths w))))
 
-(defn reload [s]
-   ;ignores the current state.
+(defn reset-app [s]
+   "Completely resets the application."
   (window))
+  
+(defn _reload-fn [s r]
+   ; Use s unless r has the 
+  (let [ca (widget/align-children s r)
+        kys (filterv #(first (get ca %)) (keys ca)) ; don't add r children to nil s children.
+        s1 (if (:Children s) (assoc s :Children (mapv #(_reload-fn (first (get ca %)) (second (get ca %))) kys)) s)
+        fks (filterv #(and (fn? (get s %)) (fn? (get r %))) (keys s))]
+    ; the actual replace step:
+    (reduce #(assoc %1 %2 (get r %2)) s fks)))
+(defn reload-fn [s]
+  "Reloads everything that is a function, but keeps the rest of the app.
+   Makes it easier because there is no need to store the application.
+   (saving this file reloads the namespace and this reload the functions).
+   Note: only internal editing will do this (TODO external edits should update)."
+   (_reload-fn s (window)))

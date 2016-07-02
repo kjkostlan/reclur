@@ -10,6 +10,7 @@
             [clooj.coder.grammer :as grammer]
             [clojure.string :as string]
             [clooj.java.rawdoc :as rawdoc]
+            [clooj.java.errcatch :as errcatch]
             [clooj.collections :as collections]))
 (def debug (atom nil))
 
@@ -146,7 +147,7 @@
     (if o (.getClientProperty o "listener/listen-fn->updating-for-event")
       false)))
 
-(defn listen-fn [listener-key update-fns]
+(defn _listen-fn [listener-key update-fns]
   "Creates the java-style listener function that calls any event(s) (with update-fns)
    and then atomistically updates the root-atom. The :java is atomistic but the java changes aren't atomistic."
     (fn [e] ; f is ran on the EDT, of course.
@@ -216,6 +217,9 @@
                              (.putClientProperty obj "listener/listen-fn->updating-for-event" false)))
                        ; No user events, simply reset the atom:
                        (reset! root-atom mid-root)))))))))
+
+(defn listen-fn [listener-key update-fns]
+  (errcatch/wrap (_listen-fn listener-key update-fns)))
 
 ; Makes multible listeners from a list. The listener is as a KEYWORD.
 (defmacro _listener-makers [_]
