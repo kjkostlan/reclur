@@ -1,4 +1,4 @@
-(ns clooj.repl.main
+(ns clooj.repl.main_old
   (:import (java.io
              BufferedReader BufferedWriter
              InputStreamReader
@@ -17,7 +17,7 @@
             [clooj.brackets :as brackets]
             [clooj.protocols :as protocols]
             [clooj.utils :as utils]
-            [clooj.repl.debugger :as debugger]
+            [clooj.repl.debugger_old :as debugger_old]
             [clooj.app.state_old :as app_old]
             [clooj.coder.cbase :as cbase]
             [clooj.java.file :as jfile]
@@ -43,7 +43,7 @@
 
 ; Stuff printed as println will still go to the command window, TODO: fix this.
 (defn send-to-repl!!!
-    ([cmd] (debugger/on-text-to-repl!!! cmd)))
+    ([cmd] (debugger_old/on-text-to-repl!!! cmd)))
 
 (defn selected-region [ta]
   (if-let [text (.getSelectedText ta)]
@@ -155,19 +155,19 @@
   (let [isl (cio/local-island text caret)
         lo (nth isl 0)
         hi (nth isl 1)
-        bp "(debugger/breakpoint!!! "
+        bp "(debugger_old/breakpoint!!! "
         nbp (count bp)
-        ensure #(namespacer/ensure-require % "clooj.repl.debugger" "debugger")
-        remove #(namespacer/remove-require % "clooj.repl.debugger" "debugger")]
+        ensure #(namespacer/ensure-require % "clooj.repl.debugger_old" "debugger_old")
+        remove #(namespacer/remove-require % "clooj.repl.debugger_old" "debugger_old")]
     (if (= lo -1)
       {:text text :caret caret}; no modification as it can't find a breakpoint.
       (let [isls (subs text lo hi) lo1 (+ lo 1)]
         (if (= (subs isls 0 (max nbp (inc (- hi lo)))) bp)
           ; remove breakpoint (and remove the require if nessessary), place cursor at beginning of removed breakpoint:
           (let [out (str (subs text 0 lo) "(" (subs isls (+ nbp 1) (- (count isls) 1)) (subs text hi))]
-            (if (.contains out "debugger/breakpoint!!!") {:text out :caret lo1} 
+            (if (.contains out "debugger_old/breakpoint!!!") {:text out :caret lo1} 
               (let [outsmall (remove out)] {:text outsmall :caret (+ lo1 (- (count outsmall) (count out)))})))
           ; make breakpoint:
-          (let [out (str (subs text 0 lo) "(debugger/breakpoint!!! " isls ")" (subs text hi))
+          (let [out (str (subs text 0 lo) "(debugger_old/breakpoint!!! " isls ")" (subs text hi))
                 outlarge (ensure out)]
                 {:text outlarge :caret (+ lo1 (- (count outlarge) (count out)))}))))))

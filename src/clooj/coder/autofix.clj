@@ -55,14 +55,4 @@
              s (strmap/code-to-string code)
              ] {:str s :map (into [] (range (count s)))})
       :else nil)))
-
-; DEBUG testing code only, can be removed w/o errors:
-(defn test-fix []
-  "(:fixed (test-fix))"
-  (let [file "./src/clooj/test/foo.clj"; a simple test file with an error. ;(repl/reload-file file)
-        _ (eval '(require '[clooj.repl.main :as repl]))
-        err (try (eval `(repl/reload-file ~file)) ; eval to avoid a cyclic dependency, which would be an anti-pattern outside of the context of debugging.
-             (catch Exception e e))
-        text (jfile/load-textfile file)]
-    {:err err :text text :fixed (fix text err)}))
     

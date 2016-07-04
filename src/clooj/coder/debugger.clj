@@ -82,7 +82,10 @@
   (loop [acc 0 ix 0] 
     (if (= ix 1) (+ 1 2) (if (< 1 0) 1 (recur (+ acc x) (inc ix))))))
 
-;; Testing:
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Testing ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defn tast [x] (watch!! (* x x)))
 
 (defn tast1 [x] (watch!! (let [a 1] (+ a x))))
@@ -100,12 +103,12 @@
                            (if (= ix x) acc
                                (recur (+ acc x) (inc ix))))))
 
-(defn test-debug-string [] 
-  ; Tests reading a string, adding a break-point, and tracking a progress.
-  (let [s "(watch!! (loop [acc 0 ix 0] 
-                           (if (= ix 10) acc
-                               (recur (+ acc 10) (inc ix)))))" ; our example.
-        _ (eval s) ; side-effects created in the atom.
-        h (get-history s TODO)
-        ] 
-    c))
+;(defn test-debug-string [] 
+;  ; Tests reading a string, adding a break-point, and tracking a progress.
+;  (let [s "(watch!! (loop [acc 0 ix 0] 
+;                           (if (= ix 10) acc
+;                               (recur (+ acc 10) (inc ix)))))" ; our example.
+;        _ (eval s) ; side-effects created in the atom.
+;        h (get-history s TODO)
+;        ] 
+;    c))

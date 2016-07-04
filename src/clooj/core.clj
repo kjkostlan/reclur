@@ -19,7 +19,7 @@
               [clojure.string :as string]
               [clooj.java.window_old :as jwindow_old]
               [clooj.app.make_old :as make_old]
-              [clooj.repl.main :as repl]
+              [clooj.repl.main_old :as repl_old]
               [clooj.utils :as utils]
               [clooj.java.prefs :as jprefs]
               [clooj.java.tree_old :as jtree_old]
@@ -365,7 +365,7 @@
   (make_old/create-app!!)
   (make_old/make-menus!!)
   (make_old/add-visibility-shortcut!!)
-  (repl/add-repl-input-handler!!)
+  (repl_old/add-repl-input-handler!!)
   (let [frame @app_old/frame]
     (jwindow_old/persist-window-shape!!! "main-window" frame)
     (utils/enable-mac-fullscreen! frame)

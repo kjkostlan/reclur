@@ -29,8 +29,8 @@
             [clooj.java.window_old :as jwindow_old]
             [clojure.string :as string]
             [clojure.string :as string]
-            [clooj.repl.main :as repl]
-            [clooj.repl.debugger :as debugger]
+            [clooj.repl.main_old :as repl_old]
+            [clooj.repl.debugger_old :as debugger_old]
             [clooj.app.state_old :as app_old]
             [clooj.utils :as utils]
             [clooj.navigate :as navigate]
@@ -48,7 +48,6 @@
             [clooj.coder.strmap :as strmap]
             [clooj.coder.tracer :as tracer]
             [clooj.java.prefs :as jprefs]
-            [clooj.repl.output :as repl-output]
             [clooj.java.textarea_old :as jtext_old]
             [clooj.coder.autofix :as autofix]))
 
@@ -231,7 +230,7 @@
          ; side effect: loading file.
          info (if (jfile/clj? file) 
                 (try (do ;(println "before reload") 
-                         (repl/reload-file file)
+                         (repl_old/reload-file file)
                          ;(println "after reload") 
                          {:str (str (:str info) "(no compile error).\n")})
                   (catch Exception e
@@ -370,7 +369,7 @@
   (exit-if-closed!! @app_old/frame)
   ;(activate-caret-highlighter!!)
   (utils/attach-action-keys! (:textarea @app_old/src-text-area)
-    ["cmd1 ENTER" #(repl/send-selected-to-repl!!!)])
+    ["cmd1 ENTER" #(repl_old/send-selected-to-repl!!!)])
   ;(indent/setup-autoindent! app_old/repl-in-text-area)
   (dorun (map #(attach-global-action-keys!! %)
               [(:tree @app_old/src-tree) (:textarea @app_old/src-text-area) (:textarea @app_old/repl-in-text-area) (:textarea @app_old/repl-out-text-area)
@@ -449,7 +448,7 @@
     (first (filter #(and (.exists %) (.isFile %)) file-candidates))))
 
 (defn toggle-breakpoint!! [atomtext]
-  (let [tc (repl/toggle-breakpoint (jtext_old/get-text atomtext) (jtext_old/get-caret-position atomtext))]
+  (let [tc (repl_old/toggle-breakpoint (jtext_old/get-text atomtext) (jtext_old/get-caret-position atomtext))]
     (jtext_old/set-text! atomtext (:text tc) (:caret tc))))
 
 (defn history-visit!! [jump] 
@@ -475,7 +474,7 @@
 
 ; another way of loading a file, that tries to be somewhat smart for the user's name:
 (defn open-file!! []
-  (let [file (repl/user-decide-file)] 
+  (let [file (repl_old/user-decide-file)] 
     (if (not (= file -1)) ; -1 means user does not decide a file. nil means invalid file.
       (if (nil? file)
         (JOptionPane/showMessageDialog nil (str "Unable to recognize your keyword") "Oops" JOptionPane/ERROR_MESSAGE)
@@ -484,7 +483,7 @@
 ; a nice way of importing a file or namespace. idiomatic = uses your conventions of what you call imports, etc.
 (defn idiomatic-import!! [hint_]
   (let [hint (if (nil? hint_) (utils/user-input "type the file or how you :as the namespace") hint_)
-        importst (repl/idiomatic-require hint true)]
+        importst (repl_old/idiomatic-require hint true)]
     (if (nil? importst) (JOptionPane/showMessageDialog nil (str "Unable to recognize your keyword") "Oops" JOptionPane/ERROR_MESSAGE)
       (do (jtext_old/append-text! app_old/repl-in-text-area importst)
           (.requestFocusInWindow (:textarea @app_old/repl-in-text-area))))))
@@ -497,7 +496,7 @@
 
 ; forgot what something was called?
 (defn list-vars!! []
-  (let [file (repl/user-decide-file)]
+  (let [file (repl_old/user-decide-file)]
     (if (not (= file -1))
       (if (nil? file)
         (JOptionPane/showMessageDialog nil (str "Unable to recognize your keyword") "Oops" JOptionPane/ERROR_MESSAGE)
@@ -595,12 +594,12 @@
       ["Goto line num..." "G" "cmd1 L" #(jtext_old/move-caret-to-line! app_old/src-text-area)]
       )
     (utils/add-menu! menu-bar "REPL" "R"
-      ["Evaluate here" "E" "cmd1 ENTER" #(repl/send-selected-to-repl!!!)]
-      ["Evaluate entire file" "F" "cmd1 E" #(repl/send-alltext-to-repl!!!)]
+      ["Evaluate here" "E" "cmd1 ENTER" #(repl_old/send-selected-to-repl!!!)]
+      ["Evaluate entire file" "F" "cmd1 E" #(repl_old/send-alltext-to-repl!!!)]
       ["Clear Output" "C" "cmd1 shift K" clear-repl!!]
       ["Toggle Breakpoint" "B" "cmd1 B" #(toggle-breakpoint!! app_old/src-text-area)]
-      ["Print stack trace for last error" "T" "cmd1 T" #(debugger/print-stack-trace! nav-to-file-caret!! app_old/repl-out-text-area true)]
-      ["Print raw stack trace 4 last err" "T" "cmd1 shift T" #(debugger/print-stack-trace! nav-to-file-caret!! app_old/repl-out-text-area false)]
+      ["Print stack trace for last error" "T" "cmd1 T" #(debugger_old/print-stack-trace! nav-to-file-caret!! app_old/repl-out-text-area true)]
+      ["Print raw stack trace 4 last err" "T" "cmd1 shift T" #(debugger_old/print-stack-trace! nav-to-file-caret!! app_old/repl-out-text-area false)]
       ["Be like this namespace" "U" "cmd1 U" #(use-ns!!)] 
       ["Idiomatic require this file" "I" "cmd1 I" #(idiomatic-import!! @app_old/current-file)]
       ["Idiomatic require a file" "J" "cmd1 shift I" #(idiomatic-import!! nil)])
@@ -617,7 +616,7 @@
       ["Increase font size" nil "cmd1 PLUS" #(grow-font1!!)]
       ["Decrease font size" nil "cmd1 MINUS" #(shrink-font!!)]
       ["Settings" nil nil #(settings/show-settings-window!! apply-settings!!!)]
-      ["Refersh GUI" nil "cmd1 shift R" #(repl/send-to-repl!!! "(do (use 'clooj.core) (restart-app!!))")])))
+      ["Refersh GUI" nil "cmd1 shift R" #(repl_old/send-to-repl!!! "(do (use 'clooj.core) (restart-app!!))")])))
 
 (defn add-visibility-shortcut!! []
   (let [shortcuts [(map utils/get-keystroke ["cmd2 EQUALS" "cmd2 PLUS"])]]

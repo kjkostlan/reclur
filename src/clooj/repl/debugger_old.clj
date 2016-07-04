@@ -7,7 +7,7 @@
 ; /cont  (continues the debug calculation).
 ; ... more to come.
 
-(ns clooj.repl.debugger
+(ns clooj.repl.debugger_old
   (:require
             [clooj.utils :as utils]
             [clooj.java.file :as jfile]

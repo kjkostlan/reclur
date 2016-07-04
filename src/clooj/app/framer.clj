@@ -5,10 +5,9 @@
   (:require [clooj.java.gui :as gui]
             [clooj.java.widget :as widget]
             [clooj.java.file :as jfile]
-            [clooj.repl.main :as repl]
+            [clooj.coder.repl :as repl]
             [clooj.utils :as utils]
-            [clooj.coder.grammer :as grammer]
-            [clooj.repl.debugger :as debugger]))
+            [clooj.coder.grammer :as grammer]))
 
 ; (require '[clooj.app.framer :as framer] '[clooj.java.gui :as gui])
 
@@ -114,7 +113,7 @@
           text ((:get-src-text s) s)]
       (do (jfile/save-textfile!!! cur-file text)
           (let [msg (if ns-conflict (str "Saved: " cur-file " ERROR: Namespace declared in file is missing, invalid, or doesn't match the filename.")
-                      (try (do (repl/reload-file cur-file) (str "Saved: " cur-file " (no error)."))
+                      (try (do (repl/reload-file!! cur-file) (str "Saved: " cur-file " (no error)."))
                          (catch Exception e (str "Saved: " cur-file " Compile error: " e  " (Error prevented downstream (re)definitions)."))))]
             ; Update s if we have made a new file:
             (assoc-in (if is-file? s (update-in s (:file-tree (:id-paths s)) #((:update %) % cur-file)))
@@ -125,6 +124,21 @@
   (update-in (assoc-in s (concat (:editor (:id-paths s)) [:Text])
                (jfile/load-textfile (:cur-file s)))
      (:file-tree (:id-paths s)) #(ensure-file-open % (:cur-file s))))
+
+(defn alert-changes [s]
+   "Updates s if the files changed and updates the GUI."   
+  (let [tpath (:file-tree (:id-paths s))
+		s-new (update-in s tpath #((:update %) % (:cur-file s))) ; update the JTree.
+		changes (get-diff (get-in s tpath) (get-in s-new tpath))]
+	; Every fyi text alert must use the repl:
+	(if (> (count changes) 0)
+	   (repl/add-to-repl!! (apply str "External files changed (rename = remove+add), these namespaces are NOT reloaded: " 
+						     (mapv #(str % "\n") changes)) false)) ; false = don't evaluate.
+	s-new))
+
+(defn code-to-repl!! [s]
+  (do (repl/add-to-repl!! (:Text (get-in s (get-in s [:id-paths :input])))) 
+    (assoc s :one-frame-repl-update-block? true))) ; repl change.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;Building the GUI (leaf first);;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defn get-tree []
@@ -145,11 +159,9 @@
                           (assoc x :Children filders) x))))]
    (assoc (convert ftree) :get-file-selected get-filename-from-tree
       :id :file-tree :update (fn [t-old ensure-this-file-is-open]
-                               ;(println "ensuring this is open: " ensure-this-file-is-open)
+                               ; Update for new files, but keep selected status if applicable (apply to the 'JTree level):
                                (ensure-file-open (update-tree-keep-settings t-old (get-tree)) 
-                                 ensure-this-file-is-open))
-      ; Update for new files, but keep selected status if applicable (apply to the 'JTree level):
-      )))
+                                 ensure-this-file-is-open)))))
 (defn file-tree []
    (let [ftree (get-tree)]
      {:Type 'JScrollPane
@@ -240,12 +252,18 @@
     {:Type 'JMenu :Text "window"
      :Children
      [{:Type 'JMenuItem :Text "reload fcns" :callback reload-fn}
-      {:Type 'JMenuItem :Text "reset app" :callback reset-app}]}]})
+      {:Type 'JMenuItem :Text "reset app" :callback reset-app}]}
+    {:Type 'JMenu :Text "repl"
+     :Children
+     [{:Type 'JMenuItem :Text "eval input (sh + enter)" :callback code-to-repl!!}
+      {:Type 'JMenuItem :Text "clc done tasks" :callback #(do (repl/clear-done-cmds!!) %)}
+      {:Type 'JMenuItem :Text "try to abort all tasks" :callback #(do (repl/clear-all-cmds!!) %)}
+      {:Type 'JMenuItem :Text "reset namespace" :callback #(do (repl/reset-ns!!) %)}]}]})
 
 ; The main window with everything:
 (defn _window []
  {:Type 'JFrame
-  :Title "Key Missing features: find-replace, debugging, refactoring."
+  :Title "Key Missing features: find-replace, debugging, refactoring, (un)binding projects."
   ; Gets the editor text:
   :get-src-text #(:Text (get-in % (:editor (:id-paths %))))
   :set-src-text #(assoc-in %1 (concat (:editor (:id-paths %1)) [:Text]) %2)
@@ -267,18 +285,14 @@
   ; Checking if the files change:
   :frame-ix 0
   :Every-frame (fn [s e o] 
-                 (let [s1 (update s :frame-ix inc)]
-                            (if (= (mod (:frame-ix s1) 100) 0) 
-                              (let [tpath (:file-tree (:id-paths s1))
-                                    s-new (update-in s1 tpath #((:update %) % (:cur-file s1)))
-                                    opath (:output (:id-paths s-new))
-                                    changes (get-diff (get-in s1 tpath) (get-in s-new tpath))
-                                    ]
-                                ; tell the user about external changes:
-                                (if (> (count changes) 0)
-                                  (assoc-in s-new (concat opath [:Text]) (apply str "External files changed (rename = add+remove), these namespaces are NOT reloaded: " 
-                                                                           (mapv #(str % "\n") changes))) s-new))
-                               s1)))
+                 (let [s1 (update s :frame-ix inc)
+                       ; Very fast b/c it's cached:
+                       ; :one-frame-repl-update-block? reduces the <in progress> flicker for very short calculations.
+                       s1 (if (:one-frame-repl-update-block? s1) (assoc s1 :one-frame-repl-update-block? false)
+                           (assoc-in s1 (concat (:output (:id-paths s1)) [:Text])
+                             (repl/get-repl-output)))]
+                   ; periodically check for changes:
+				   (if (= (mod (:frame-ix s1) 100) 0) (alert-changes s1) s1)))
   ; Mainly menues here:
   :below-actionPerformed
   (fn [s e o]
@@ -287,14 +301,10 @@
   ; This event runs the repl:
   :below-keyPressed
   (fn [s e o]
-    (let [inpath (get-in s [:id-paths :input]) outpath (get-in s [:id-paths :output])]
-      (if (and (= (:descendent e) inpath) ; right place.
+      (if (and (= (:descendent e) (get-in s [:id-paths :input])) ; right place.
             (:ShiftDown e) (= (:KeyCode e) 10)) ; shift + enter.
-        ; TODO: on a seperate thread so we do not freeze if a slow command appears:
-        (assoc-in s (concat outpath [:Text]) 
-          (try (debugger/non-debug-eval!!! (:Text (get-in s inpath)))
-            (catch Exception e (str e))))
-        s))); didn't fit the repl criteria, no actual change.
+        (code-to-repl!! s) ; fits repl critera.
+        s)); didn't fit the repl criteria, no actual change.
   :Children
  {:menu (menu)
   :panes
@@ -328,3 +338,6 @@
    (saving this file reloads the namespace and this reload the functions).
    Note: only internal editing will do this (TODO external edits should update)."
    (_reload-fn s (window)))
+   
+(set! *warn-on-reflection* true)   
+(set! *warn-on-reflection* false)
