@@ -4,12 +4,16 @@
            [javax.swing.text DefaultHighlighter DefaultHighlighter$DefaultHighlightPainter])
   (:require [clooj.java.gui :as gui]
             [clooj.java.widget :as widget]
+            [clooj.java.popup :as jpopup]
             [clooj.java.file :as jfile]
             [clooj.coder.repl :as repl]
             [clooj.utils :as utils]
+            [clooj.collections :as collections]
             [clooj.coder.grammer :as grammer]))
 
 ; (require '[clooj.app.framer :as framer] '[clooj.java.gui :as gui])
+
+(repl/add-to-repl!! "REPL output" false)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Keeping track of paths ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -37,28 +41,68 @@
   ; TODO: optimize both the parse code (reflection?) and look at differences in the text.
   ; This IS noticably slow as is, but still usable most of the time.
   ; TODO: we can centralize the side effects (bury them in the changes in state) if we change the details of the text. 
-  (if (and text caret obj)
-    (let [parse (grammer/basic-parse text false false)
-          ^ints levels_ (:level parse) levels (into [] levels_)
-          caret-level (let [x0 (get levels (dec caret)) x1 (get levels caret)] 
-                        (if (and x0 x1) (min x0 x1) 0))
-          ; all stuff at the level:
-          after (loop [acc [] ix caret]
-                   (cond (or (< ix 0) (>= ix (count levels))) acc
-                     (>= (nth levels ix) caret-level) (recur (conj acc ix) (inc ix))
-                     :else acc))
-          ; Stuff below:
-          before (loop [acc [] ix caret]
-                   (cond (or (< ix 0) (>= ix (count levels))) acc
-                     (>= (nth levels ix) caret-level) (recur (conj acc ix) (dec ix))
-                     :else acc))
-          region (sort (concat before after))          
-          begin (first region) end (last region)]
-          (if (and begin end)
-            (let [hltr (.getHighlighter obj)
-                  hpainter (DefaultHighlighter$DefaultHighlightPainter. Color/orange)]
-              (.removeAllHighlights hltr)
-              (.addHighlight hltr begin (inc end) hpainter))))))
+  (if (> (count text) 0)
+	(if (and text caret obj)
+          (let [parse (grammer/basic-parse text)
+			^ints levels (:level parse)
+			^ints tokens (:token parse)
+            ^ints modes (:mode parse)
+			^ints breaks (:break parse)
+            ^ints boosts (:boost parse)
+            ^ints escapes (:escape parse)
+            ^chars cs (.toCharArray text)
+			n (int (count levels)) ; all three arrays are 1:1.
+                        
+			; Wedges mean that the cursor is actually between stuff but there is no space:
+			; Since we are between tokens we should behave like we are.
+			crt? (and (> caret 0) (< caret n))
+			wc? (if crt? (grammer/cclose? (aget ^chars cs (dec caret))))
+			wo? (if crt? (and (grammer/copen? (aget ^chars cs caret)) (= (aget ^ints escapes (dec caret)) 0)))
+			wedge-paren? (and wc? wo?); ()|()
+			wedge-pmacro? (and wc? (grammer/creader? (aget ^chars cs caret))  ; ()|'foo
+                                        (or (= caret (dec n)) (not= (aget ^chars cs caret) \#) ; Avoid #{ and #" macros.
+                                          (and (not= (aget ^chars cs (inc caret)) \{) (not= (aget ^chars cs (inc caret)) \"))))
+			wedge-macrop? (or (and wo? (> (aget ^ints boosts (dec caret)) (aget ^ints boosts caret))) ; 'foo|() '(foo)|()
+                                          (and wedge-pmacro? (= (aget ^ints boosts (dec caret)) (aget ^ints boosts caret)))) ; 'foo|'() and '(foo)|'()
+                                        
+
+			wedge? (or wedge-paren? wedge-pmacro? wedge-macrop?)
+			dual-m-wedge? (and wedge-pmacro? wedge-macrop?)
+;_ (if (= (first text) \X) (println "caret: " caret "wedge?" wedge-paren? wedge-pmacro? wedge-macrop?))
+			; Hilighter ends: the first char that end the hilighting at the same location as we do.
+			lev+ (fn [ix] (grammer/level-boost-end cs modes levels boosts ix (and wedge? (not dual-m-wedge?)) dual-m-wedge?))
+			lev- (fn [ix] (grammer/level-boost-beginning cs modes levels boosts ix (and wedge? (not dual-m-wedge?)) dual-m-wedge?))
+			tok+ (fn [ix] (grammer/token-end tokens breaks ix))
+			tok- (fn [ix] (grammer/token-beginning tokens breaks ix))
+
+			; level-based hilite. inclusive ix for chars to be hilighted.
+			soft0 (min (lev- caret) (lev- (dec caret)))
+			soft0 (if (and (> soft0 0) (= (aget ^chars cs soft0) \{) (= (aget ^chars cs (dec soft0)) \#))
+			         (dec soft0) soft0) ; include the # for hash-sets. 
+			soft1 (max (lev+ caret) (lev+ (dec caret)))
+;_ (if (< (count text) 100) (println "lev:" (into [] levels) "boost:" (into [] boosts) "mode:" (into [] modes) "break: " (into [] breaks)  "soft:" soft0 soft1 "caret:" caret))
+            in-token? (and (> caret 0) (< caret n) (not= (aget ^ints breaks caret) 1)
+                        (= (aget ^ints tokens (dec caret)) 1) (= (aget ^ints tokens caret) 1))
+			hard0 (if in-token? (tok- (dec caret)))
+			hard1 (if in-token? (tok+ caret))
+			hltr (.getHighlighter obj)
+			hpainter-soft (DefaultHighlighter$DefaultHighlightPainter. (Color. (float 1.0) (float 0.9) (float 0.85)))
+			hpainter-hard (DefaultHighlighter$DefaultHighlightPainter. Color/orange)]
+	  (.removeAllHighlights hltr)
+	  (.setDrawsLayeredHighlights hltr false)
+	  (.addHighlight hltr soft0 (inc soft1) hpainter-soft)
+	  (if in-token? (.addHighlight hltr hard0 (inc hard1) hpainter-hard))))))
+          
+(defn hilight-update! [s e o] 
+  "Selection hilight superscedes the syntax-level hilight" 
+  (let [s0 (:SelectionStart s) s1 (:SelectionEnd s)]
+	(if (or (not s0) (not s1) (= s0 s1)) ; selection => don't hilight the level.
+	  (try (hilite-same-level! (:Text s) (:CaretPosition s) o)
+	    (catch Exception e (println "Syntax hilight error: " e)))
+	  (let [hltr (.getHighlighter o)
+			hpainter (DefaultHighlighter$DefaultHighlightPainter. (Color. (float 0.75) (float 0.75) (float 1.0)))]
+		(.removeAllHighlights hltr) (.addHighlight hltr s0 s1 hpainter)))) s)
+
 
 (defn update-tree-keep-settings [tree-old tree-new]
   "Updates tree-old's structure to reflect tree-new, but tries to keep the settings of tree-new."
@@ -104,25 +148,27 @@
     (if namesp (jfile/namespace2file (str namesp)))))
 
 (defn save-file!!! [s]
-  "Saves a file (unless file is nil, for which it does nothing)."
+  "Saves a the text of the editor into (:cur-file s), creates :cur-file if it doesn't exist on the disk.
+   Does nothing if there is no :cur-file yet."
   (if (:cur-file s)
     (let [cur-file (:cur-file s)
-          is-file? (jfile/is-file cur-file) 
+          is-file? (jfile/is-file cur-file)
           ; clj files must match between namespaces and java.
-          ns-conflict (if (jfile/clj? cur-file) (not= (get-wantsedit-file s) cur-file) false)
-          text ((:get-src-text s) s)]
-      (do (jfile/save-textfile!!! cur-file text)
-          (let [msg (if ns-conflict (str "Saved: " cur-file " ERROR: Namespace declared in file is missing, invalid, or doesn't match the filename.")
-                      (try (do (repl/reload-file!! cur-file) (str "Saved: " cur-file " (no error)."))
+          clj? (jfile/clj? cur-file)
+          ns-conflict (if clj? (not= (get-wantsedit-file s) cur-file) false)
+          text ((:get-src-text s) s)
+          _ (jfile/save-textfile!!! cur-file text)
+          s (if is-file? s (update-in s (:file-tree (:id-paths s)) #((:update %) % cur-file)))
+          t0 (if is-file? "Saved: " "Created: ")
+          msg (if ns-conflict (str t0 cur-file " ERROR: Namespace declared in file is missing, invalid, or doesn't match the filename.")
+                (try (if clj? (do (repl/reload-file!! cur-file) (str "Saved: " cur-file " (no error)."))
+                       (str "Saved: " cur-file " [not a .clj file, no compilation done]."))
                          (catch Exception e (str "Saved: " cur-file " Compile error: " e  " (Error prevented downstream (re)definitions)."))))]
-            ; Update s if we have made a new file:
-            (assoc-in (if is-file? s (update-in s (:file-tree (:id-paths s)) #((:update %) % cur-file)))
-              (concat (:output (:id-paths s)) [:Text]) msg)))) s))
+      (repl/add-to-repl!! msg false) s) s))
 
 (defn loadfile [s]
   "Uses the :cur-file to load. Does not check for validity."
-  (update-in (assoc-in s (concat (:editor (:id-paths s)) [:Text])
-               (jfile/load-textfile (:cur-file s)))
+  (update-in ((:set-src-text s) s (jfile/load-textfile (:cur-file s)))
      (:file-tree (:id-paths s)) #(ensure-file-open % (:cur-file s))))
 
 (defn alert-changes [s]
@@ -139,6 +185,23 @@
 (defn code-to-repl!! [s]
   (do (repl/add-to-repl!! (:Text (get-in s (get-in s [:id-paths :input])))) 
     (assoc s :one-frame-repl-update-block? true))) ; repl change.
+
+(defn line-nos [s] 
+  "Graphics commands that will draw the line numbers."
+  (let [g0 (.getGraphics (java.awt.image.BufferedImage. 2 2 java.awt.image.BufferedImage/TYPE_INT_RGB))
+        t (:Text s)
+		metrics (.getFontMetrics g0 (:Font s))
+		height (.getHeight metrics)
+		width (.charWidth metrics \space)
+		^chars text (chars (.toCharArray (str (:Text s) "\n")))
+		n (int (count text))
+		c-p-l (loop [ix (int 0) lines [] numthis (int 0)] ; chars per line.
+				(cond (= ix n) lines
+				  (= (aget ^chars text ix) \newline) (recur (inc ix) (conj lines numthis) 0)
+				  :else (recur (inc ix) lines (if (= (aget ^chars text ix) \tab) (+ numthis 8) (inc numthis)))))
+		g (mapv #(vector :drawString [(str (inc %)) (int (+ 50 (* (nth c-p-l %) width)))
+									   (int (* height (+ % 0.8)))]
+				   {:Color (Color. (float 0.4) (float 0.6) (float 0.99))}) (range (count c-p-l)))] g))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;Building the GUI (leaf first);;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defn get-tree []
@@ -170,47 +233,27 @@
 
 ; Edit code:
 (defn editor []
-  (let [g0 (.getGraphics (java.awt.image.BufferedImage. 2 2 java.awt.image.BufferedImage/TYPE_INT_RGB))
-        h! (fn [s e o] (let [s0 (:SelectionStart s) s1 (:SelectionEnd s)]
-             (if (or (not s0) (not s1) (= s0 s1)) (hilite-same-level! (:Text s) (:CaretPosition s) o)
-               (let [hltr (.getHighlighter o)
-                     hpainter (DefaultHighlighter$DefaultHighlightPainter. (Color. (float 0.75) (float 0.75) (float 1.0)))]
-                 (.removeAllHighlights hltr) (.addHighlight hltr s0 s1 hpainter))
-             )))
-        ; Draw the line numbers:
-        line-nos (fn [s] 
-                   (let [t (:Text s)
-                         metrics (.getFontMetrics g0 (:Font s))
-                         height (.getHeight metrics)
-                         width (.charWidth metrics \space)
-                         ^chars text (chars (.toCharArray (str (:Text s) "\n")))
-                         n (int (count text))
-                         c-p-l (loop [ix (int 0) lines [] numthis (int 0)] ; chars per line.
-                                 (cond (= ix n) lines
-                                   (= (aget ^chars text ix) \newline) (recur (inc ix) (conj lines numthis) 0)
-                                   :else (recur (inc ix) lines (inc numthis))))
-                         g (mapv #(vector :drawString [(str (inc %)) (int (+ 50 (* (nth c-p-l %) width)))
-                                                        (int (* height (+ % 0.8)))]
-                                    {:Color (Color. (float 0.2) (float 0.3) (float 0.99))}) (range (count c-p-l)))]
-                      (assoc s :Graphics g)))]
-    {:Type 'JScrollPane
-     :Children 
-     [{:Type 'JTextArea :Text "Editor" :Font (Font. "monospaced" Font/PLAIN 12)
-       :insertUpdate (fn [s e o] (h! s e o) (line-nos s))
-       :removeUpdate (fn [s e o] (h! s e o) (line-nos s))
-       :caretUpdate (fn [s e o] (h! s e o) (line-nos s))
-       :id :editor}]}))
+  {:Type 'JScrollPane
+   :Children 
+   [{:Type 'JTextArea :Text "Editor" :Font (Font. "monospaced" Font/PLAIN 12)
+	 :insertUpdate (fn [s e o] (hilight-update! s e o) (assoc s :Graphics (line-nos s)))
+	 :removeUpdate (fn [s e o] (hilight-update! s e o) (assoc s :Graphics (line-nos s)))
+	 :caretUpdate (fn [s e o] (hilight-update! s e o) (assoc s :Graphics (line-nos s)))
+	 :id :editor}]})
 
 (defn output [] ; Here instead of the terminal.
   {:Type 'JScrollPane
    :Children 
-   [{:Type 'JTextArea :Text "REPL output" :Font (Font. "monospaced" Font/PLAIN 12)
+   [{:Type 'JTextArea :Font (Font. "monospaced" Font/PLAIN 12)
      :id :output}]})
 
 (defn input [] ; REPL
   {:Type 'JScrollPane
    :Children 
    [{:Type 'JTextArea :Text "REPL input" :Font (Font. "monospaced" Font/PLAIN 12)
+     :insertUpdate (fn [s e o] (hilight-update! s e o) s)
+     :removeUpdate (fn [s e o] (hilight-update! s e o) s)
+     :caretUpdate (fn [s e o] (hilight-update! s e o) s)
      :id :input}]})
 
 (declare reset-app) ; reset app -> menu -> window -> reset-app circle.
@@ -239,16 +282,16 @@
            (assoc-in s tpath "No filename choosen."))))}
      {:Type 'JMenuItem :Text "save" :callback 
        #(if (:cur-file %) (save-file!!! %)
-          (assoc-in % (concat (:output (:id-paths %)) [:Text]) "No file is open. Use file -> new to save the text."))}
+          (do (repl/add-to-repl!! "No file is open. Use file -> new to save any text in the editor." false) %))}
      {:Type 'JMenuItem :Text "delete (non-folders only)" 
       :callback (fn [s] 
-                   (let [cf (:cur-file s)]
-                     (if cf (jfile/delete-file!!! cf))
-                     (assoc-in (update-in s (:file-tree (:id-paths s)) #((:update %) % cf))
-                       (concat (:output (:id-paths s)) [:Text])
+                   (if (jpopup/yes-no "Delete current file?")
+                     (let [cf (:cur-file s)]
                        ; IMPORTANT: keep the :cur-file for undoable deletion.
-                       (if cf (str "(UNDOABLE) Deleted: " cf " to UNDO: use file->new/save before opening another file.") 
-                         (str "No file is open to delete.")))))}]}
+                       (if cf (jfile/delete-file!!! cf))
+                       (repl/add-to-repl!! (if cf (str "(UNDOABLE) Deleted: " cf " to UNDO: use file->save before opening another file.") 
+                                             (str "No file is open to delete.")) false)
+                       (update-in s (:file-tree (:id-paths s)) #((:update %) % cf))) s))}]}
     {:Type 'JMenu :Text "window"
      :Children
      [{:Type 'JMenuItem :Text "reload fcns" :callback reload-fn}
@@ -266,7 +309,8 @@
   :Title "Key Missing features: find-replace, debugging, refactoring, (un)binding projects."
   ; Gets the editor text:
   :get-src-text #(:Text (get-in % (:editor (:id-paths %))))
-  :set-src-text #(assoc-in %1 (concat (:editor (:id-paths %1)) [:Text]) %2)
+  :set-src-text (fn [s txt] (let [tp (:editor (:id-paths s))] 
+                   (update-in (assoc-in s (concat tp [:Text]) txt) tp #(assoc % :Graphics (line-nos %)))))
   :cur-file nil
   :windowClosing (fn [s e o] 
                    ; save on close:
@@ -301,10 +345,13 @@
   ; This event runs the repl:
   :below-keyPressed
   (fn [s e o]
-      (if (and (= (:descendent e) (get-in s [:id-paths :input])) ; right place.
-            (:ShiftDown e) (= (:KeyCode e) 10)) ; shift + enter.
-        (code-to-repl!! s) ; fits repl critera.
-        s)); didn't fit the repl criteria, no actual change.
+    (let [shifting? (boolean (:ShiftDown e)) ; TODO: why do we need a boolean cast?
+          ctrl? (boolean (:MetaDown e))]
+      (cond (and (= (:descendent e) (get-in s [:id-paths :input])) ; repl input...
+              shifting? (= (:KeyCode e) 10)) (code-to-repl!! s) ; ...and shift + enter = repl 
+        ; saving files:
+        (and ctrl? (= (:KeyCode e) 83)) (if (:cur-file s) (save-file!!! s) (do (repl/add-to-repl!! "No file is open. Use file -> new to save any text in the editor." false) s))
+        :else s))); no hotkey
   :Children
  {:menu (menu)
   :panes
@@ -339,5 +386,3 @@
    Note: only internal editing will do this (TODO external edits should update)."
    (_reload-fn s (window)))
    
-(set! *warn-on-reflection* true)   
-(set! *warn-on-reflection* false)

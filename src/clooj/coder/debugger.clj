@@ -14,19 +14,16 @@
  "Resets the debug state."
  (reset! dbstate {:step 0 :path {}}))
 
-; Expensive way of getting (0 1 2 3 4 ...)
-; (sort (into [] (apply concat (mapv (fn [v] (mapv #(:step %) v)) (vals (:path @dbstate))))))
-
 (defn _add-frame!! [stack x] ; adds x to the current stack. The stack is our path and is always a numerical vector starting with 0.
   (let [s @dbstate x {:step (:step s) :val (grammer/expanded2qualified x)}
         old-xs (let [q (get (:path s) stack)] (if (nil? q) [] q))] ; make an empty vector if there is nothing there.
     ;(println s stack old-xs x)
     (reset! dbstate {:step (inc (:step s)) :path (assoc (:path s) stack (conj old-xs x))}))) ; Add our result to the stack frame.
 
-(defn get-history [code-str ix]
-  "Gets the history of whatever is at position ix of code-str, after we already computed things."
-  ((strmap/read-string+ code-str) TODO
-  ))
+;(defn get-history [code-str ix]
+;  "Gets the history of whatever is at position ix of code-str, after we already computed things."
+;  ((strmap/read-string+ code-str) TODO
+;  ))
 
 (defn prt [x] (println x) x) ; print and returns the object unmodified.
 

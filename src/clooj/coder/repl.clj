@@ -1,13 +1,14 @@
 ; Repl that uses futures so that multiple calculations can be active.
 (ns clooj.coder.repl
-  (:require [clooj.java.file :as jfile]))
+  (:require [clooj.java.file :as jfile] [clojure.string :as string])
+  (:import (java.io ByteArrayOutputStream OutputStreamWriter)))
 
 ; List of calculations that are running or finished:
 ; Each calculation:
 ;   :cmd is the string input.
 ;   :ns is what namespace it is evaled in.
 ;   :future is the future object that will yield the string result as would be seen in the repl.
-(def calculations (atom []))
+(defonce calculations (atom []))
 
 ; Update the bindings (the bindings are global, surprisingly).
 (def star-vars ['*ns* '*compile-path* '*unchecked-math* '*warn-on-reflection*]) ; TODO: are there more? 
@@ -29,12 +30,37 @@
 (def default-bindings @bindings)
 
 
+(def printout-text (atom ""))
+
+
+(defn thaw-str [& args]
+  "Like str but won't freeze the entire program for infinite datasets.
+   Maybe some esoteric .toString functions can cause problems."
+   (if (and (= (count args) 1) (string? (first args))) (first args) ; shortcut.
+	 (let [max-load 1e6
+	       ; Guessing count. Will return <= max-load iff there are <= max-load items in it.
+		   dc (fn dc [x]
+		         (if (coll? x)
+		           (let [x (if (sequential? x) x (into [] x)) ; non-sequential can't be lazy.
+		                 x-lite (take (inc max-load) x)
+		                 n-low (count x-lite)
+		                 n-hi (cond (counted? x) (count x)
+		                            (<= n-low max-load) n-low
+		                            :else (/ 1.0 0))] ; Infinity.
+		             (if (< n-hi max-load) (reduce + (mapv dc x)) n-hi)) 1))
+		   ndeep-guess (dc args)] 
+	   (if (<= ndeep-guess max-load) (apply str args)
+		 (str "<more than " (int max-load) " leaf items>")))))
+
+(defn _abridged-str [x thaw?]
+  (let [max-length 3000
+        sstr (if thaw? thaw-str str)
+        limit #(let [s (try (sstr %) (catch Exception e (sstr "STRING REPRESENTATION ERROR: " e)))]
+                 (if (> (count s) max-length) (str (subs s 0 max-length) "...<too large to show>") s))]
+    (limit x)))
 (defn abridged-str [cmd val our-ns] 
   "An abridged string representation that is formatted repl-style."
-  (let [max-length 1000 ; a bit low but there are performance issues with the textarea for now.
-        limit #(let [s (try (str %) (catch Exception e (str "STRING REPRESENTATION ERROR: " e)))]
-                 (if (> (count s) max-length) (str (subs s 0 max-length) "...<too large to show>") s))]
-   (str our-ns "=> " (limit cmd) "\n" (limit val))))
+   (str (_abridged-str our-ns false) "=> " (_abridged-str cmd false) "\n" (_abridged-str val true)))
 
 ; Save the calculation string so that we can look it up in O(1) time.
 (def cached-string (atom nil)) ; all the commands.
@@ -46,7 +72,23 @@
 		  done?s (mapv future-done? futs)
 		  strs (mapv #(if %3 @%2 (abridged-str %1 "<in progress>" %4)) cmds futs done?s ns-s)
 		  liny #(apply str (interpose "\n" %))]
-	  (reset! cached-string (liny strs))))
+	  (reset! cached-string (str (liny strs) "\nprintouts >> " @printout-text))))
+
+(defonce out-stream (ByteArrayOutputStream.))
+(defonce out-writer 
+  (proxy [OutputStreamWriter] [out-stream]
+    (write 
+      ([^chars cbuf off len] 
+        (proxy-super write cbuf (int off) (int len))
+        (proxy-super flush)
+        (reset! printout-text (_abridged-str (.toString out-stream) false))
+          (update-cached-string!!))
+      ([c-str] ; int or String.
+        (if (string? c-str) (proxy-super write (str c-str)) (proxy-super write (int c-str)))
+          (proxy-super flush)
+          (reset! printout-text (_abridged-str (.toString out-stream) false))
+          (update-cached-string!!)))))
+(alter-var-root (var *out*) (fn [_] out-writer)) ; Dangerous alter-var-roots of the printing functions:
 
 (defn eval!! [cmd]
    "Evaluate cmd (a string) in our repl-ns, returning the result.
@@ -64,6 +106,11 @@
   "Undefines a variable. e.g. (undef foo) no quotes on foo as we are a macro."
   `(ns-unmap repl-ns (quote ~var)))
 
+(defn err-report [e]
+  "A string form that also gives stack info. (str exception) does not have stack info."
+  (apply str (str (.getMessage e) " (" (last (string/split (str (type e)) #"\.")) ")") "\n" 
+    (interpose "\n" (mapv str (.getStackTrace e)))))
+
 (defn add-to-repl!! 
     "Sends a command to the repl, running it on a future, returning immediately.
      eval false means that we don't actually evaluate anything."
@@ -72,7 +119,7 @@
     (let [; Two resets! of the cached-string. Both are soon-after we make a change to the calculation array.
           ; soon-after is safe but soon-before isn't if the @calculations is between the two changes.
           ns-cmd (get @bindings '*ns*)
-          cmd (str cmd) fut (future (if eval? (abridged-str cmd (try (eval!! cmd) (catch Exception e e)) ns-cmd) cmd))]
+          cmd (str cmd) fut (future (if eval? (abridged-str cmd (try (eval!! cmd) (catch Exception e (err-report e))) ns-cmd) cmd))]
       (swap! calculations conj {:cmd cmd :future fut :ns ns-cmd})
       ; Two updates to the cached string (AFTER the swap! calculations step):
       ; The first is for "we have a new calculation". The second is for "we are done".
@@ -92,6 +139,14 @@
   (reset! calculations [])
   (future (update-cached-string!!)))
 
+(defn clear-printouts!! []
+  "Clears all printouts."
+  (.reset out-stream) (.flush out-stream) (println ""))
+(clear-printouts!!)
+
+(defn clc []
+  (clear-done-cmds!!) (clear-printouts!!))
+
 (defn reload-file!! [file]
   "Orthogonal to the other functions.
    Reloads a file's namespace. ANY namespace that uses said file will now use updated variables.
@@ -107,10 +162,10 @@
     ;http://stackoverflow.com/questions/3636364/can-i-clean-the-repl
     (mapv #(ns-unmap nms %) (keys (ns-interns nms)))))
 
-; Do this at the end so we capture all functions.
+; Use the core and this ns so we have access to the functions.
+; This must be in a future because we have to wait untill this ns is loaded.
 (future (while (try  (binding [*ns* user-ns] 
                         ; Use the clojure.core libraries and fns from this file:
                        (eval '(clojure.core/use 'clojure.core))
-                       (eval '(clojure.core/use 'clooj.coder.repl))
-                       (println "used repl sucessfully.") false)
+                       (eval '(clojure.core/use 'clooj.coder.repl)) false)
                  (catch Exception e true)) (Thread/sleep 5)))

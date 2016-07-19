@@ -124,7 +124,6 @@
    ;s is a piece of the original string, parse is a piece of the original parse (pieces of :level and :mode).
      ; for the children levels reduce level by one and then take pieces, etc.
      ; s is a single block of code.
-  ; WARNING: If you add your own reader macros (unlikely, esoteric use) you are out of luck!
   ; NOTE: Hash-sets may not preserve the order from read-string. But the code will be equivalent.
   ; NOTE: syntax quotes are handled with (syntax-quote ...), which is not a function but the best we can really do.
     ; This allow you to treat the inside as if it is before qualification so you can make changes to the string, etc.
@@ -250,7 +249,8 @@
               (throw (Exception. "Problem with strmap/_read-string or the string inputted")))
             :obj children}))))
 (defn read-string+ [strg & pos]
-  "Like core/read-string but stores the string representation and position along with the code."
+  "Like core/read-string but stores the string representation and position along with the code.
+   WARNING: If you add your own reader macros (unlikely, esoteric use) you are out of luck!"
     (let [strg (subs strg (_s pos) (_e strg pos))
           parse (cio/parse-summary strg)] 
     (_read-string strg parse (_s pos) [])))

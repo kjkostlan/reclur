@@ -1,5 +1,5 @@
 ; Calculation of indentation level and tools to read strings into code.
-
+; TODO: deprecated file.
 (ns clooj.coder.io (:require [clojure.string :as string] [clooj.java.file :as jfile] [clooj.utils :as utils]))
 
 

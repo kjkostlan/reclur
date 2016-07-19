@@ -1,12 +1,39 @@
 ; Abstractions of clojures syntax. In any non-lisp language this file would be at least 10 times more.
 ; Also, these functions are useful for non-code (homoiconicity).
 (ns clooj.coder.grammer (:require [clooj.coder.io :as io] [clooj.utils :as utils] [clojure.string :as string])
-  (:import (clojure.lang Compiler)))
+  (:import (clojure.lang Compiler) (java.util Arrays)))
 ; TODO: what functions here, if any, belong in collections?
 ; i.e. ckeys is more of a collection tool than a syntax tool?
 
-;CHAR_MAP DEMUNGE_MAP
-; String conversion tools:
+(defmacro pn [expr]
+  "Prints the result and returns it. Useful for quick debugging, 
+    but it's better to use a more powerful tool for serious bugs."
+  `(let [out# ~expr]
+      (println out#) out#))
+
+(def _lazies 
+  #{clojure.lang.Cons clojure.lang.Cycle clojure.lang.Iterate 
+    clojure.lang.IteratorSeq clojure.lang.LazilyPersistentVector
+    clojure.lang.LazySeq clojure.lang.LongRange
+   clojure.lang.Range clojure.lang.RecordIterator
+   clojure.lang.SeqEnumeration ; what is this even?
+   clojure.lang.SeqIterator clojure.lang.StringSeq
+   clojure.lang.TransformerIterator})
+(defn lazy? [x]
+  "Can x be very long (shallow only)? 
+   Long means that init is ~O(1), which means iterating over it can be expensive or infinite.
+   This function errs on the defensive side to avoid infinite loops.
+   Laziness of & args depends on what was put into the fn.
+   Minor inconsistancy: (range 0) is not lazy, but for >0 is.
+   Variable args: most of the time it works, but (apply f 1 [1 2]) is lazy even if it's just a vector."
+  (and (coll? x)
+    (or (not (counted? x))
+       (boolean (get _lazies (type x)))
+       ; This is an ephermial class created by variable argument functions. TODO: is this nessessary?
+       (and (instance? clojure.lang.ArraySeq x)
+          (<= (count (.array ^clojure.lang.ArraySeq x)) 1)
+          (= (count (take 2 x)) 2)))))
+
 
 (def token-match
   "use (mapv first (re-seq ...)) with this to find symbols and numerical values. It will find stuff inside a string but not the string itself.
@@ -51,9 +78,16 @@
     (let [s (subs (str cl) 6)]
       (symbol (if leaf? (last (string/split s #"\.")) s)))))
 
+(defn var2sym 
+  "Converts a clojure.lang.Var to symbol. Optional: specify to only include the leaf."
+  ([v] (var2sym v false))
+  ([v leaf?]
+    (let [s (subs (str v) 2)]
+      (symbol (if leaf? (last (string/split s #"/")) s)))))
+
 (defn cdissoc [c k]
   "Like dissoc but works on most collections preserving the type. Not lazy.
-   WARNING: O(n) for vectors."
+   WARNING: O(n) for vectors and lists."
   (cond (nil? c) nil
     (vector? c) (into [] (vals (dissoc (zipmap (range (count c)) c) k)))
     (list? c) (apply list (dissoc (zipmap (range (count c)) c) k))
@@ -63,9 +97,11 @@
     :else (throw (Exception. "Not a clojure collection.")))) 
 
 (defn ckeys [c]
-  "Like keys but also works for vectors. Not lazy.
+  "Like keys but also works for vectors and prserves laziness.
    Example: (keys [:a :b :c]) fails but (ckeys [:a :b :c]) gives [0 1 2]."
   (cond (nil? c) nil
+    ; lazy is always sequential:
+    (lazy? c) (if (counted? c) (range (count c)) (map (fn [_ b] b) c (range)))
     (sequential? c) (into [] (range (count c)))
     (map? c) (into [] (keys c))
     (set? c) (into [] c) ; sets can get themselves.
@@ -73,8 +109,9 @@
     :else (throw (Exception. "Not a clojure collection.")))) 
 
 (defn cvals [c]  
-  "Like ckeys but for values. Not lazy."
+  "Like ckeys but for values."
   (cond (nil? c) nil
+    (lazy? c) c
     (or (sequential? c) (set? c)) (into [] c)
     (map? c) (into [] (vals c))
     (coll? c) (throw (Exception. (str "Unrecognized or unimplemented collection: " (type c))))
@@ -90,17 +127,19 @@
 
 
 (defn cmap [map-option f code & args]
-  "like map but it preserves the type (duplicates in sets will collapse if mapped to the same thing).
+  "like map but it (as best as possible) preserves the type of code.
+   Duplicates in sets will collapse if mapped to the same thing.
    What we do in for a map? has three options:
       :entry => apply f to each entry of a map (as a 2-long vector) returns a 2-long vector or a 1-key map.
         args are passed as additional two-long vectors instead of single elements.
       :flatten => apply f to keys and then to vals independently. Combine these back into a map.
-        args are similarly flattened.
+        args are similarly flattened. Note: for args this is DIFFERENT than how maps are presented.
       :keys => apply f to only the keys (if f creates duplicate keys the map gets shorter as the earlier values are discarded).
       :vals => apply f to only the vals (keys are unchanged). 
         1:1 aligned with each of cvals for each args.
-  Args don't have to be the same type of code"
+  Code determines the type/laziness no matter what args is."
   (cond (nil? code) nil
+     (lazy? code) (apply map f code args) ; lazy seqs map.
      (or (list? code) (seq? code)) (apply list (apply map f code args))
      (vector? code) (apply mapv f code args)
      (set? code) (apply hash-set (apply map f code args)); set will remove duplicated.
@@ -121,6 +160,10 @@
      (throw (Exception. (str "Coll-type not implemented: " (type code))))
      :else 
      (throw (Exception. (str "Code type is not a collection: " (str code))))))
+
+(defn meta-expand [m]
+  "Expands m if it is a meta-data shorthand, otherwise returns m."
+  (if (map? m) m {:tag m}))
 
 (defn _expanded2qualified [cns] ; operateson a single one
   (let [nm (.getName (.getDeclaringClass (first (.getDeclaredMethods (.getClass cns)))))]
@@ -251,188 +294,533 @@
           ; Ok now we must branch the type:
           (set [t1 t2]))))))
 
+(defn with-locals [f-leaf code locals]
+  "Applies (f-leaf code locals) recursivly to all leaf elements of the code.
+   locals keeps changing based on what is put in the let statement.
+   MUST be macroexpand-all first."
+  (let [is-let? (and (coll? code) (or (= (first code) `let*) (= (first code) 'let*)))]
+    (cond is-let?
+      ; Running talley of which variables are kept-qualified:
+      (let [lc (second code) n (count lc) _ (if (odd? n) (throw (Exception. "Let statement with odd # of forms in binding vector.")))
+            x (loop [lvars locals code [] ix 0]
+                (if (= ix n) {:code code :locals lvars}
+                  ; Add to kept AFTER the blittify, a runny talley of vars that are defined.
+                  (recur (conj locals (nth lc ix)) 
+                         (conj code (nth lc ix) (f-leaf (nth lc (inc ix)) lvars))
+                         (+ ix 2))))] 
+        (apply list `let* {:code x} (map #(f-leaf % {:locals x}) (rest (rest code)))))
+      (coll? code) (cmap :flatten #(with-locals f-leaf % locals) code)
+      :else (f-leaf code locals))))
+
+(defn _qualify-in-leaf [code nms locals]
+  (if (and (symbol? code) (not (contains? locals code))) 
+   (let [c (ns-resolve nms code)]
+     (if c (var2sym c) code)) code))
+(defn qualify-in [code nms]
+  "Qualifies the code given the namespace nms."
+  (with-locals #(_qualify-in-leaf %1 nms %2) code #{}))
+
+(defmacro qualify [code]
+  "Use inside a macro to get the qualified code.
+   Macros, unlike functions, have *ns* to the *ns* calling the macro.
+   WARNING: Variables in the namespace ahead of the macro will be 
+     not used the firsst time the ns is loaded but used on subsequent loads.
+     Put these toward the end of the file to minimize future-shadowing."
+  (qualify-in code *ns*))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;; Code for parsing strings in a way that preseves the mapping ;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-; These macros only work when we define the correct characters.
-(defmacro open? [c]
+; Drop-in inlined macros that work on char primitives.
+(defmacro copen? [c]
   `(or (= ~c \() (= ~c \{) (= ~c \[)))
 
-(defmacro close? [c]
+(defmacro cclose? [c]
   `(or (= ~c \)) (= ~c \}) (= ~c \])))
 
-(defmacro reader? [c] 
+(defmacro creader? [c] 
   "Rader macro chars. code/syntax quotes, # signs, and the like."
   `(or (= ~c \@) (= ~c \') (= ~c \`) (= ~c \~) (= ~c \#) (= ~c \^)))
 
-(defmacro white? [c] 
-  "Reader macro chars. code/syntax quotes, # signs, and the like.
-   other characters such as ? are normal characters but can still be special during a reader macro.
-   However they are ignored by this function."
+(defmacro cwhite? [c] 
+  "White characters. Note: clojure treats , as identical to whites except in a string or escaped."
   `(or (= ~c \space) (= ~c \newline) (= ~c \tab)))
 
-;(println (macroexpand-1 '(close? c)))
+(defmacro ccom-white? [c] 
+  "white or comma."
+  `(or (= ~c \space) (= ~c \newline) (= ~c \tab) (= ~c \,)))
 
-;TODO: include:
-;:level = indent level, inclusive. :mode = 0 for normal, 1 = quote, 2 = comment.
+(defmacro cnumber? [c]
+  "0-9, no other symbols."
+  `(or (= ~c \0) (= ~c \1) (= ~c \2) (= ~c \3) (= ~c \4) (= ~c \5) (= ~c \6) (= ~c \7) (= ~c \8) (= ~c \9)))
 
-; High performance: 86 ns per character <- TODO: reverify optimize.
-; (require '[clooj.java.file :as file]) (def s (file/load-textfile "./src/clooj/coder/grammer.clj"))
-; (require '[clooj.coder.grammer :as grammer]) (grammer/basic-parse "| ( #(     '(y)     ))" false false)
 
-(defn basic-parse [s add-one-for-tokens? ignore-meta?]
-  "Reads a string into an {:levels and :mode}.
-   :level is [I of how nested the character becomes, inclusive. 0 = indicates no nesting.
-   :mode is [I of = 0 for normal, 1 = quote, 2 = comment. Inclusive (for comments includes ; and \newline)
-   add-one-for-tokens? = do we add an extra level for tokens.
-      false means  (inc x (+ 'y z))  true means (inc x (+ 'y z))
-      becomes      1111111222332221             1222121232342321 for :level
-      The 'y adds a level despite no explicit () because it expands to (quote y).
-      Leading/trailing spaces would be 0 in this example
-  erase-meta? = do we replace metadata with whitespace first so it becomes invisible:
-      false means                                   (^int x)  true means (^int x)
-      becomes (with add-one-for-tokens? = true)     12333121             11111121 for :level.
-  Comments, \newline, and stuff inside of #_ are treated as spaces for :level
-  Stuff in (comment ...) is NOT ignored since it's essentially a normal function.
-  #? and #= are (for lack of a better rule) treated like normal reader macro.
-    they WILL make it very difficult to track.
-  Syntax-quote is treated like quote even though it can drastically alter stuff inside it."
-  (let [;_ (/ 0) ;DEBUG: add-one-for-tokens? true
-        ^chars cs (.toCharArray (str s)) ; str is O(1) on strings. .toCharArray is 2 billion/second.
+(defn neutral-reader-macro-parse [s]
+  "generates [I of :level, :mode, :token, :escape, and :breaks. :level is how nested we are, inclusive.
+   Reader-macros such as '(foo) are NOT included in the ()-induced level increase.
+   :mode is 0 usually, 1 for stuff in string-quotes and 2 for comments (this is inclusive).
+   :token is 1 for strings, comments, and non-syntax stuff, inclusive. reader macro tokens can bridge across whitespace.
+   :escape is 1 for characters that are bieng escaped.
+   :break[i] is 1 where there are two back-to-back tokens in which s[i-1] and s[i] belong to different tokens.
+     This demarcates separate tokens even when the :level is unchanged.
+    This should work if we have valid code, but also works OK when the code would error on read-string.
+    Performance: 111 ns/char."
+  (let [^chars cs (.toCharArray (str s)) ; str is O(1) on strings. .toCharArray is 2 billion/second.
+        n (int (count cs)) n0 (dec n)
+       ^ints level (make-array Integer/TYPE n) ; not including the tokens.
+       ^ints mode (make-array Integer/TYPE n)
+       ^ints token (make-array Integer/TYPE n) ; includes macro chars.
+       ^ints escape (make-array Integer/TYPE n)
+       ^ints break (make-array Integer/TYPE n)
+       btrue (boolean true) bfalse (boolean false)
+       char-a (char \a) ; 5x performance boost once warmed up just by doing this!
+       ]
+       ; Step 1: ignore reader macro characters completely.
+       (loop [ix (int 0) lev (int 0) comment? (boolean false)
+           str? (boolean false) escape? (boolean false)]
+         (if (= ix n) "Done"
+           (let [c (if escape? char-a (aget ^chars cs ix))  ; neutralize escaped characters. Whitespace CAN be escaped, and if so it counts as a normal char.
+                 escape-ix (if escape? 1 0)
+          
+                 next-escape? (if (and (not comment?) (= c \\)) btrue bfalse) ; escape is a toggle-switch.
+                 next-comment? (if str? bfalse (if comment? 
+                                 (if (= c \newline) bfalse btrue)
+                                 (= c \;))) ; entry to comment condition.
+                 ; Toggle whether we are inside a string or not:
+                 str-toggle? (if (and (not comment?) (= c \")) btrue bfalse)
+                 next-str? (if str-toggle? (if str? bfalse btrue) str?)
+                 openc? (copen? c) closec? (cclose? c)
+                 delta-lev (if (and (not comment?) (not str?)) (+ (if openc? 1 0) (if closec? -1 0)) 0)
+                 popup (if (= delta-lev 1) 1 0) ; only one char boost.
+                 ]
+             (aset ^ints escape ix escape-ix) 
+             (aset ^ints level ix (+ lev popup))
+             (if (and (not comment?) (= c \")) (aset ^ints mode ix 1))
+             (if str? ; inside a string: only another " can end the string. We can't immedaitly jump to a comment.
+               (do (aset ^ints token ix 1) (aset ^ints mode ix 1))) ; strings are always in a token.
+             (if next-comment? (do (aset ^ints mode ix 2) (aset ^ints token ix 1))) ; comments are also tokens.
+             (if (and (not openc?) (not closec?) (not (ccom-white? c)))
+                (aset ^ints token ix 1))
+             (recur (inc ix) (+ lev delta-lev) next-comment? next-str? next-escape?))))
+        ; Step 2: the break arrays:
+	(loop [ix (int 0) quote-mode (int 0)]
+	  (if (>= ix n0) "Done"
+		(let [ca (aget ^chars cs ix)
+		      cb (aget ^chars cs (inc ix))
+			  ; toggle the quotes.
+			  quote-mode (if (and (= ca \") (= (aget ^ints mode ix) 1) (= (aget ^ints escape ix) 0)) 
+			               (- 1 quote-mode) quote-mode)]
+		 ; Check for characters that can end a token back-to-back with the start of another token:
+		 ; This is the preliminary filtering step.
+		 (if (or (= ca \") (= cb \") (= cb \\) (= ca \newline) (= cb \;))
+		   (let [ca (if (= (aget ^ints escape ix) 1) char-a ca) ; neutralize escape chars.
+		         cb (if (= (aget ^ints escape (inc ix)) 1) char-a cb)
+			 ma (aget ^ints mode ix) mb (aget ^ints mode (inc ix))
+			 ta (aget ^ints token ix) tb (aget ^ints token (inc ix))]
+			 ;(if (< (count s) 100) (println "stuff:" ca "|" cb "|" ma "|" mb "|" ta "|" tb))
+                         (if (and (or (not= ma 2) (not= mb 2)) ; don't break within a comment.
+                                (= ta 1) (= tb 1) ; only break across tokens.
+			        (or (not= ma mb) ; Discontinuous mode.
+                                    (and (= cb \") (= ma 0)) ; symbol -> string
+                                    (and (= ca \") (= cb \") (= quote-mode 0)) ;back-to-back string rule.
+                                    (and (not= ma 1) (= cb \\)))) ;something before a \-escaped something.
+				  (do (aset ^ints break (inc ix) 1) (recur (inc ix) quote-mode))
+				  (recur (inc ix) quote-mode)))
+		    (recur (inc ix) quote-mode)))))
+      ; Step 3: bridging the reader macro characters (technically \ and ; are reader macros, we don't consider them such). 
+      ;   There are level bridges and char bridges, only induction chars can create a bridge.
+      ;   Multible, nested reader macros are all lumbed into the same symbol.
+      ; Note: stuff like foo'bar that is not special WILL be caught but it shouldn't do anything.
+      (loop [ix (int 0)]
+        ; Macro chars create bridges to the next non-macro char.
+        (if (>= ix n0) "DONE"
+          (if (and (creader? (aget ^chars cs ix)) (= (aget ^ints escape ix) 0) (= (aget ^ints mode ix) 0))
+              ; Jump through all comments, other macro chars, and whitespace: Pound has effects on equals.
+              ; hit-ix is the first thing the macro char "hits".
+              (let [pound? (boolean (if (= (aget ^chars cs ix) \#) btrue bfalse))
+                    hit-ix (loop [jx (int (inc ix))]
+                             (if (= jx n) (dec n) ; off end of array.
+                               (let [e (aget ^ints escape jx) c (aget ^chars cs jx) m (aget ^ints mode jx)] 
+                                 (if (or (= e 1) (= m 1)) jx ; stop on a normal char of the start of the string.
+                                   (if (or (ccom-white? c) (= m 2)) (recur (inc jx)) ; blow through white and comments.
+                                     (if (or (creader? c) (and pound? (or (= c \=) (= c \?))))
+                                       (recur (inc jx)) jx)))))) ; reader chars with the addition of = and ? for pound => keep going.
+                    bl (aget ^ints level hit-ix)]
+               ; Break off strings or comments right below us:
+               (if (and (> ix 0) (> (aget ^ints mode (dec ix)) 0)) (aset ^ints break ix 1))
+               ; Actual bridge building: 
+               (loop [jx (int ix)]
+                 (if (>= jx hit-ix) "Done"
+                   (do ;DONT set the level yet: (aset ^ints level jx bl) 
+                       (aset ^ints break (inc jx) 0) 
+                       (aset ^ints token jx 1) (recur (inc jx)))))
+               (recur (inc hit-ix))) ; jump to the next time we need it.
+               (recur (inc ix)))))
+      {:level level :mode mode :token token :escape escape :break break}))
+
+(defn basic-parse [s]
+  "Like neutral-reader-macro-parse but adds :boost. :boost is an array that
+   shows the effect of the macro characters, the final level when read into a string is level + boost.
+   Boost, like level, also inclusive. Boost does NOT include #{hash set} or regexp literals b/c they read as is.
+   Also :break is set to 1 where there is a difference of boost levels.
+   114 ns/char including the neutral-reader-macro-parse (very small increase)."
+  (let [parse0 (neutral-reader-macro-parse s)
+        ^chars cs (.toCharArray (str s))
+        ^ints level (:level parse0) ^ints mode (:mode parse0) ^ints token (:token parse0)
+        ^ints escape (:escape parse0) ^ints break (:break parse0)
         n (int (count cs))
-        ^ints levels (make-array Integer/TYPE n) ; does NOT include the macro boost nor the tokens.
-        ^ints boosts (make-array Integer/TYPE n) ; only includes the boosts.
-        ^ints tokens (make-array Integer/TYPE n) ; tokens (0 = not inside a token, 1 = is). Tokens are normal variables.
-        ; datums-stack[i] = x means that at i reader macro levels in the lowest indent level that's inside is x for whitespace.
-        ; For almost all long strings we won't fill the array very far.
-        ^ints datums-stack (make-array Integer/TYPE (inc n))
-        ^ints boosts-stack (make-array Integer/TYPE (inc n))
-        ^ints mode (make-array Integer/TYPE n)  
-        em (boolean ignore-meta?)
-        
-        ;tweaks {} ; key => delta 
-        ; They have trouble with primitive initializers with chars.
-        ; This makes the code cleaner and slightly impacts performace.
-        cspace (char \space) cescape (char \\)
-        bfalse (boolean false) btrue (boolean true)]
+        ^ints boost (make-array Integer/TYPE n)]
+    ;(if (< (count s) 100) (println "levels0:" (into [] level)))
+    ; Increase levels for reader macros:
+    (loop [ix (int 0)]
+      (if (= ix n) "Done"
+        (let [c (aget ^chars cs ix)]
+          (if (creader? c)
+              (let [e (aget ^ints escape ix) 
+                    m (aget ^ints mode ix)]
+                (if (and (= e 0) (= m 0) ; start of a reader macro.
+                      ; The ~ in @~ does not increase the level (it's an unquote splice).
+                      (or (not= c \@) (= ix 0) (not= (aget ^chars cs (dec ix)) \~) 
+                        (not= (aget ^ints mode (dec ix)) 0))
+                      ; same with a #' varquote:
+                      (or (not= c \') (= ix 0) (not= (aget ^chars cs (dec ix)) \#) 
+                        (not= (aget ^ints mode (dec ix)) 0))
+                      ; Block hash-sets and regexps as well (they read homioiconicly):
+                      (or (not= c \#) (>= ix (dec n)) (and (not= (aget ^chars cs (inc ix)) \{) (not= (aget ^chars cs (inc ix)) \"))
+                        (not= (aget ^ints mode (inc ix)) 0))) 
+                  ; Level boost step:
+                  ; TODO: for esoteric code this can O(n^2).
+                  (let [t (aget ^ints token ix) l0 (aget ^ints level ix)] ;level of the ' char.
+                    (loop [jx ix tspoil (int 0)]
+                      (if (< jx n)
+                        (let [l (aget ^ints level jx)]
+                          ; Criteria to keep reading (inclusive of this char):
+                          (if (or (> l (inc l0)) ; at least two levels deeper gaurentees keeping-going.
+                                  ; one level deeper and not a back-to-back '()() or 'foo():
+                                  (and (= l (inc l0)) ; not an unescaped ( OR a reader macro head.
+                                       (or (= jx 0) (not (copen? (aget ^chars cs jx))) (= (aget ^ints escape jx) 1)
+                                         (creader? (aget ^chars cs (dec jx))) ; obviously a reater macro.
+                                         ; More complex case for macro bridges:
+                                         (and (= (aget ^ints escape (dec jx)) 0) (ccom-white? (aget ^chars cs (dec jx))))))
+                                  ;if at same level, we need a non-broken token.
+                                  (and (= l l0) (= tspoil 0) (> (aget ^ints token jx) 0) (or (= jx 0) (= (aget ^ints break jx) 0))))
+                            (do (aset ^ints boost jx (inc (aget ^ints boost jx))) 
+                                 (recur (inc jx) (if (> l l0) 1 tspoil))) "done")) "done"))
+                   (if (and (> ix 0) (= t 1) (= (aget ^ints token (dec ix)) 1)) ; set break to 1.
+                       (aset ^ints break ix 1))))
+                   (recur (inc ix)))
+        (recur (inc ix))))))
+    (assoc parse0 :boost boost))) ; mutated with the array ops.
 
-    ; All these state variables are "as we approach this char", they don't include what this char will do:
-       ; thus the next-xyz flags uasually depend on what this character is.
-    ; lev = indent level, not including tokens.
-    ; readmacro? = are we inside a reader macro (and before the token or opening ()?
-    ; comment? = are we in a standard ; comment that ends after the newline.
-    ; str? = are we in a string literal. escape? = escape the next character.
-    ; macro-boost = how many extra levels are due to bieng inside a reader macro 
-        ; (lev includes the boost, so we subtract the boost at the end)
-    ; stack-ix: how many macro levels in we are. Example: 2 for the inner symbols in #(list '+ 'x '%).
-    ; Note: this is BEFORE ignoring the #_ and if ignore-meta? the ^{:meta}.
-    ; Note: cond CAN be extremly slow, adding about 100 ms for 20k chars!
-    (loop [ix (int 0) lev (int 0) readmacro? (boolean false) comment? (boolean false)
-           str? (boolean false) escape? (boolean false) macro-boost (int 0) stack-ix (int 0)]
-      (if (= ix n) levels
-        (let [c (aget ^chars cs ix)  ; ^char unnessessary.
-              nescape (if escape? bfalse btrue) ; escaping breaks almost everything.
-              _ (if (and (< n 200) (= (aget ^chars cs 0) \|)) (println "ix: " ix "c" c "macro-boost" macro-boost "readmacro?" readmacro? "lev: " lev "stack-ix: " stack-ix "datums:" (into [] datums-stack)))
-              next-escape? (if (and (not comment?) (= c \\)) nescape bfalse) ; escape is a toggle-switch
-              next-comment? (if str? bfalse (if comment? 
-                               (if (= c \newline) bfalse btrue)
-                               (and nescape (= c \;)))) ; entry to comment condition.
-              ; Toggle whether we are inside a string or not:
-              str-toggle? (if (and (not comment?) (= c \") nescape) btrue bfalse)
-              next-str? (if str-toggle? (if str? bfalse btrue) str?)
-              ]
-          (aset ^ints mode ix (if (or str? next-str?) 1 (if (or comment? next-comment?) 2 0)))
-          (if str? ; inside a string: only another " can end the string. We can't immedaitly jump to a comment.
-            (do (aset ^ints levels ix lev) (aset ^ints tokens ix 1); strings are always in a token.
-              (aset ^ints boosts ix macro-boost)
-              (recur (inc ix) lev bfalse bfalse next-str? next-escape? macro-boost
-                stack-ix))
-            (if readmacro? ; inside a reader macro's HEAD (NOT including it's body).
-                (let [; macro chars, except for the #, stack for the most part, but there are exceptions:
-                      c0 (if (> ix 0) (aget ^chars cs (dec ix)) cspace) ; default if we aren't the first one.
-                      block-stack? (or (and (= c0 \#) (= c \')) ; two characters become one function.
-                                       (and (= c0 \~) (= c \@)))
-                      openc? (open? c) closec? (close? c)
-                      delta-macroboost (if (and (not block-stack?) (reader? c)) 1 0)
-                      next-readmacro? (or (white? c) (reader? c) (and (= c0 \#) (or (= c \?) (= c \=) (= c \_))))
-                      token (if (or (white? c) (open? c) (close? c) next-readmacro? (= c \;)) (int 0) (int 1)) ; tokens can appear at the end.
-                      popup (if openc? 1 0) ; increase level for this char by one only.
-                      delta-lev (+ (if openc? 1 0) (if closec? -1 0))
-                      ] 
-                  ; Lock in the final macro boost approapiate to the current stack-ix:
-                  (if (not next-readmacro?)
-                    (aset ^ints boosts-stack stack-ix (+ macro-boost delta-macroboost)))
-                  (aset ^ints boosts ix (+ macro-boost delta-macroboost))
-                  (aset ^ints levels ix (+ lev popup))
-                  ; we ignore tokens when inside the macrohead, they don't become tokens upon read-string, (aset ^ints tokens ix 0) it's zero already.
-                  (recur (inc ix) (+ lev delta-lev) next-readmacro?; no way to subtract levels when in reader macro mode.
-                    next-comment? next-str? next-escape? (+ macro-boost delta-macroboost)
-                    stack-ix)) ; comments within readmacros ARE allowed.
-                ; the \newline ending all comments => we can't immediatly jump from a comment to a string, escaped char, etc etc.
-                (if comment? (do (aset ^ints levels ix lev) ; token = 0 but it's 0 already.
-                           (aset ^ints boosts ix macro-boost)
-                           (recur (inc ix) lev readmacro? next-comment? ; readmacro? is fixed as is.
-                             bfalse bfalse macro-boost stack-ix))
-                  ; Most of the code:
-                  (let [next-readmacro? (and nescape (boolean (reader? c))) ; induction into reader macros.
-                        ; oops: tokens block any reader macros (it can't quite figure out that it's a boolean, 
-                        ;  but macro entry chars are so rare the boxing is miniscule and boxing is not nearly as bad as refleciton):
-                        next-readmacro? (boolean (if next-readmacro?
-                                          (loop [iix (int (dec ix))] 
-                                            (if (= iix -1) btrue
-                                              (let [cii (aget ^chars cs iix)]
-                                                (if (reader? cii)
-                                                    (recur (dec iix))
-                                                  (if (not (or (white? cii) (open? cii) (close? cii) (= cii \;)))
-                                                    bfalse btrue))))) bfalse))
-                        openc? (and nescape (open? c))
-                        closec? (and nescape (close? c))
-                        token (if (or (white? c) openc? closec? next-readmacro? (= c \;)) 0 1) ; tweaks the levels a bit.
-                        ; this char is no longer in a reader-macro's body:
-                        macro-datum (aget ^ints datums-stack stack-ix)
-                        nolonger-macro? (or (< lev (dec macro-datum)) (and (< lev macro-datum) (= token 0)))
-                        next-stack-ix (if next-readmacro? (inc stack-ix) 
-                                             (if (= stack-ix 0) 0
-                                               (if nolonger-macro? (dec stack-ix) stack-ix)))
-                        ^int next-macroboost (if next-readmacro? (inc macro-boost) ; macroboosts add one from the get go.
-                                          (if (= stack-ix next-stack-ix) macro-boost
-                                            (aget ^ints boosts-stack (dec stack-ix)))) ;pull the last one from the stack.
-                        popup (if openc? 1 0) 
-                        delta-lev (+ (if openc? 1 0) (if closec? -1 0))] ; down one level (and subtract out the macro boost).
+(defn token-end [^ints token ^ints break ix]
+  ; the last index still on the token, inclusive.
+  ; ix is the first token thing.
+  (let [n (int (count token)) ix (int (max 0 (min (dec n) ix)))]
+    (loop [jx (int (inc ix))]
+        (if (or (= jx n) (= (aget ^ints token jx) 0) (= (aget ^ints break jx) 1))
+          (dec jx) (recur (inc jx))))))
+(defn boring-end [^chars cs ^ints mode ix]
+  ; The last element of cs that is not used (i.e. most whitespace, comments).
+  ; ix can either be boring or interesting, if interesting the output will be ix-1.
+  (let [n (int (count cs)) ix (int (max 0 (min (dec n) ix)))]
+    (loop [jx (int ix)]
+      (if (and (< jx n) (or (= (aget ^ints mode jx) 2) (ccom-white? (aget ^chars cs jx))))
+        (recur (inc jx)) (dec jx)))))
+(defn level-boost-end [^chars cs ^ints mode ^ints level ^ints boost ix & reduce-by-one]
+  ; the ending (inclusive) of the chars at or above this level.
+  (let [ix (int (max 0 (min (dec (count cs)) ix))) n (int (count cs)) l0 (aget ^ints level ix) b0 (aget ^ints boost ix)
+        ; for the GUI: a hack for reducing the level if we are wedged in like ()|(), etc.
+        l0 (if (first reduce-by-one) (dec l0) l0)
+        b0 (if (second reduce-by-one) (dec b0) b0)]
+    (loop [jx (int (inc ix))]
+      (if (= jx n) (dec jx)
+        (let [c (aget ^chars cs jx) l (aget ^ints level jx) 
+              c1 (if (= jx (dec n)) (char \ ) (aget ^chars cs (inc jx)))
+              b (aget ^ints boost jx) m (aget ^ints mode jx)]
+      ; lucky that excaped characters just happen to not affect us.
+      (if (or (and (> l l0) (>= b b0)) (and (> b b0) (>= l l0)) 
+            ; Reader chars can bump up to the end of a macro in things like '(bar)'foo:
+            ; also, parenthesis can bump into eachother like: ()()
+            (and (>= l l0) (>= b b0) (or (> m 0) (= jx 0) (not (cclose? (aget ^chars cs (dec jx)))) 
+                                       (and (or (not (creader? c)) (and (= c \#) (or (= c1 \{) (= c1 \")))) ; #{hash set} and #"regex" are NOT boosted.
+                                            (not (copen? c))))))
+        (recur (inc jx)) (dec jx)))))))
+; Beginning functions (only really used for hilighting for now):
+(defn token-beginning [^ints token ^ints break ix] 
+  ; TODO: error with ''|foo
+  (let [ix (int (max 0 (min (dec (count token)) ix)))]
+    (loop [jx (int (dec ix))]
+      (if (or (= jx -1) (= (aget ^ints token jx) 0))
+        (inc jx) 
+        (if (and (> jx 0) (= (aget ^ints break jx) 1)) jx (recur (dec jx)))))))
+(defn level-boost-beginning [^chars cs ^ints mode ^ints level ^ints boost ix & reduce-by-one]
+  (let [ix (max 0 (min (dec (count cs)) ix)) l0 (aget ^ints level ix) b0 (aget ^ints boost ix)
+        ; for the GUI: a hack for reducing the level if we are wedged in like ()|(), etc.
+        l0 (if (first reduce-by-one) (dec l0) l0)
+        b0 (if (second reduce-by-one) (dec b0) b0)]
+    (loop [jx (int (dec ix))]
+      (if (= jx -1) 0
+         (let [b (aget ^ints boost jx) m (aget ^ints mode jx)
+               l (aget ^ints level jx) c (aget ^chars cs jx)
+               c1 (if (= jx (dec (count cs))) (char \ ) (aget ^chars cs (inc jx)))
+               c2 (if (>= jx (- (count cs) 2)) (char \ ) (aget ^chars cs (+ jx 2)))]
+          (if (or (and (> l l0) (> b b0)) ; definitly deeper => keep going.
+                  ; at least as deep for both level and boost:
+                  (and (>= l l0) (>= b b0) 
+                    (or (> m 0) (= jx (dec (count cs))) ; simple reasons.
+                    (not (cclose? c)) (or (not (creader? c1)) (and (= c1 \#) (or (= c2 \{) (= c2 \")))) ; #{hash set} and #"regex" are NOT boosted.
+                      )))  ; '()|'foo or '()|'() screen.
+              (recur (dec jx)) (inc jx)))))))
 
-                     ; Entering a macro: set the datum to the lev (lev should = the next level as well).
-                     ; Set the datum if we enter a macro: (inc lev since our level is not sufficient to have whitespace be the macro)
-                     (if next-readmacro? (aset ^ints datums-stack (inc stack-ix) (inc lev)))
-                     ; Decrease stack-ix by one if we leave a macro's tail:
-                     (aset ^ints tokens ix token) 
-                     ; Set the boosts accordingly:
-                     (aset ^ints boosts ix next-macroboost)
-                     (aset ^ints levels ix (+ lev popup))
-                     (recur (inc ix) (+ lev delta-lev) next-readmacro? next-comment?
-                       ; increase stack-ix if we enter a macro:
-                       next-str? next-escape? next-macroboost next-stack-ix))))))))
-    ; add the tokens:
-    (if add-one-for-tokens?
-      (dotimes [i (int n)]
-        (aset ^ints levels i (+ (aget ^ints levels i) (aget ^ints tokens i)))))
-    ; Add the boosts. TODO: make this optional. TODO: re-enable (debug)
-    (dotimes [i (int n)]
-      (aset ^ints levels i (+ (aget ^ints levels i) (aget ^ints boosts i))))
-    ; Step 2: ignoring stuff. Let l be the level right before the # in #_.
-    ;                         Start at # and flatten the array to l until we get back to l.
-    ; Inert ^ and #_ will confuse this function BUT we still will get the right answer.
-    (loop [ix (int 0) datum (int 2147483647)]
-      (if (= ix n) levels
-        (let [l (aget ^ints levels ix)]
-          ;(println "ix: " ix "datum:" datum "level:" l "c: " (aget ^chars cs ix))
-          (if (< datum l)
-              (do (aset ^ints levels ix datum) (recur (inc ix) datum)) ; keep flattening.
-              (let [c1 (if (< ix (dec n)) (aget ^chars cs (inc ix)) \space)
-                    c2 (if (< ix (- n 2)) (aget ^chars cs (+ ix 2)) \space)]
-                (if (or (and (= c1 \#) (= c2 \_)) (and em (= c1 \^)))
-                    (recur (inc ix) l) ; start flattening.
-                    (recur (inc ix) 2147483647))))))) ; don't flatten
-    {:level levels :mode mode}))
+; Reader-macros that don't map to functions well (excluding metadata). In paractice you rarely (ever?) call these fns.
+(defn read-eval [code] (throw "TODO"))
+(defn syntax-quote [code] (throw "TODO"))
+(defn *reader-conditional [code] (throw "TODO"))
+(defn ignore [code] code) ; Return the actual code, one level up it will be ignored.
+(defn *unquote-splicing [code] code) ; one level up it will be spliced.
+
+(defn _unpack-anon-fns [code ^chars cs ^ints mode ix last-ix]
+  ; Unpacks anomonous functions, code is what goes inside. We can keep the % symbols, anon-fns don't nest.
+  ; Code has already been read through the _read-string-pos.
+  ; returns the :obj. Note: code is always a list at the outer level.
+  (let [nargs (loop [acc 0 jx ix]
+                (if (> jx last-ix) acc
+                  (if (and (= (aget ^chars cs ix) \%) (= (aget ^ints mode ix) 0))
+                      ; They limit it to 20 args, so our limit to 99 is fine:
+                      (let [c1 (if (<= (inc ix) last-ix) (aget ^chars cs (inc ix)) (char \a))
+                            c2 (if (<= (+ ix 2) last-ix) (aget ^chars cs (+ ix 2)) (char \a))
+                            n (cond (and (cnumber? c2) (cnumber? c1)) (Integer/parseInt ^String (str c1 c2))
+                                    (cnumber? c1) (Integer/parseInt ^String (str c1))
+                                    :else 0)]
+                        (recur (max acc n) (inc jx)))
+                      (recur acc (inc jx)))))]
+    ; fn and fn* seem equivalent. 
+    ; set :begin to one more than :end on the 'fn and [args] so that it does not affect the string.
+    ; careful to get the :obj nesting levels correct.
+    (list {:obj 'fn :begin ix :end (dec ix)}
+      {:obj (mapv #(hash-map :obj (symbol (str "%" %)) :begin ix :end (dec ix)) (range nargs)) :begin ix :end (dec ix)}
+      code))) ; the code is unchanged, it has it's own :obj :begin and :end that does not include the initial #.
+
+(defn _read-string-pos [^chars cs ^ints token ^ints mode ^ints level ^ints boost ^ints break
+                        ix last-ix]
+  ; Recursive reading of the string inclusive between ix and last-ix.
+  ; ix must be gaurenteed to start at something of relavence (i.e. a beginning of a token) and ix <= last-ix
+  (let [c (aget ^chars cs ix)
+        c1 (if (< ix last-ix) (aget ^chars cs (inc ix)) (char \a))
+        rread #(_read-string-pos cs token mode level boost break %1 %2)
+        fun1 #(inc (boring-end cs mode (inc ix))); first fun character right after a macro.
+        fun2 #(inc (boring-end cs mode (+ ix 2))); now for double-macro chars.
+        w1 (fn [sym] (hash-map :obj sym :begin ix :end (dec (fun1))))
+        w2 (fn [sym] (hash-map :obj sym :begin ix :end (dec (fun2))))
+        l-end #(dec (level-boost-end cs mode level boost ix))
+        ; vectorized reading. Used to read all the stuff inside the (), etc. The jx and last-jx are NOT inclusive of the ().
+        ; Returns a vector if there is at least on element inside the {}, otherwise returns a description of empty code.
+        readvf (fn [jx last-jx] ; jx may or may not be where the fun stuff starts.
+                 (if (or (> jx last-jx) (>= (boring-end cs mode jx) last-jx)) 
+                   {:obj []} ; empty [] () {} #{} or [ ] ( ) { } #{ }, later on we specify the :begin and :end
+                   (let [jx1 (inc (boring-end cs mode jx))]
+                     (loop [acc [] kx jx1] ; kx is the first interesting index.
+                       (if (or (> kx last-jx) (cclose? (aget ^chars cs kx))) acc ; nothing left to read.
+                         (let [; if we are in a non-reader token, use the token. Otherwise use the level:
+                               end (if (and (not (creader? (aget ^chars cs kx))) (= (aget ^ints token kx) 1))
+                                       (token-end token break kx) (level-boost-end cs mode level boost kx))
+                               next-beginning (inc (boring-end cs mode (inc end))) ; first char on the next important bit.
+                               codr (rread kx (dec next-beginning))
+                               codr (if (= kx jx1) (assoc codr :begin jx) codr)]; the beginning junk
+                           (recur (conj acc codr) next-beginning)))))))
+        ; Pack the metadata into a :meta:
+        meta-body (fn [m] (let [st (:begin (first (:obj m)))] ; have the :begin include the meta-data ^.
+                            (assoc (second (:obj m)) :begin st))) ; remove the actual meta-f-fy itself.
+        meta-pack (fn [v]
+                    (let [n (count v)]
+                      (loop [acc [] ix 0]
+                        (if (= ix n) acc
+                          (let [c (nth v ix)
+                                meta? (and (list? (:obj c)) (= (:obj (first (:obj c))) 'clooj_coder_grammer_meta-i-fy))]
+                            (if (and meta? (= ix (dec n))) (throw (Exception. "^ meta-data flag with nothing to attach to."))) ; Generates an EOF in vanilla.
+                            ; add the next element and put this element into the :meta.
+                            (recur (if meta? (conj acc (assoc (nth v (inc ix)) :meta (meta-body c))) (conj acc c))
+                              (if meta? (+ ix 2) (inc ix))))))))
+        readvf-box (fn [jx last-jx] ; normalizes to a map format with :obj bieng a vector.
+                     (let [r (readvf jx last-jx)] ; ix not jx and last-ix not last-jx
+                       (update (if (vector? r) {:obj r :begin ix :end last-ix} (assoc r :begin ix :end last-ix)) :obj meta-pack)))]
+    ; c isn't bieng commented or escaped, so it's easier to switchyard:
+    (if (and (creader? c) (or (not= c \#) (and (not= c1 \{) (not= c1 \")))) ; hash-sets and regexps block reader macros.
+      ; reader-macros => we come up with names for them. The last-ix does not change.
+      (cond (and (= c \#) (= c1 \')) {:obj (list (w2 'var) (rread (fun2) last-ix)) :begin ix :end last-ix}
+            (and (= c \#) (= c1 \=)) {:obj (list (w2 'clooj.coder.grammer/read-eval) (rread (fun2) last-ix)) :begin ix :end last-ix}
+            (and (= c \#) (= c1 \_)) {:obj (list (w2 'clooj.coder.grammer/ignore) (rread (fun2) last-ix)) :begin ix :end last-ix}
+            (and (= c \#) (= c1 \?)) {:obj (list (w2 'clooj.coder.grammer/*reader-conditional) (rread (fun2) last-ix)) :begin ix :end last-ix}
+            (= c \#) {:obj (_unpack-anon-fns (rread (fun1) last-ix) cs mode (fun1) last-ix) :begin ix :end last-ix}
+            (= c \') {:obj (list (w1 'quote) (rread (fun1) last-ix)) :begin ix :end last-ix}
+            (= c \@) {:obj (list (w1 'deref) (rread (fun1) last-ix)) :begin ix :end last-ix}
+            (and (= c \~) (= c1 \@)) {:obj (list (w2 'clooj.coder.grammer/*unquote-splicing) (rread (fun2) last-ix)) :begin ix :end last-ix}
+            (= c \~) {:obj (list (w1 'unquote) (rread (fun1) last-ix)) :begin ix :end last-ix}
+            (= c \`) {:obj (list (w1 'clooj.coder.grammer/syntax-quote) (rread (fun1) last-ix)) :begin ix :end last-ix}
+            ; Tempoararly add a clooj_coder_grammer_meta-i-fy symbol (this is the only way to get metadata when read with read-string):
+            (= c \^) {:obj (list (w1 'clooj_coder_grammer_meta-i-fy) (rread (fun1) last-ix)) :begin ix :end last-ix}
+            :else (throw (str "Unrecognized macro: " c c1)))
+      ; opening chars => read the stuff inside.
+      (cond (= c \() (update (readvf-box (inc ix) (l-end)) :obj #(apply list %))
+            (= c \[) (readvf-box (inc ix) (l-end)) ; :obj is already a vector.
+            (= c \{) (update (readvf-box (inc ix) (l-end)) :obj #(apply hash-map %)) ; # keys better be even.
+            (and (= c \#) (= c1 \{)) (update (readvf-box (+ ix 2) (dec last-ix)) :obj #(apply hash-set %)) ; may change the order, but :begin and :end is still preserved.
+            ; leaf level read-string (including regexps). They will ignore the boring stuff.
+            :else (let [^chars csus (Arrays/copyOfRange ^chars cs ix (inc last-ix))
+                        ^String sus (String. ^chars csus)]
+                   {:obj (read-string sus) :begin ix :end last-ix})))))
+
+(defn reads-string [s]
+  "Like read-string but reads all the objects, in vector form."
+  (read-string (str "[" s "\n]")))
+
+(defn reads-string-pos [s]
+  "Reads a string but in a position-aware way and doesn't stop with the first token like read-string does.
+   At each level there is :obj, :begin, :end, and :meta. :begin, :end are INCLUSIVE.
+   At all the other levels we have:
+   :obj, which is is simply the code (of course, with nesting the code contains other :obj :begin :end stuff)
+   Replacing, recursivly {:obj foo :begin 123 :end 456 :meta bar} with foo will recreate (with a few exceptions like syntax-quote)
+    what read-string would do. :begin and :end is inclusive.
+   Fluff is added to the end (except for the first element, for which fluff is also added to the beginning, and ( <fluff> ) for which fluff gets added to the parent list).
+   ONLY USE FOR REFACTORING, where the output must preserve as much of the visual structure as the input.
+     (use the faster vanilla reads-string to check if a refactoring needs to be done)."
+  (let [s1 (str "[" s "\n]") ; wrap it up in a [].
+        parse1 (basic-parse s1)
+        code1 (_read-string-pos (.toCharArray s1) (:token parse1) (:mode parse1) (:level parse1) (:boost parse1) (:break parse1) 0 (dec (count s1)))
+        ; reduce by one the :begin and :end of the code location since we have an extra :end.
+        ; Also: remove the effects of the newline by previnting
+        n (count s)
+        one-less (fn one-less [c] (let [c1 (if (coll? (:obj c)) (update c :obj #(cmap :flatten one-less %)) c)
+                                        c1 (if (:meta c) (update c1 :meta one-less) c1)
+                                        c2 (if (:begin c1) (update c1 :begin dec) c1)]
+                                    (if (:end c2) (update c2 :end #(dec (if (> % n) n %))) c2)))]
+    (:begin 0 :end (dec n) :obj (mapv one-less (:obj code1)))))
+
+(defn pos-to-blit-code [s c]
+  "Converts a string and it's reads-string-pos format to a blitted format.
+   The blitted format has :head :body and :tail as strings as well as :obj for the code object.
+   :head and :tail are when the :obj has children; :body is for when it doesn't.
+   the :head is typically an opening (, etc. The :tail often has whitespace, etc.
+   The :body captures the entire code for the leaf levels."
+  (let [; Extract the earliest beginning from a peice of code:
+        hcoll? #(and (coll? %) (> (count %) 0)) ; non-mepty collections.
+        mbegin #(if (:meta %) (:begin (:meta %)) (:begin %)) ; takes a single :begin :end , etc object.
+        deep-begin (fn deep-begin [c] ;c is a collection.
+                     (let [fdeep (fn [v] (apply min (mapv #(if (hcoll? (:obj %)) (deep-begin (:obj %)) (mbegin %)) v)))] ; works on a vector.
+                       (cond (set? c) (fdeep (into [] c))
+                         (map? c) (mbegin (first (keys c))) ; keys before valse.
+                         :else (mbegin (first c))))) ; non-set non-map are ordered.
+        deep-end   (fn deep-end [c] ;c is a collection.
+                     (let [fdeep (fn [v] (apply max (mapv #(if (hcoll? (:obj %)) (deep-end (:obj %)) (:begin %)) v)))] ; works on a vector.
+                       (cond (set? c) (fdeep (into [] c))
+                         (map? c) (:end (last (vals c))) ; vals after keys. 
+                         :else (:end (last c))))) ; non-set non-map are ordered.
+        convert (fn convert [x] ; x has {:obj :begin: end}.
+                   (let [begin (:begin x) end (:end x)
+                         ; Recursive => empty body. Not recursive => empty head and tail.
+                         recursive? (hcoll? (:obj x))
+                         x (if (:meta x) (assoc x :meta (convert (:meta x))) x)]
+                   (if recursive? 
+                     (let [cbegin (deep-begin (:obj x)) cend (deep-end (:obj x))]
+                       (assoc (update x :obj #(cmap :flatten convert %)) ; recursive step.
+                                 :head (subs s begin cbegin) :body "" 
+                                 :tail (subs s (inc cend) (inc end))))
+                     (assoc x :head "" :body (subs s begin (inc end)) :tail ""))))]
+    (convert c)))
+
+(defn reads-string-blit [s]
+  "Reads a string into a blitted format. Pass this through your refactoring code."  
+  (pos-to-blit-code s (reads-string-pos s)))
+
+(defn blit-code-to-code [c]
+  "Converts the code-with-string-blit to the vanilla code object. See the test-blit-reader function.
+   Preserves laziness if i.e. infinite seqs are put into the :obj."
+  (let [hcoll? #(and (coll? %) (> (count %) 0)) ; non-mepty collections.
+        convert (fn convert [x] ; x has :obj :begin and :end, etc.
+                  (let [ob (if (hcoll? (:obj x)) (cmap :flatten convert (:obj x)) (:obj x))]
+                    (if (:meta x) (with-meta ob (meta-expand (convert (:meta x)))) ob)))]
+    (convert c)))
+
+(defn blit-code-to-str [c]
+  "Converts the code-with-string-blits back into a string. Used after the refactoring is done.
+   In cases where pr-str is not esoteric: 
+     Ensures that the code is valid code.
+     (blit-code-to-str (reads-string-blit s)) = s, unless something goes wrong..."
+  (throw "TODO: ensuring that the () type maps the collection type of :obj.")
+  (let [; set ordering has a mind of it's own and even hash-maps still don't offically gaurentee sorting.
+        hcoll? #(and (coll? %) (not (empty? %)))
+        begin-sort #(sort-by :begin %)
+        ; Add a newline if the comment is
+        dcom (fn [^String s k] 
+               (let [^String su (subs s k)]
+                 (if (> (.lastIndexOf ^String su ";") ; lastIndexOf returns -1 if it fails.
+                        (.lastIndexOf ^String su "\n")) (str s "\n") s)))
+        ; Ensures that the head and tail match the collection type:
+        match-type (fn [c] ; non-empty collections only.
+                     ; The BEGINNING of the head and tail has the {}, and no macros are in the head here.
+                     ; For reads-string-blit the [] encapsulates all fluff.
+                     (let [o (:obj c) hd (if (and (set? o) (<= (count (:head c)) 1)) "#{" (:head c))
+                           open (cond (map? o) "{" (vector? o) "[" (set? o) "#{" :else "(")
+                           close (cond (map? o) "}" (vector? o) "]" (set? o) "}" :else ")")
+                           hd1 (if (not= (subs hd 0 (count open)) open) (str open (subs hd (count open))) hd)
+                           tl1 (if (not= (subs (:tail c) 0 1) close) (str close (subs (:tail c) 1)) (:tail c))]))
+        ; gets how many chars we ignore for a leaf-object:
+        get-k (fn [^String s leaf-obj]
+                ; k is the index of the last token:
+                ; It should always stop unless the :body is completly wrong.
+                (let [^chars cs (.toCharArray s)
+                      mp? (if (map? leaf-obj) (boolean true) (boolean false))
+                      closec (if mp? (last (str leaf-obj)) (char \a))
+                      ; For non-maps: first char that is part of the token.
+                      ; For maps: the closing parenthesis.
+                      ix0 (loop [ix (int 0) comment (int 0)]
+                            (let [c (aget ^chars cs ix)]
+                              (if (= comment 1)
+                                (recur (inc ix) (if (= c \newline) 0 1))
+                                (if (= c \;)
+                                  (recur (inc ix) 1)
+                                  ; Active mode:
+                                  (if (or (and mp? (= c closec)) ; maps
+                                          (and (not mp?) (not (ccom-white? c)))) ; not maps.
+                                    ix (recur (inc ix) comment))))))] 
+                  (if mp? ix0 (+ ix0 (count (pr-str leaf-obj)) -1))))
+                      
+        to-vec (fn to-vec [x] ; all non-empty collections become vectors and we sort by the :begin.
+                 (let [ob (:obj x)
+                       out (assoc x :obj (if (hcoll? ob)
+                               (begin-sort (into [] (if (map? ob) (concat (keys ob) (vals ob)) ob))) ob))]
+                   (if (:meta x) (update out :meta to-vec) out)))
+        strs (fn strs [x] 
+               (let [col? (hcoll? (:obj x)) x (if col? (match-type x) x)]
+                 (if (and (not col?) (not= (:obj x) (read-string (:body x))))
+                   (throw (Exception. "Mismatched :obj and :body")))
+                 (str (if (:meta x) (strs (:meta x)) "") ; meta before even the head.
+                      (dcom (:head x) 0)
+                      (if col?
+                        ; When to interpose a space?
+                        ; There is no space, comma,etc.
+                        ; Both are non-collection non-strings.
+                        (let [ch-strs (mapv strs (:obj x)) n (count ch-strs)
+                              mushy?s (mapv #(and (not (coll? (:obj %))) (not (string? (:obj %)))) (:obj x))
+                              ch-strs-pad (mapv #(str (nth ch-strs %) 
+                                                   (if (and (nth mushy?s %) (nth mushy?s (inc %)) (ccom-white? (last (nth ch-strs %)))) 
+                                                     " " "")) (range (dec n)))]
+                          (apply str ch-strs-pad))
+                        "")
+                      (if (not col?) (dcom (:body x) (get-k (:obj x) (:body x))) 
+                        (:body x)) ; :body should be empty for hcolls but just in case.
+                      (dcom (:tail x) 0))))]
+    (strs (to-vec c))))
+
+(defn test-blit-reader [s]
+  "Compares the vanilla read-string vs our version that keeps track of position.
+   :str? = does converting the string to code and back yield the original string?
+   :code? = does our code agree with that of the vanilla reader?
+   Note: reader macros will often fail for the :code? test even if it is working properly.
+      :str? should ALWAYS work, however."
+  (let [c (reads-string-blit s)]
+;(println "c is:" (blit-code-to-code c) "vs: " (read-string (str "[" s "\n]")))
+    {:str? (= s (blit-code-to-str c)) 
+     :code? (= (read-string (str "[" s "\n]")) (blit-code-to-code c))}))

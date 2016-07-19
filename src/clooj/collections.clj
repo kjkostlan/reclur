@@ -21,3 +21,20 @@
 (defn updayte-in [m ks f & args]
   "Like update-in but if ks is [] or nil we simply apply f to m."
   (if (> (count ks) 0) (apply update-in m ks f args) (apply f m args)))
+
+(defn f-bin-search [f n]
+  "Binary search with functions.
+   Rather than an array, f is a function that takes an integer argument from 0 to n-1.
+   If (f i) is monotonicly increasing (from false to true) it finds the first true in O(log(n)).
+   If f is always false it returns n."
+;Adapted from http://algs4.cs.princeton.edu/11model/BinarySearch.java.html
+  (cond (= n 0) 0 
+        (f 0) 0
+        (not (f (dec n))) n 
+        ; always: (f lo) is false but (f hi) is true.
+        :else
+        (loop [lo 0 hi (dec n)]
+          (if (>= (inc lo) hi) hi ; no more searching to do.
+          ; hi and lo are at least 2 apart, so mid will always be in between.
+            (let [mid (+ lo (long (/ (- hi lo) 2)))] 
+              (if (f mid) (recur lo mid) (recur mid hi)))))))
