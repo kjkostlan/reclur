@@ -14,9 +14,9 @@
 ;;;;;;;;;;;;;;;;;;;;;; Some simple collection functions that are somewhat specific ;;;;;;;;;;;;;;;;;;;;;; 
 
 (defn align-children [old-substate new-substate]
-  "Creates a map from x to [old child, new child], where x is the union of the grammer/ckeys of the two states.
+  "Creates a map from x to [old child, new child], where x is the union of the collections/ckeys of the two states.
    Non-existant children are set to nil."
-  (let [get-k #(apply hash-set (grammer/ckeys (:Children %)))
+  (let [get-k #(apply hash-set (collections/ckeys (:Children %)))
         get-c #(get-in %1 [:Children %2])
         ch-keys (set/union (get-k old-substate) (get-k new-substate))]
     (zipmap ch-keys (mapv #(vector (get-c old-substate %) (get-c new-substate %)) ch-keys))))
@@ -194,7 +194,7 @@
                               (mapv #(.getName %) _methods)))
         llistc (fn [sym] (apply hash-set (llist (.getMethods (eval sym)))))
         lout (zipmap (mapv keyword widget-symbols) (mapv llistc widget-symbols))
-        out (grammer/cmap :vals (fn [v] (grammer/cmap :vals #(keyword (subs % 3)) v)) lout)]
+        out (collections/cmap :vals (fn [v] (collections/cmap :vals #(keyword (subs % 3)) v)) lout)]
     ; Didn't quite make the raw doc:
     (assoc out :Document #{:DocumentListener})))
 

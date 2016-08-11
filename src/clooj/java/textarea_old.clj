@@ -4,7 +4,7 @@
 ; TODO: move everything form the utils class that has to do with textareas.
 
 (ns clooj.java.textarea_old
-  (:require [clooj.utils :as utils] [clojure.string :as string] [clooj.coder.io :as cio]
+  (:require [clooj.utils :as utils] [clooj.collections :as collections] [clojure.string :as string] [clooj.coder.io :as cio]
     [clooj.coder.grammer :as grammer])
   (:import (java.awt KeyboardFocusManager Graphics2D Color Font RenderingHints Point Rectangle)
            (javax.swing SwingUtilities JOptionPane JPanel JLabel SpringLayout JScrollPane JTextArea)
@@ -184,7 +184,7 @@
         texth (* superes (.getHeight fontmetrix))
         islink (into [] (reduce #(do (utils/set-range %1 (:lo %2) (:hi %2) 1)) zeros links)) ;(println %1 %2 (:lo %2) (:hi %2))
         asc (* superes (.getAscent fontmetrix))
-        newlines (into [] (utils/which #(= % \newline) txt)) ; dividers between different areas.
+        newlines (into [] (collections/which #(= % \newline) txt)) ; dividers between different areas.
         sub0 (into [] (cons 0 (map inc newlines)))
         sub1 (into [] (conj newlines (count txt))) ; the indexes of each line to render.
         lines (into [] (map #(subs txt %1 %2) sub0 sub1))

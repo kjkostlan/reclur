@@ -1,6 +1,8 @@
 ; Repl that uses futures so that multiple calculations can be active.
 (ns clooj.coder.repl
-  (:require [clooj.java.file :as jfile] [clojure.string :as string])
+  (:require [clooj.java.file :as jfile] [clojure.string :as string]
+     [clojure.walk :as walk] [clooj.coder.grammer :as grammer]
+     [clooj.collections :as collections])
   (:import (java.io ByteArrayOutputStream OutputStreamWriter)))
 
 ; List of calculations that are running or finished:
@@ -10,8 +12,12 @@
 ;   :future is the future object that will yield the string result as would be seen in the repl.
 (defonce calculations (atom []))
 
+(def core-ns (find-ns 'clojure.core))
+
 ; Update the bindings (the bindings are global, surprisingly).
 (def star-vars ['*ns* '*compile-path* '*unchecked-math* '*warn-on-reflection*]) ; TODO: are there more? 
+
+(def rdebug (atom nil))
 
 (defmacro binding-wrap [m code] ;m is a map from symbols to namespaces for bindings.
   (let [binding-vec (into [] (apply concat (mapv (fn [v] [v `(get ~m (quote ~v))]) star-vars)))]
@@ -20,6 +26,7 @@
   (zipmap (mapv #(list 'quote %) star-vars) star-vars))
 (def bindings (atom (zipmap star-vars (mapv eval star-vars)))) ; start with the default namespaces.
 
+(def max-length 5000)
 
 ; Create our own repl namespace with (use) access to the clojure.core and this file.
 ; The future wrap allows waiting for this file to be compiled before (use)ing it.
@@ -29,9 +36,7 @@
 
 (def default-bindings @bindings)
 
-
 (def printout-text (atom ""))
-
 
 (defn thaw-str [& args]
   "Like str but won't freeze the entire program for infinite datasets.
@@ -53,8 +58,7 @@
 		 (str "<more than " (int max-load) " leaf items>")))))
 
 (defn _abridged-str [x thaw?]
-  (let [max-length 3000
-        sstr (if thaw? thaw-str str)
+  (let [sstr (if thaw? thaw-str str)
         limit #(let [s (try (sstr %) (catch Exception e (sstr "STRING REPRESENTATION ERROR: " e)))]
                  (if (> (count s) max-length) (str (subs s 0 max-length) "...<too large to show>") s))]
     (limit x)))
@@ -111,6 +115,14 @@
   (apply str (str (.getMessage e) " (" (last (string/split (str (type e)) #"\.")) ")") "\n" 
     (interpose "\n" (mapv str (.getStackTrace e)))))
 
+;;;;;;;;;; Simple debugging functions ;;;;;;;;;;
+; How to use machine lerarning to not have to fish and slow down version 4.
+(defmacro pr-err [code]
+  "Use when debugging macros. This will try to run code, printing the stack trace if code fails.
+   The stack trace from errors generated in macros gets swalllowed by a compiler error.
+   This prints the trace properly when called on code (i.e. a problamatic line in a macro or a fn called by a macro)."
+  `(try ~code (catch Exception e# (println "Caught error:" (repl/err-report e#)))))
+
 (defn add-to-repl!! 
     "Sends a command to the repl, running it on a future, returning immediately.
      eval false means that we don't actually evaluate anything."
@@ -161,6 +173,97 @@
   (let [nms (get @bindings '*ns*)]
     ;http://stackoverflow.com/questions/3636364/can-i-clean-the-repl
     (mapv #(ns-unmap nms %) (keys (ns-interns nms)))))
+
+(defn brevity [code nms] 
+  "Represents the code in a more consice function. Uses a namespace to prevent collisions.
+   Use (pr-str (brevity code *ns*)) to get a more-readable function. Use pr-str DONT use str."
+  (let [d (fn [s re-as-s] (.replaceAll s re-as-s ""))
+        nsresolve #(try (ns-resolve %1 %2) (catch Exception e))
+        ;refers (mapv str (keys (ns-refers nms))) ; includes the clojure.core and any :use stuff.
+        ; The functions that convert to an easier symbol:
+        qualed? #(second (.split % "/")) ; are we qualified with a / ?
+        no-__foo__ #(d % "__.*__") no-12345 #(d % "\\d\\d\\d+")
+        no-qual #(d % ".+\\/")
+        cap1 #(str (.toUpperCase (str (first %))) (apply str (rest %)))
+        ; mainly composiiton of replacements, order matters a little.
+        sr-rep #(let [str1 (no-qual (no-12345 (no-__foo__ %))) ; takes a string.
+                      v0 (nsresolve nms (symbol %)) v1 (nsresolve nms (symbol str1))
+                      broke? (and v0 (not= v0 v1)) made? (and (nil? v0) (not (nil? v1)))
+                      str1 (if broke? % str1)] ; prevent renaming if we broke a resolution.
+                   (if made? ; capitolize made symbols so that they are almost certanly not used. made? is still valid code but harder to read.
+                     (cap1 str1) str1))
+        simplify-f #(symbol (sr-rep (str %)))
+        
+        ; Build a map from the bulky vars to the non-bulky ones.
+        f1 (collections/reduce-to-map (fn [acc c] (if (symbol? c) (assoc acc c (simplify-f c)) acc)) {})
+        bulk-to-slim (do (walk/postwalk f1 code) (f1))
+        ; Break duplicate keys:
+        bulk-to-slim1 (collections/resolve-collisions (fn [ks v] (mapv #(symbol (str v (if (= % 0) "" %))) (range (count ks)))) bulk-to-slim)
+        ; The actuator step. We can't do postwalk because (quote ...) shouldn't do anything to the ...
+        _brevity (fn _brevity [code] 
+                   (cond (symbol? code) (get bulk-to-slim1 code)
+                         ; Special exclusion for quotes: quote is a special form so when it is the first arguent of a list it's ALWAYS.
+                         (and (coll? code) (or (not= (first code) 'quote) (not (collections/listoid? code)))) 
+                         (collections/cmap :flatten _brevity code) 
+                         :else code))]
+    (_brevity code)))
+(defn _get-breaks [bcode targetn]
+  "Puts a :break in some elements. :break means start with a newline + indent.
+   :breaks prevent the line before from bieng overly long.
+   Assumes bcode has no newlines in it."
+  (let [ob (:obj bcode)]
+    (if (and (coll? ob) (not (empty? ob)))
+      (let [cf #(count (grammer/blit-code-to-str %))
+            ; Convention to put keys and vals on the same line so one count per kv pair for maps.
+            counts (if (map? ob) (mapv #(+ (cf %1) (cf %2)) (keys ob) (vals ob)) (mapv cf ob))
+            ; recursive part:
+            bcode (assoc bcode :obj (collections/cmap :flatten #(_get-breaks % targetn) ob))
+            ck (collections/ckeys (:obj bcode))
+            n (count ck)]
+      (loop [acc (:obj bcode) n-at-acc 0 ix 0]
+        (if (= ix n) (assoc bcode :obj acc)
+          (let [codei (collections/cget (:obj bcode) (nth ck ix))
+                ni (nth counts ix)
+                bust? (and (> n-at-acc 0) (> (+ n-at-acc ni) targetn))
+                c1 (if bust? (assoc codei :break true) codei)]
+            (if bust? 
+                (recur (cond 
+                         (vector? acc) (assoc acc ix c1)
+                         ; maps always key, val on same line.
+                         (map? acc) (assoc acc (nth ck ix) c1)
+                         (set? acc) (conj (disj acc codei) c1) ; codei = (nth ck ix) b/c keys = vals for a set.
+                         :else (collections/lassoc (apply list acc) ix c1)) ; O(n^2) but n is at most 21 for valid code.
+                  0 (inc ix))
+                (recur acc (+ n-at-acc ni) (inc ix))))))) bcode)))
+(defn _apply-breaks [bcode level]
+  "Replaces :break with an indent before the head (or body)."
+  (let [bcode (if (and (coll? (:obj bcode)) (not (empty? (:obj bcode)))) ; recursive step.
+                (update bcode :obj (fn [o] (collections/cmap :flatten #(_apply-breaks % (inc level)) o))) bcode)
+        indnt (apply str "\n" (repeat level "  "))
+        cs #(str indnt %)]
+    (if (:break bcode) (update bcode (if (> (count (:head bcode)) 0) :head :body) cs) bcode)))
+(defn indent [str-or-code]
+  "Automatically newlines and indents the str.
+   Use for visualizing code that has undergone substantial transformations, or debugging macro code.
+   Code is treated as not blitted."
+  (let [target-len 50
+        ; gets rid of newlines. The comments will still generate newlines when bit -> string b/c grammer checks for that.
+        rm-nl (fn rm-nl [bcod] 
+                (let [bcodr (if (and (coll? (:obj bcod)) (not (empty? (:obj bcod)))) 
+                              (update bcod :obj #(collections/cmap :flatten rm-nl %)) bcod)
+                      nn (fn [m k] (update m k #(.replace (str %) "\n" "")))]
+                 ; head and tail but not body.
+                 (nn (nn bcodr :head) :tail)))
+        bcode (rm-nl (grammer/reads-string-blit (if (string? str-or-code) str-or-code (grammer/code-to-str str-or-code))))
+        break-code (_apply-breaks (_get-breaks bcode target-len) -1)]
+    ;(reset! rdebug break-code)
+    ;(println break-code)
+    (grammer/blit-code-to-str break-code))) ; -1 because of the outer [].
+(defn previty [code & hint-dont-print]
+  "EZ function generating printouts."
+  (let [out (indent (brevity (try (read-string code) (catch Exception e code)) *ns*))]
+    (if (not (second hint-dont-print)) (println (str (first hint-dont-print)) out) out)))
+
 
 ; Use the core and this ns so we have access to the functions.
 ; This must be in a future because we have to wait untill this ns is loaded.

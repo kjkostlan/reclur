@@ -17,6 +17,7 @@
             [clooj.coder.io :as cio]
             [clooj.java.textarea_old :as jtext_old]
             [clooj.coder.grammer :as grammer]
+            [clooj.collections :as collections]
             [clooj.coder.namespacer :as namespacer])
   (:import (javax.swing SwingUtilities)))
 
@@ -33,8 +34,8 @@
         contents (if (jfile/exists? file) (jfile/load-textfile file) nil)]
     (if (nil? contents) (jtext_old/append-text! atomtext (str line " <cant find file> \n")); can't load file, don't provide linl.
       (let [fx (first (grammer/lines2caret contents [lineno]))
-            open (last (utils/which #(= % \( ) (into [] line))) open (if (nil? open) 0 open)
-            close (last (utils/which #(= % \)) (into [] line))) close (if (nil? close) (count line) close)
+            open (last (collections/which #(= % \( ) (into [] line))) open (if (nil? open) 0 open)
+            close (last (collections/which #(= % \)) (into [] line))) close (if (nil? close) (count line) close)
             textix [(inc open) close]]
     (jtext_old/append-link1! gotofn!! atomtext (str line "\n") textix file fx)))))
 (defn print-stack-trace! [gotofn!! atomtext cleanup]

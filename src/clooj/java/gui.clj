@@ -19,6 +19,7 @@
             [clooj.coder.grammer :as grammer]
             [clooj.java.errcatch :as errcatch]
             [clooj.java.thread :as thread]
+            [clooj.collections :as collections]
             [clooj.java.clojurize :as clojurize])
   (:import [javax.swing SwingUtilities] [java.awt Window]))
 (def debug (atom []))
@@ -71,7 +72,7 @@
         visible (if (:Visible obj) (:Visible obj) true)] ; Visible not specified = true. 
     (clojurize/on-java-change (.setVisible obj visible) obj)
     (mapv #(_set-vis! state java %)
-      (mapv #(conj path :Children %) (grammer/ckeys (:Children substate)))))) ; the children are 1:1.
+      (mapv #(conj path :Children %) (collections/ckeys (:Children substate)))))) ; the children are 1:1.
 
 (defn setup [state & opts]
   "Creates the actual GUI from an (immutable) clojure data-structure that reperesents the GUI state.

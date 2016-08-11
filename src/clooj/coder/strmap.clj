@@ -18,7 +18,8 @@
          ;round these numbers at the end to get cursor locations, etc.
 
 (ns clooj.coder.strmap
- (:require [clojure.string :as string] [clooj.coder.grammer :as grammer] [clooj.coder.io :as cio]))
+ (:require [clojure.string :as string] [clooj.coder.grammer :as grammer] [clooj.coder.io :as cio]
+           [clooj.collections :as collections]))
 
 (defn rangev [& args]
  "Not lazy."
@@ -115,7 +116,7 @@
 (defn _null-pos-code [code]
    ; Creates code with the same data-structure as _read-string would but without any position info (and no head tail or body either).
    ; Used for code that is generated because of a reader macro expansion but not explicitly written.
-  {:obj (if (coll? code) (grammer/cmap :flatten _null-pos-code code) code) :pos [] :head "" :body "" :tail ""
+  {:obj (if (coll? code) (collections/cmap :flatten _null-pos-code code) code) :pos [] :head "" :body "" :tail ""
    :type (cond (set? code) :set (list? code) :list (vector? code) :vector (map? code) :map :else :simple)})
 
 (defn _read-string [strg parse offset p2s] ; recursive version.

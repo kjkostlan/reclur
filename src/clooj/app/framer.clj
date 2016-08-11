@@ -20,7 +20,7 @@
 (defn _id-paths [acc sub-state path]
   (reduce #(_id-paths %1 (get-in sub-state [:Children %2]) (concat path [:Children %2]))
     (if (:id sub-state) (assoc acc (:id sub-state) (into [] path)) acc) 
-    (grammer/ckeys (:Children sub-state))))
+    (collections/ckeys (:Children sub-state))))
 (defn id-paths [state]
   ; Creates a map from :id keys to paths.
   ; id keys allow us to not worry about the particular path.
@@ -65,7 +65,6 @@
 			wedge-macrop? (or (and wo? (> (aget ^ints boosts (dec caret)) (aget ^ints boosts caret))) ; 'foo|() '(foo)|()
                                           (and wedge-pmacro? (= (aget ^ints boosts (dec caret)) (aget ^ints boosts caret)))) ; 'foo|'() and '(foo)|'()
                                         
-
 			wedge? (or wedge-paren? wedge-pmacro? wedge-macrop?)
 			dual-m-wedge? (and wedge-pmacro? wedge-macrop?)
 ;_ (if (= (first text) \X) (println "caret: " caret "wedge?" wedge-paren? wedge-pmacro? wedge-macrop?))
@@ -125,7 +124,7 @@
                           (assoc jtree :Expanded? true :Selected? true))
                        (assoc jtree :Selected? false))]
       (if (:Children this-level) 
-         (assoc this-level :Children (grammer/cmap :vals #(ensure-file-open % file) (:Children this-level)))
+         (assoc this-level :Children (collections/cmap :vals #(ensure-file-open % file) (:Children this-level)))
           this-level))) ; no children to recursively operate on.
     jtree) ; nil file -> no change.
 
@@ -147,6 +146,8 @@
         namesp (second (try (into [] (read-string txt)) (catch Exception e nil)))]
     (if namesp (jfile/namespace2file (str namesp)))))
 
+(def debug (atom []))
+
 (defn save-file!!! [s]
   "Saves a the text of the editor into (:cur-file s), creates :cur-file if it doesn't exist on the disk.
    Does nothing if there is no :cur-file yet."
@@ -163,7 +164,8 @@
           msg (if ns-conflict (str t0 cur-file " ERROR: Namespace declared in file is missing, invalid, or doesn't match the filename.")
                 (try (if clj? (do (repl/reload-file!! cur-file) (str "Saved: " cur-file " (no error)."))
                        (str "Saved: " cur-file " [not a .clj file, no compilation done]."))
-                         (catch Exception e (str "Saved: " cur-file " Compile error: " e  " (Error prevented downstream (re)definitions)."))))]
+                         (catch Exception e 
+                           (do (reset! debug e) (str "Saved: " cur-file " Compile error: " e "\n (Error prevented downstream (re)definitions).")))))]
       (repl/add-to-repl!! msg false) s) s))
 
 (defn loadfile [s]
@@ -372,7 +374,6 @@
   (window))
   
 (defn _reload-fn [s r]
-   ; Use s unless r has the 
   (let [ca (widget/align-children s r)
         kys (filterv #(first (get ca %)) (keys ca)) ; don't add r children to nil s children.
         s1 (if (:Children s) (assoc s :Children (mapv #(_reload-fn (first (get ca %)) (second (get ca %))) kys)) s)

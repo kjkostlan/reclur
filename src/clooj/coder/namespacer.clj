@@ -6,13 +6,14 @@
             [clooj.coder.grammer :as grammer]
             [clooj.utils :as utils]
             [clooj.coder.tracer :as tracer]
+            [clooj.collections :as collections]
             [clojure.reflect]))
 
 (defn deep-dequote [code]
   "Recurisivly removes any quotes in the code. For quotes with one argument, remove the extra ().
    This is half of the conversion from repl to non-repl namespaces, the other is replacing require with :require"
   (if (coll? code)
-    (let [code (grammer/cmap :flatten deep-dequote code)] ; recursive.
+    (let [code (collections/cmap :flatten deep-dequote code)] ; recursive.
       ; strip the extra quote.
       (if (and (seq? code) (= (first code) 'quote))
         (if (= (count code) 2) (second code) (rest code)); can't strip for n>2, shouldn't be an issue in most cases. 

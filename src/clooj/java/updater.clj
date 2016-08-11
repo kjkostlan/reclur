@@ -97,11 +97,11 @@
     (widget/add-defaults 
       (if (:Children new-substate) ; recursive part after alignment.
         (let [ch-aligned (widget/align-children old-substate new-substate) ; map of [old new] pairs.
-              ch1 (grammer/cmap :vals #(update-defaults-recursive (first %) (second %)) ch-aligned)
+              ch1 (collections/cmap :vals #(update-defaults-recursive (first %) (second %)) ch-aligned)
               ;This is a chokepoint that means only maps and vectors work. fix this TODO? 
               ; only update keys on the new substate:
               ch2 (reduce #(assoc %1 %2 (get ch1 %2)) (:Children new-substate) 
-                    (grammer/ckeys (:Children new-substate)))]
+                    (collections/ckeys (:Children new-substate)))]
           (assoc new-substate :Children ch2)) new-substate))))
 
 (defn add-defaults-recursive [substate]
@@ -119,7 +119,7 @@
           :else (if (and (:Children new-sub) (not (vector? (:Children new-sub))) (not (map? (:Children new-sub))))
                   {:path path :error "Children are not a vector or map."}
                   (if (not= (:Children old-sub) (:Children new-sub))
-                    (let [nkeys (grammer/ckeys (:Children new-sub))]
+                    (let [nkeys (collections/ckeys (:Children new-sub))]
                       (first (filterv identity (mapv 
                             #(_assert-valid-state old-state new-state (conj path :Children %)) nkeys)))))))))
                   

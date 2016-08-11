@@ -1,6 +1,7 @@
 ; Calculation of indentation level and tools to read strings into code.
 ; TODO: deprecated file.
-(ns clooj.coder.io (:require [clojure.string :as string] [clooj.java.file :as jfile] [clooj.utils :as utils]))
+(ns clooj.coder.io (:require [clojure.string :as string] [clooj.java.file :as jfile] [clooj.collections :as collections]
+                         [clooj.utils :as utils]))
 
 
 (defn try-to-read [s]
@@ -55,7 +56,7 @@
   "Gets a superset of locations for which an island can start."
   ; look for open? and backtrack (becuse of reader macros like quoting).
   (let [text (apply vector text0)
-        opens (utils/which open? text)
+        opens (collections/which open? text)
         backtrak (fn [ind0]
                    (loop [valid ind0 ind (dec ind0)] ; valid = starts on an open or macro connected to open.
                      (if (< ind 0) valid; went all the way to beginning.
@@ -71,7 +72,7 @@
   ; "(some ) string" => x, such that (subs strng x) => "(some )", or -1 if it fails. ONLY PASS IN VECTORS!
   (let [n (count str)
         isclose (map close? str)
-        closers (map #(+ % 1) (utils/which identity isclose)) ; the index + 1 b/c of how subvec works.
+        closers (map #(+ % 1) (collections/which identity isclose)) ; the index + 1 b/c of how subvec works.
         valid (map #(= (status (subvec str 0 %)) 0) closers) ; lazy for performance, dont do everything.
         which-valid (filter #(> % 0) (map #(if %1 %2 0) valid closers))
         ind (into [] (take 1 which-valid))]
@@ -122,9 +123,9 @@
 (defn quote-comment [text0]
   "Generates vectors by filtering quotes and comments. 0 = normal, 1 = quote, 2 = comment, 1 &2 are inclusive"
   (let [text (into [] text0) textlast (into [] (butlast (cons " " text)))
-        quotes (into [] (utils/which #(= % \") text))
-        comments (into [] (utils/which #(= % \;) text))
-        ;newlines (into [] (utils/which #(= % \newline) text))
+        quotes (into [] (collections/which #(= % \") text))
+        comments (into [] (collections/which #(= % \;) text))
+        ;newlines (into [] (collections/which #(= % \newline) text))
         ; \" can NEVER start quotes or comments but CAN end quotes if the \ is escaped.
         canquotestart (into [] (map #(and (not (= (nth textlast %) \\))) quotes)) ;(not (= (nth textlast %) \#))
         cancommentstart (into [] (map #(not (= (nth textlast %) \\)) comments))
@@ -175,11 +176,11 @@
 (defn quote-comment-java [text0]
   "Extraction of quotes and comments from java. Not as bulletproof, as java is secondary in priority."
   (let [text (into [] text0) textnext (into [] (rest (conj text " ")))
-        quotes (into [] (utils/which #(= % \") text))
-        linecomments (into [] (utils/which identity (map #(and (= %1 \/) (= %2 \/)) text textnext)))
-        blockstarts (into [] (utils/which identity (map #(and (= %1 \/) (= %2 \*)) text textnext)))
-        blockends (into [] (utils/which identity (map #(and (= %1 \*) (= %2 \/)) text textnext)))
-        newlines (into [] (utils/which #(= % \newline) text))
+        quotes (into [] (collections/which #(= % \") text))
+        linecomments (into [] (collections/which identity (map #(and (= %1 \/) (= %2 \/)) text textnext)))
+        blockstarts (into [] (collections/which identity (map #(and (= %1 \/) (= %2 \*)) text textnext)))
+        blockends (into [] (collections/which identity (map #(and (= %1 \*) (= %2 \/)) text textnext)))
+        newlines (into [] (collections/which #(= % \newline) text))
         n (count text)]
      (loop [ix 0 qind 0 lcind 0 bsind 0 beind 0 nlind 0 mode (into [] (repeat n 0))]
        (let [qnxt (_ixt quotes qind ix) lcnxt (_ixt linecomments lcind ix)

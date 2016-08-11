@@ -124,8 +124,8 @@
                 (into [] (apply concat [{:path path :state st :obj (:obj ob)}] 
                            (if (nil? (:Children st)) []  ; done.
                              (mapv #(list-vec (conj path :Children %1) %2 %3)
-                               (grammer/ckeys (:Children st)) (grammer/cvals (:Children st)) 
-                               (grammer/cvals (:Children ob)))))))]
+                               (collections/ckeys (:Children st)) (collections/cvals (:Children st)) 
+                               (collections/cvals (:Children ob)))))))]
     (listv [:state] stater objr)))
 
 ; Note: if the type of the object also matters we can get it's type.
@@ -293,7 +293,7 @@
   (mapv #(subvec path 0 %) (range 0 (count path) 2)))
 
 (defn _descendent-paths [state path] ; does include ourselves.
-  (let [p1 #(conj path :Children %) kys (grammer/ckeys (get-in state (conj path :Children)))]
+  (let [p1 #(conj path :Children %) kys (collections/ckeys (get-in state (conj path :Children)))]
     (into [] (conj (apply concat (mapv #(_descendent-paths state (p1 %)) kys)) path))))
 (defn descendent-paths [state path]
   ; Does not include ourselves.

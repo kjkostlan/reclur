@@ -11,6 +11,7 @@
 ; TODO: some level of "strength" of blittedness, i.e. fns like tree-seq would return blitted code but at a lower strength.
 ; Data has two flavors: blitted and unblitted. Blitting puts information as to the string, etc
 ;   as well as the code itself. We assume that a partially blitted variable is never created.
+; Equality: checks for equality on unblitted code.
 ; Reporter functions (most functions) are work on non-blitted code, return a non-map.
   ; the output is reblitted iff the input is a leaf-blitted code and the output is a leaf.
     ; Leafs are empty collections as well as non-collections that can be represetned as strings.
@@ -45,19 +46,21 @@
   ; eduction is unchanged, the call to reduce will handle the blitting stuff.
   ; Thus we don't have to modify functions that make transducers, but we DO have to modify transduce.
 
+(def debug (atom nil))
+
 ;;;;;;;;;;;;;;;;; Combining normal code and blit-code.
 
 (defn impatient-find [f coll]
   "Infinitite-safe for variable function arguments.
    For non-lazy it simply uses find(filter).
    For lazy it only tries the first element of coll."
-  (first (filter f (if (grammer/lazy? coll) (take 1 coll) coll))))
+  (first (filter f (if (collections/lazy? coll) (take 1 coll) coll))))
 
 ; grammer/blit-code-to-code useful?
 (defn default-blit-code [code]
   "Generates default blitted code. This is nessessary when code is created.
    Note: code must be vanilla code."
-  (let [cstr (binding [*print-meta* true] (pr-str code))]
+  (let [cstr (grammer/code-to-str code)]
     (try (read-string cstr) (catch Exception e (throw (Exception. (str "Clojure bug: esoteric code makes an invalid string, trying to read it back gives: " e)))))
     ; TODO: formatting of the string to make it look pretty?
     (first (grammer/reads-string-blit cstr))))
@@ -79,8 +82,12 @@
 (defn _salt-blit-code [c]
   "Takes c and salts it so we know it's blitted code. Even if the user provides something with
    the same fields as blitted code, they won't have the salt."
-    (assoc (if (:head (:obj c)) (update c :obj #(grammer/cmap :flatten _salt-blit-code %))) c) 
-      _secret-salt true)
+    (assoc (if (:head (:obj c)) (update c :obj #(collections/cmap :flatten _salt-blit-code %)) c) 
+      _secret-salt true))
+(defn _unsalt-blit-code [c]
+  "Removes the salt."
+  (dissoc (if (:head (:obj c)) (update c :obj #(collections/cmap :flatten _unsalt-blit-code %)) c) 
+      _secret-salt))
 
 (defn blitted? [c]
   "Are we blitted code? All code MUST be salted first.
@@ -96,7 +103,6 @@
   "Deblits x if x is blitted?, otherwise just returns x.
    get-obj can be used to peel off only one level, rather than blitting all the way down."
   (if (blitted? x) (transient (grammer/blit-code-to-code (persistent! x))) x)) ; this puts in the metadata as well.
-
 
 (defn leaf-fluff [x]
   ; The fluff part of the :body of x. Changes such as inc will change the body but not the fluff.
@@ -126,7 +132,7 @@
 
 (defn blit [x]
   "Also salts. Respects laziness. Does not yet ensure a valid string-form."
-  (let [obj (if (coll? x) (grammer/cmap :flatten x blit) x)
+  (let [obj (if (coll? x) (collections/cmap :flatten x blit) x)
         body (if (coll? x) "" (pr-str x))] 
     ; most collections are ()
     (assoc {:head (cond (map? x) "{" (set? x) "#{" (vector? x) "[" (coll? x) "(" :else "")
@@ -135,7 +141,7 @@
             :obj obj} _secret-salt true)))
 (defn blit! [x]
   "Also salts. Respects laziness. Does not yet ensure a valid string-form."
-  (let [obj (if (coll? x) (grammer/cmap :flatten x blit!) x)
+  (let [obj (if (coll? x) (collections/cmap :flatten x blit!) x)
         body (if (coll? x) "" (pr-str x))] 
     ; most collections are ()
     (assoc! {:head (cond (map? x) "{" (set? x) "#{" (vector? x) "[" (coll? x) "(" :else "")
@@ -204,7 +210,8 @@
 ;;;The tool to turn a function that works on normal code to a function on blitted code.
 
 (defn reporter-fn [f]
-  "The BULK of functions. These return NON-collections such as numbers, symbols, strings, etc OR take in java objects, 
+  "The BULK of functions, which take NON blitted input.
+   These return NON-collections such as numbers, symbols, strings, etc OR take in java objects, 
    that are NOT elements of said collections.
    The output will be blitted based on an input iff at least one input argument is blitted AND is a leaf (Note: includes empty collections).
    (the first blitted argument sets how the output will be blitted)."
@@ -243,7 +250,9 @@
                  `alter `alter-meta `atom `cat
                  `comment `commute `compare-and-set! `completing
                  `constantly `def `delay `deliver `deref `do `finally `eduction `fn `identity
-                 `if `let `letfn `loop `monitor-enter `monitor-exit `persistent! `quote `recur
+                 `if `let `letfn `loop `monitor-enter `monitor-exit `persistent! 
+                 `prn `pr `println
+                 `quote `recur
                  `reduced
                  `ref `ref-set `reset! `reset-meta! `restart-agent `run
                  `send `send-off `send-via `transient `throw `try `unreduced `volatile!
@@ -341,6 +350,7 @@
 (defn _b-walk_postwalk [f form] (_b-walk_walk (partial _b-walk_postwalk f) f form))
 
 (def fns-manual-overrides { ; map from fully-qualified symbol to fn definition.
+
 `apply (fn 
   ; some common arities, avoind variable arg reduces extranoius lazyness.
   ([f args] (_b-apply [f] args)) ([f a args] (_b-apply [f a] args))
@@ -458,13 +468,13 @@
     ; Let the transducer determine if we are blitted (is into ever lazy?):
     (let [tr-vec (into [] xform (get-obj from))]
       (cond (and (blitted? from) (blitted? (first tr-vec)))
-        (assoc from :obj (into (grammer/cmap :flatten blit (get-obj to) tr-vec))) ; reuse the :from object.
+        (assoc from :obj (into (collections/cmap :flatten blit (get-obj to) tr-vec))) ; reuse the :from object.
         (blitted? (first tr-vec)) 
-          (let [out (into (grammer/cmap :flatten blit (get-obj to) tr-vec))]
+          (let [out (into (collections/cmap :flatten blit (get-obj to) tr-vec))]
             (assoc (cond (map? out) (blit {0 1}) (set? out) (blit #{0}) (vector? out) (blit [0]) :else (blit (list 0))) 
               :obj out))
         ; not blitted.
-        :else (into (grammer/cmap :flatten unblit (get-obj to)) tr-vec)))))
+        :else (into (collections/cmap :flatten unblit (get-obj to)) tr-vec)))))
 
 `keep (fn
   ([f] (keep (uf f)))
@@ -719,12 +729,20 @@
 
 `walk/walk _b-walk_walk
 
-`grammer/cdissoc (fn [c k] (ifblit c (grammer/cdissoc c (unblit k))))
-`grammer/ckeys (fn [c] (ifblit c ((if (set? c) identity unblit) (grammer/ckeys c))))
-`grammer/cmap (fn [map-option f code & args] 
-                (if-blit code (apply grammer/cmap (unblit map-option) f code (map unblit args))
-                              (apply grammer/cmap (unblit map-option) f code (map blit args))))
-`grammer/cvals (fn [c] (ifblit c (grammer/cvals c)))
+`collections/cdissoc (fn [c k] (ifblit c (collections/cdissoc c (unblit k))))
+`collections/ckeys (fn [c] (ifblit c ((if (set? c) identity unblit) (collections/ckeys c))))
+`collections/cmap (fn [map-option f code & args] 
+                (if-blit code (apply collections/cmap (unblit map-option) f code (map unblit args))
+                              (apply collections/cmap (unblit map-option) f code (map blit args))))
+`collections/cvals (fn [c] (ifblit c (collections/cvals c)))
+`collections/lassoc 
+
+(fn [l k v & kvs]
+  "l determines the blitting."
+  (if-blit l (apply list (apply assoc (into [] l) (unblit k) (unblit v) (map unblit kvs)))
+    (apply list (apply assoc (into [] l) (unblit k) (blit v) (blit-odd-unblit-even unblit kvs)))))
+
+
 `grammer/pos-to-blit-code (fn [s c] (_salt-blit-code (grammer/pos-to-blit-code (unblit s) (unblit c))))
 `grammer/reads-string-blit (fn [s] (_salt-blit-code (grammer/reads-string-blit (unblit s))))
 
@@ -747,6 +765,10 @@
         (set? code) (apply list `_b-hash-set code)
         :else code))
 
+(defn keyword-get [kwd coll]
+  "Keyword getting."
+  (kwd (get-obj coll)))
+
 ; The main macro that converts the code:
 ; IMPORTANT: macroexpand the code before we manipulate it.
 ; IMPORTANT: coll-literal-convert.
@@ -754,35 +776,49 @@
 ; IMPORTANT: ensure-valid-fluff (should be done by grammer).
 ; Types of fns: fns-ident, fns-single-get, fns-unblit-reporter.
   ; default is reporter-fn.
-(defn _wrap-fn [f-sym local-vars]
-  ;wraps the function-as-symbol, if nessessary, otherwise just returns the function.
-  ; We don't know the function at runtime, so have to defensivly wrap the function in checks.
-    ; TODO: when the type-checker gets online it could eliminate most of these, performance.
+(defn wrap-var [f-sym local-vars nms]
+  ;wraps a variable-as-symbol, if nessessary, otherwise just returns the var.
+  ; Sometimes we don't know the function at runtime, so have to defensivly wrap the function in checks.
+  ; Note: Namespace variables won't collide with fns-manual-overrides, etc b/c they are fully qualified.
   ; Example: (inc x) => ((reporter-fn inc) x)
-  (let [fns-id (set/union fns-ident local-vars)
-        wrp (fn [sym wr] `(if (fn? ~sym) (~wr ~sym) ~sym))] ;x => (if (fn? x) (foo-bar-fn x) x)
-   (cond (get fns-manual-overrides f-sym) (wrp f-sym (get fns-manual-overrides f-sym))
-         (get fns-id f-sym) f-sym
-         (get fns-single-get f-sym) (wrp f-sym `single-get-fn)
-         (get fns-unblit-reporter f-sym) (wrp f-sym `unblit-report-fn)
-         :else (wrp f-sym `reporter-fn))))
-(defn _blitify-leaf [code local-vars]
-  (if (symbol? code) (_wrap-fn code local-vars) code))
-(defn _blitify-fn-body [f-body arg-c-sym arg-b-sym] ;f-body does not include the fn and vector.
-  (grammer/with-locals _blitify-leaf f-body #{arg-c-sym arg-b-sym}))
-(defmacro blitify [f-code]
-  "Blittifies a function of two arguments: code (a vector), and blit?s (1:1 with code).
-   the function operates on code normally.
-   Call it like: (blitcode/blitify (fn [c b?s ] ...))."
-  ; macro-expand to simplify and qualify to match the symbols.
-  (let [f-code (grammer/qualify (apply list (walk/macroexpand-all f-code)))]
+  (let [fns-id (set/union fns-ident local-vars)]
+    (cond (get fns-id f-sym) f-sym ; include local variables.
+         (get fns-manual-overrides f-sym) `(get fns-manual-overrides (quote ~f-sym))
+         (get fns-single-get f-sym) (`single-get-fn (quote ~f-sym))
+         (get fns-unblit-reporter f-sym) (`unblit-report-fn (quote ~f-sym))
+         :else
+         (let [vr (ns-resolve nms f-sym)]
+            (cond (nil? vr) `(if (fn? ~f-sym) (reporter-fn ~f-sym) (quote ~f-sym)) ; we don't know. 
+                 (fn? (var-get vr)) `(reporter-fn (quote ~f-sym)) ; known function.
+                 :else f-sym))))) ; known non-fn.
+(defn _blit-translate-leaf [code local-vars nms]
+  (if (symbol? code) (wrap-var code local-vars nms) code))
+(defn _blit-translate-step [c nms]
+  ; quoteing code blocks blitifying the code:
+  (cond (and (collections/listoid? c) (= (first c) 'quote) (not (contains? (grammer/get-locals c) 'quote))) c
+        ; Collections are recursive:
+        (coll? c) (collections/cmap :flatten #(_blit-translate-step % nms) c)
+        ; symbols are leaf-translated:
+        (symbol? c) (_blit-translate-leaf c (grammer/get-locals c) nms)
+        ; Other stuff is not changed:
+        :else c))
+(defn _blit-translate-fn-body [f-body arg-c-sym arg-b-sym nms] ;f-body does not include the fn and vector.
+  (let [f-body1 (grammer/calculate-locals f-body #{arg-c-sym arg-b-sym})]
+    ; keywords must be handled using the entire list.
+    (walk/postwalk grammer/remove-locals (_blit-translate-step f-body1 nms))))
+(defn blit-translate [f-code nms]
+  "For use in macros. Accepts a function of two arguments: the-code (a vector), and blit?s (1:1 with code).
+   The body of the function was built to work on NON blitted code.
+   Returns a body that is built to work on blittified code.
+   nms is the namespace that f-code lives in."
+  (if (string? f-code) (throw (Exception. "Must be code, not a string representation of code.")))
+  (let [f-code (grammer/qualify-in (apply list (walk/macroexpand-all f-code)) nms false)]
     (if (not= (first f-code) `fn*) (throw (Exception. "Must be a function's code.")))
-    (if (not= (count (second f-code)) 2) (throw (Exception. "Function must have two arguments.")))
+    (if (not= (count (first (second f-code))) 2) (throw (Exception. "Function must have two arguments.")))
     ; Salt what's blitted.
-    (let [arg-c (get-in f-code [1 0]) arg-b? (get-in f-code [1 1])]
+    (let [arg-c (first (first (second f-code))) arg-b? (second (first (second f-code)))]
      `(fn [~arg-c ~arg-b?]
         ; shadow ~arg-c.
-        (let [~arg-c (mapv #(if (nth ~arg-b? %) (_salt-blit-code (nth ~arg-c %))) 
+        (let [~arg-c (mapv #(if (nth ~arg-b? %) (_salt-blit-code (nth ~arg-c %)) (nth ~arg-c %)) 
                        (range (count ~arg-b?)))] 
-          ~(_blitify-fn-body (rest (rest f-code)) arg-c arg-b?))))))
-
+          (_unsalt-blit-code ~@(_blit-translate-fn-body (rest (second f-code)) arg-c arg-b? nms)))))))

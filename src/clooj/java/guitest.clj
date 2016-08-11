@@ -139,7 +139,7 @@
                  (= act :add)
                  (update-in panel [:Children] #(conj % rm-button))
                  (= act :remove)
-                 (update-in panel [:Children] #(grammer/cdissoc % ch-ix))
+                 (update-in panel [:Children] #(collections/cdissoc % ch-ix))
                  :else panel)))]
     (setup
       {:Type 'JFrame :Title "Swapout"

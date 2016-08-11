@@ -1,7 +1,12 @@
 (ns clooj.coder.debugger
-  (:require [clooj.coder.grammer :as grammer] [clooj.coder.strmap :as strmap] [clojure.walk :as walk]))
+  (:require [clooj.coder.grammer :as grammer] [clooj.coder.strmap :as strmap] [clojure.walk :as walk]
+            [clooj.coder.repl :as repl]))
 ;; (require '[clooj.coder.debugger :as debugger])
 ;; Functional debugging tool in the spirit of elm debugger.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;; The main engine ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ; Structure of dbstate:
 ;   :step = how many times we called the _add-frame!! function in this case.
@@ -53,7 +58,7 @@
 ; This function maps code => code objects.
 (defn _watch [code stack]
   (let [root-stack #(list 'let ['_C %] (list '_add-frame!! stack '_C) '_C) ; adds the root-level variable notice. We typically do this at the end.
-        piece-stack (fn [code] (grammer/cmap :flatten #(_watch %1 (conj stack %2)) code (range))) ; stacks all the pieces of the code.
+        piece-stack (fn [code] (collections/cmap :flatten #(_watch %1 (conj stack %2)) code (range))) ; stacks all the pieces of the code.
         ; Handles lets and loops, both of which assign special bindings to the code:
         let-loop (fn [code] (let [bindings (second code) n (count bindings) evens (range 0 n 2) odds (range 1 n 2) ; Run recursivly on every odd-numbered entry in the [a 1 b 2 c 3 ...] part:
                                   vars (mapv #(nth bindings %2) bindings evens) ; Symbols a b c etc.
@@ -78,7 +83,6 @@
 (defn lp [x] 
   (loop [acc 0 ix 0] 
     (if (= ix 1) (+ 1 2) (if (< 1 0) 1 (recur (+ acc x) (inc ix))))))
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Testing ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

@@ -274,7 +274,7 @@
         (do (if selected? (.addSelectionPath jtree treePath) (.removeSelectionPath jtree treePath))
           (reset! spin-atom false))))))))
 (defn _deepc [subsub]
-  (assoc (if (:Children subsub) (assoc subsub :Children (grammer/cmap :vals _deepc (:Children subsub))) subsub) :Expanded? false))
+  (assoc (if (:Children subsub) (assoc subsub :Children (collections/cmap :vals _deepc (:Children subsub))) subsub) :Expanded? false))
 (defn deep-collapse [substate tree-desc]
   "Collapsing nodes => all :Children levels need to be collapsed."
   (let [sub-sub (get-in substate tree-desc)]

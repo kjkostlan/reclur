@@ -61,13 +61,6 @@
   (let [kw (map keyword args)]
     (zipmap kw args)))
 
-(defn which [pred coll]
-  "returns the keys/indexes for which pred is true on a given item of coll. Like filter but keys instead of values."
-  (if (map? coll)
-    (reduce-kv #(if (pred %3) (conj %1 %2) %1) [] coll)
-    ; sequences stay lazy:
-    (filter #(> % -1) (map #(if (pred %1) %2 -1) coll (range)))))
-
 (defn ssubvec [v lo0 hi0]
   "stops at the edge instead of overflowing."
   (let [n (count v)
