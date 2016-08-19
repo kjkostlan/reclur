@@ -253,7 +253,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;; Code for parsing strings in a way that preseves the mapping ;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
+; Long term TODO: this parse code is clunky because it doesn't include the
 
 ; Drop-in inlined macros that work on char primitives.
 (defmacro copen? [c]
@@ -468,6 +468,76 @@
                    (recur (inc ix)))
         (recur (inc ix)))))) 
     (assoc parse0 :boost boost))) ; mutated with the array ops.
+
+(defn newline-parse [s & include-basic-parse?]
+  "Two [I arrays from s:
+   :depth = same as basic-parse's level, but inclusive of macro characters before syntax indentation.
+   :breakable = are we allowed to break at a given point.
+     0 = illegal or unnessessary places to replace with a breakpoint.
+     1 = optional, for example for foo bar it would be the space in between.
+     2 = manditory (wherever s has new-lines and we are leaving a comment or in a string).
+   include-basic-parse?: default = false: also include the basic parse information."
+  (let [n (count s) p (basic-parse s) 
+        ^chars cs (.toCharArray s)
+        ^ints breakable (make-array Integer/TYPE n)
+        ^ints mode (:mode p)
+        ^ints level (:level p)
+        ^ints token (:token p)
+        ^ints boost (:boost p)
+        ^ints break (:break p)
+        ^ints depth (make-array Integer/TYPE n)]
+    (loop [ix (int 0)]
+      (if (= ix n) "done with copy step"
+        (do (aset ^ints depth ix (aget ^ints level ix)) (recur (inc ix)))))
+    ; Add the macro characters to the level:
+    (loop [ix (int 0)]
+      (if (>= ix n) "done with adding"
+          (let [b0 (if (= ix 0) (int 0) (aget ^ints boost (dec ix)))
+                b (aget ^ints boost ix)]
+            ; An increase in boost will look to see if we attach to the level in front of us:
+            (if (or (> b b0) 
+                  (and (> ix 0) (= b b0) (cclose? (aget ^chars cs (dec ix))) (creader? (aget ^chars cs ix))))
+              (let [ix-open ; search for the ( we are attaching to.
+                      (loop [jx (int ix)]
+                        (if (or (= jx n) ;end of array fail.
+                              (and (= (aget ^ints break jx) 1) ; broken token without new token.
+                                (or (= jx 0) (>= (aget ^ints boost (dec jx)) (aget ^ints boost jx))))) -1 ; some failures.
+                          (let [cj (aget ^chars cs jx) tj (aget ^ints token jx)]
+                            (if (> (aget ^ints sym-kwd-start (int cj)) 0) -1
+                              (if (= tj 0) ; win or fail.
+                                (if (copen? cj) jx -1) (recur (inc jx)))))))]
+                 (if (> ix-open -1) ; bridge step.
+                   (let [l (aget ^ints level ix-open)] 
+                     (loop [jx (int ix)]
+                       (if (= jx ix-open) "done with bridge"
+                         (do (aset ^ints depth jx l) (recur (inc jx)))))))
+                 (recur (max ix-open (inc ix)))) (recur (inc ix))))))
+    ; Add hash-set literals:
+    (loop [ix (int 0)]
+      (if (>= ix (dec n)) "Done with hash-sets"
+        (let [c (aget ^chars cs ix) c1 (aget ^chars cs (inc ix))
+              t (aget ^ints token ix) t1 (aget ^ints token (inc ix))]
+          (if (and (= c \#) (= c1 \{) (= t 1) (= t1 0))
+            (aset ^ints depth ix (inc (aget ^ints depth ix))))
+          (recur (inc ix)))))
+    ; Set breakable => 1 whenever it's whitespace without macro bridges or in a string/comment/etc
+    (loop [ix 0]
+      (if (= ix n) "done with breakable"
+        (do (if (and (ccom-white? (aget ^chars cs ix)) ; whitespace (includes commas).
+                     (= (aget ^ints token ix) 0) ; not in a token (includes strings and comments).
+                     (= (aget ^ints depth ix) (aget ^ints level ix))) ; not a macro bridge.
+              (aset ^ints breakable ix 1))
+          (recur (inc ix)))))
+    ; Set breakable to 2 at the \n at the end of each comment :
+    (loop [ix 1]
+      (if (>= ix n) "Done with comment and string-forcings"
+         (do (if (and (= (aget ^chars cs ix) \newline) ; newline.
+                   (or (= (aget ^ints mode (dec ix)) 2) ; ending a comment.
+                       (= (aget ^ints mode ix) 1))) ; in a string.
+               (aset ^ints breakable ix 2)) (recur (inc ix)))))
+    (if (first include-basic-parse?) 
+       (assoc p :depth depth :breakable breakable)
+       {:depth depth :breakable breakable})))
 
 (defn token-end [^ints token ^ints break ix]
   ; the last index still on the token, inclusive.
@@ -709,7 +779,7 @@
    The same value, when read into code, can have different values as a blitcode structure.
    This is not an issue if converting to vanilla code but WILL cause the compiler to complain
    when it is converted to a string and then read-string."
-  (let [col? (and (coll? (:obj bcode)) (not (empty? (:obj bcode))))
+  (let [col? (collections/col? (:obj bcode))
         bcode1 (if col? (update bcode :obj #(collections/cmap :flatten _de-dupe %)) bcode)
         ob (:obj bcode1)]
     (if (and col? (or (map? ob) (set? ob))) ; only maps and sets, non-emptiness b/c we don't recursivly have code for empty colls.
@@ -730,7 +800,7 @@
     The :meta object gets :meta? set to true so that it includes the ^ part.
     Note: the outerlevel of bcodev is never :meta bearing because we wrap in a vector."
   (let [o (:obj bcodev)]
-    (if (and (coll? o) (not (empty? o)))
+    (if (collections/col? o)
         (let [o (mapv _collapse-meta o) ; recursive part.
               m?s (mapv #(boolean (meta %)) o)]
           (assoc bcodev :obj
@@ -774,58 +844,7 @@
    If so there is no need to add a newline after the part before us."
   (let [pieces (_hot-cold-pieces s false)] ; The first piece is cold. Does it have a newline?
     (.contains (str (first pieces)) "\n")))
-(defn _spacers [cv0]
-   "Applies spacers to the code if nessessary. A space seperates some kinds of tokens, while a 
-    newline is needed after comments so the next form does not get commented.
-    Convert the code into VECTOR form first!"
-  (let [leaf-only-body #(assoc % :head "" :tail "" :body (str (:head %) (:body %) (:tail %))); Lumps :head and :tail for any leaf objects into :body.
-        col?f #(and (coll? (:obj %)) (not (empty? (:obj %))))
-        leaf-space (fn leaf-space [c] ; recursive as well.
-                     (assoc (if (col?f c) (update c :obj #(mapv _spacers %)) (leaf-only-body c))
-                       ; the head is assumed to be cold-only.
-                       :head (_cold-safe-comment (:head c))))        
-        spacy (fn spacy [cv] ; Safe-to-end-in-comment means we don't have to add a newline.
-                (let [col? (col?f cv)]
-                  (if col?
-                    (let [o (:obj cv) col?s (mapv col?f o) n (count o)
 
-                          o (mapv spacy o) ; Recursive part.
-
-                          ; does each child end in a comment:
-                          comend?s (mapv #(if %2 (_end-in-comment? (:tail %1)) 
-                                            (_end-in-comment? (:body %1))) 
-                                    o col?s)
-                          ; does each child have newline power:
-                          nuline?s (mapv #(if %2 (_newline-power? (:head %1)) ; head not tail.
-                                            (_newline-power? (:body %1))) 
-                                    o col?s)
-                          ; Simple fn to add a padding to the code:
-                          add-s (fn [oi pad-str coli?] (if coli? (assoc oi :head (str (:head oi) pad-str))
-                                                         (assoc oi :head "" :body (str (:head oi) (:body oi) pad-str))))
-                          ; Comments: head-first-child inteference:
-                          cv (if (_end-in-comment? (:head cv)) (update cv :head #(str % "\n")) cv) ; Macros that can't have ending wspace can't end in comments either. 
-
-                          ; Comments: children-children inteference:
-                          o (mapv #(if (or (= % (dec n)) (not (nth comend?s %)) (nth nuline?s (inc %)))
-                                     (nth o %) (add-s (nth o %) "\n" (nth col?s %))) (range n))
-
-                          ; Comments: last-child-tail inteference:
-                          cv (if (last comend?s) (update cv :tail #(str "\n" %)) cv)
-
-                          ; Do we have mushy starts and ends. Two mushy pieces stuck together means we need a space:
-                          ; Calculated after updating o since we may have added newlines.
-                          mush-start?s (mapv #(and (let [oi (:obj %)] (or (keyword? oi) (symbol? oi) (number? oi) (char? oi)))
-                                                (let [pieces (_hot-cold-pieces (:body %) false)]
-                                                  (= (count (first pieces)) 0))) o) ; Does not start cold => mushy potential.
-                          mush-end?s (mapv #(and (let [oi (:obj %)] (or (keyword? oi) (symbol? oi) (number? oi) (char? oi)))
-                                                (let [pieces (_hot-cold-pieces (:body %) false)]
-                                                  (even? (count pieces)))) o) ; Ends hot => mushy potential.  
-                       
-                          ; Mushy: children-children inteference. This is the only mushy inteference we have to worry about.
-                          o (mapv #(if (or (= % 0) (not (nth mush-end?s (dec %))) (not (nth mush-start?s %))) ; Check 4 mushy end b4 us + mushy start at us.
-                                     (nth o %) (update (nth o %) :body (fn [bi] (str " " bi)))) (range n))]                         
-                      (assoc cv :obj o)) cv)))]
-    (spacy (leaf-space cv0)))) ; Leaf space first.
 (def _long-to-short {'quote "'" `syntax-quote "`" `read-eval "#=" 'var "#'"
                      `ignore "#_" `*reader-conditional "#?" `*unquote-splicing "~@"
                      `deref "@" `unquote "~"})
@@ -848,10 +867,10 @@
             (and (= (mapv #(symbol (str "%" (inc %))) (range na)) (mapv :obj (:obj arg-part))) 
               (= (apply str (mapv get-s (:obj arg-part))) ""))))) false)))
 (defn _local-project [c outer-level?]
-  "Projectional editing on a local scale (does not worry about reader macros, thus the term local).
-   The only non-local projection is that the non-body of an anon-function is not changed."
+  "Locally applies projections to the code.
+   The only non-local operation is that the non-body of an anon-function is not changed."
   (let [o (:obj c) s (str (:head c) (:body c) (:tail c))
-        col? (and (coll? o) (not (empty? o)))
+        col? (collections/col? o)
         anon-fn? (and col? (_anon-fn-macro? c))
         ; recursive part (anon-fns don't modify the first two sub-elements):
         c (cond anon-fn? ; Ensure that the :head, etc is right:
@@ -901,7 +920,7 @@
 (defn _macro-unbracket [c]
   "Detects reader macros and removes/modifies the head and tail.
    Use AFTER _local-project."
-  (let [col? (and (coll? (:obj c)) (not (empty? (:obj c))))
+  (let [col? (collections/col? (:obj c))
         c (if col? (assoc c :obj (collections/cmap :flatten _macro-unbracket (:obj c))) c)
         hots (fn [s] (apply str (collections/evensv (_hot-cold-pieces s true)))); All hot stuff.
         colds (fn [s] (apply str (collections/evensv (_hot-cold-pieces s false)))); All cold stuff.
@@ -919,73 +938,148 @@
       ; Exception: anonomous functions keep a # active.
       (assoc c :head (let [s0 (colds (:head c))] (if anon-fn? (str (_cold-safe-comment s0) "#") s0))
         :tail (colds (:tail c))) c)))
-(defn _edit-project [c outer-level?] 
-  "Modifies the head tail and body so that the string will match the :obj hirerchy. 
-   EXCEPTION: does not add newlines or spaces in cases where code gets commented out or symbols jam toghether.
-   This is the main projection function that gets the 'nearest' string to the blit code that matches the original string.
-   Recursive. The outer level does not include the [ or ].
-   Projection will be resonably-close to the original string if it is the wrong form,
-   and should be EXACT when the string is the right form."
-  (_macro-unbracket (_local-project c outer-level?)))
-(defn _naive-str [x]
-   "Naive conversion to string. Does not check for validity or anything."
-  (let [hcoll? #(and (coll? %) (not (empty? %)))
-        col? (hcoll? (:obj x))
-        ob (if (and col? (map? (:obj x)) (:obj x)) (interleave (keys (:obj x)) (vals (:obj x))) (:obj x))]
-     (str (if (:meta x) (_naive-str (:meta x)) "") ; meta before even the head. Note: meta data should have been collapsed already.
-       (:head x) (if col? (apply str (mapv _naive-str (into [] ob))) "")
-       (:body x) (:tail x))))
-(defn blit-code-to-str [c & outer-level?]
-  "Converts the code-with-string-blits back into a string. Used after the refactoring is done.
-   In cases where pr-str is not esoteric: 
-     Ensures that the code is valid code.
-     (blit-code-to-str (reads-string-blit s)) = s, 
-       unless s is not valid code to begin with or something goes wrong...
-   outer-level? (default = true) => No need to match-type, as the outer level has no []"
-  (let [; set ordering has a mind of it's own and even hash-maps still don't offically gaurentee sorting.
-        outer-level? (if (< (count outer-level?) 1) true (first outer-level?))
-        hcoll? #(and (coll? %) (not (empty? %)))
+(defn bcode-to-vec [x] 
+  "Converts the code to vector form. Recursive.
+   The vectors are sorted by :begin to try to preserve the user's hash-map ordering.
+   Don't run vectorized bcode through functions unless they specifies to do so or they are your own and you need vectorized bcode.
+   If it already is a vector format this function does nothing."
+  (let [ob (:obj x) col? (collections/col? (:obj x))
         begin-sort #(into [] (sort-by :begin %))
-        ; Add a newline if the comment is at the end.
-        dcom (fn [^String s k] 
-               (if (nil? s) (throw (Exception. "Null string for dcom")))
-               (let [k (if (creader? (first s)) 0 k)] ; Macro chars break this rule. 
-                 (let [^String su (subs s k)]
-                   (if (> (.lastIndexOf ^String su ";") ; lastIndexOf returns -1 if it fails.
-                          (.lastIndexOf ^String su "\n")) (str s "\n") s))))
-        ; The last character belonging to a token of a leaf-obj:
-        get-k (fn [^String s leaf-obj]
-                ; k is the index of the last token:
-                ; It should always stop unless the :body is completly wrong.
-                (if (= (count s) 0) 0
-                  (let [^chars cs (.toCharArray s)
-                        mp? (if (map? leaf-obj) (boolean true) (boolean false))
-                        closec (if mp? (last (str leaf-obj)) (char \a))
-                        ; For non-maps: first char that is part of the token.
-                        ; For maps: the closing parenthesis.
-                        ix0 (loop [ix (int 0) comment (int 0)]
-                              (let [c (aget ^chars cs ix)]
-                                (if (= comment 1)
-                                  (recur (inc ix) (if (= c \newline) 0 1))
-                                  (if (= c \;)
-                                    (recur (inc ix) 1)
-                                    ; Active mode:
-                                    (if (or (and mp? (= c closec)) ; maps
-                                            (and (not mp?) (not (ccom-white? c)))) ; not maps.
-                                      ix (recur (inc ix) comment))))))] 
-                    (if mp? ix0 (+ ix0 (count (pr-str leaf-obj)) -1)))))            
-        to-vec (fn to-vec [x ol?] ; all non-empty collections become vectors and we sort by the :begin.
-                 (let [ob (:obj x) col? (hcoll? ob)
-                       ob (if col? (collections/cmap :flatten #(to-vec % false) ob) ob) ; recursive.
-                       out (assoc x :obj (if (and col? (not (vector? ob)) (not (collections/listoid? ob)))
-                               (begin-sort (into [] (if (map? ob) (concat (keys ob) (vals ob)) ob))) ob))]
-                   (if (:meta x) (update out :meta #(to-vec % false)) out)))
-         c (_de-dupe c) ; Remove duplicates for hash-sets and hash-maps. This ensures the output string doesn't have a duplicate key error.
-         c (_edit-project c outer-level?) ; Project the string on the code, so it matches the code but tries to be close to the original string.                    
-         c (to-vec c outer-level?) ; Make it easier to work with. _edit-project WILL fail since we force things to be vectors.
-         c (_collapse-meta c) ; Put the metadata as normal data.
-         c (_spacers c)] ; Add spaces and newlines if we absolutly have to.
-    (_naive-str c)))
+        ob (if col? (collections/cmap :flatten #(bcode-to-vec %) ob) ob) ; recursive.
+        x (if col? (assoc x :obj-ty (cond (vector? ob) :vector (map? ob) :map (set? ob) :set :else :list)) x)
+        out (assoc x :obj (cond (and col? (not (vector? ob)) (not (collections/listoid? ob)))
+                               (begin-sort (into [] (if (map? ob) (concat (keys ob) (vals ob)) ob)))
+                            (collections/listoid? ob) (into [] ob) :else ob))]
+    (if (:meta x) (update out :meta #(bcode-to-vec %)) out)))
+(defn bcode-from-vec [x]
+  "Undoes bcode-to-vec, using the stored :obj-ty key.
+   If it is alrady not a vector this function does nothing."
+  (let [ty (:obj-ty x) ob (:obj x) 
+        ob (if ty (mapv bcode-from-vec ob) ob)] ; recursive.
+    (dissoc
+      (assoc x :obj
+        (cond (not ty) ob (= ty :vector) ob ; already a vector.
+              (= ty :list) (apply list ob) (= ty :set) (apply hash-set ob) ; simple 1:1 stuff.
+              (= ty :map) (zipmap (collections/evens ob) (collections/odds ob)))) ; maps are always in key-value pairs.
+      :obj-ty)))
+(defn _spacers [cv0]
+   "Applies spacers to the code if nessessary. A space seperates some kinds of tokens, while a 
+    newline is needed after comments so the next form does not get commented.
+    Convert the code into VECTOR form first!"
+  (let [leaf-only-body #(assoc % :head "" :tail "" :body (str (:head %) (:body %) (:tail %))); Lumps :head and :tail for any leaf objects into :body.
+        col?f #(collections/col? (:obj %))
+        leaf-space (fn leaf-space [c] ; recursive as well.
+                     (assoc (if (col?f c) (update c :obj #(mapv _spacers %)) (leaf-only-body c))
+                       ; the head is assumed to be cold-only.
+                       :head (_cold-safe-comment (:head c))))        
+        spacy (fn spacy [cv] ; Safe-to-end-in-comment means we don't have to add a newline.
+                (let [col? (col?f cv)]
+                  (if col?
+                    (let [o (:obj cv) col?s (mapv col?f o) n (count o)
+
+                          o (mapv spacy o) ; Recursive part.
+
+                          ; does each child end in a comment:
+                          comend?s (mapv #(if %2 (_end-in-comment? (:tail %1)) 
+                                            (_end-in-comment? (:body %1))) 
+                                    o col?s)
+                          ; does each child have newline power:
+                          nuline?s (mapv #(if %2 (_newline-power? (:head %1)) ; head not tail.
+                                            (_newline-power? (:body %1))) 
+                                    o col?s)
+                          ; Simple fn to add a padding to the code before said code:
+                          add-sb4 (fn [oi pad-str coli?] (if coli? (assoc oi :head (str pad-str (:head oi)))
+                                                           (assoc oi :head "" :body (str pad-str (:head oi) (:body oi)))))
+                          add-safr (fn [oi pad-str coli?] (if coli? (assoc oi :tail (str (:tail oi) pad-str))
+                                                            (assoc oi :tail "" :body (str (:body oi) (:tail oi) pad-str))))
+                          ; Comments: head-first-child inteference:
+                          cv (if (and (_end-in-comment? (:head cv)) (not (first nuline?s))) (update cv :head #(str % "\n")) cv) ; Macros that can't have ending wspace can't end in comments either. 
+
+                          ; Comments: children-children inteference:
+                          o (mapv #(if (or (= % (dec n)) (not (nth comend?s %)) (nth nuline?s (inc %)))
+                                     (nth o %) (add-safr (nth o %) "\n" (nth col?s %))) (range n))
+
+                          ; Comments: last-child-tail inteference:
+                          cv (if (last comend?s) (update cv :tail #(str "\n" %)) cv)
+
+                          ; Do we have mushy starts and ends. Two mushy pieces stuck together means we need a space:
+                          ; Calculated after updating o since we may have added newlines.
+                          mush-start?s (mapv #(and (let [oi (:obj %)] (or (keyword? oi) (symbol? oi) (number? oi) (char? oi)))
+                                                (let [pieces (_hot-cold-pieces (:body %) false)]
+                                                  (= (count (first pieces)) 0))) o) ; Does not start cold => mushy potential.
+                          mush-end?s (mapv #(and (let [oi (:obj %)] (or (keyword? oi) (symbol? oi) (number? oi) (char? oi)))
+                                                (let [pieces (_hot-cold-pieces (:body %) false)]
+                                                  (even? (count pieces)))) o) ; Ends hot => mushy potential.                  
+                          ; Mushy: children-children inteference. This is the only mushy inteference we have to worry about.
+                          o (mapv #(if (or (= % 0) (not (nth mush-end?s (dec %))) (not (nth mush-start?s %))) ; Check 4 mushy end b4 us + mushy start at us.
+                                     (nth o %) (update (nth o %) :body (fn [bi] (str " " bi)))) (range n))]                         
+                      (assoc cv :obj o)) cv)))]
+    (spacy (leaf-space cv0)))) ; Leaf space first.
+;(defn _edit-project [c outer-level?] 
+;  "Modifies the head tail and body so that the string will match the :obj hirerchy. 
+;   EXCEPTION: does not add newlines or spaces in cases where code gets commented out or symbols jam toghether.
+;   This is the main projection function that gets the 'nearest' string to the blit code that matches the original string.
+;   Recursive. The outer level does not include the [ or ].
+;   Projection will be resonably-close to the original string if it is the wrong form,
+;   and should be EXACT when the string is the right form."
+;  (_macro-unbracket (_local-project c outer-level?)))
+(defn naive-str [x]
+   "Naive conversion to string. Does not check for accuracy, hash-set reordering, or interaction.
+    It is safe to use naive-str on projected + vectorified code."
+  (let [col? (collections/col? (:obj x))
+        ob (if (and col? (map? (:obj x))) (interleave (keys (:obj x)) (vals (:obj x))) (:obj x))]
+     (str (if (:meta x) (naive-str (:meta x)) "") ; meta before even the head. Note: meta data should have been collapsed already.
+       (:head x) (if col? (apply str (mapv naive-str (into [] ob))) "")
+       (:body x) (:tail x))))
+
+(defn blit-code-project [c & keep-as-vector-form?]
+   "Keep the meaning of :obj and the format of :head :body :tail.
+    Projects the blit-code's :head, :body and :tail onto the space that produces 
+    code that matches the value of the :obj, operates recursivly.
+    Also removes :meta, instead putting them as elements in the parent vector."
+  (let [; Remove meaning-duplicates for hash-sets and hash-maps. 
+        ; Hash-sets operations prevent duplicate keys but the :obj can be the same unblitted but different blitted. 
+        ;  This would cause a duplicate key error in the output string.
+        c (_de-dupe c) 
+        ; The main projection part where each syntax mark or token is forced to be equivalent to :obj
+        c (_macro-unbracket (_local-project c true))
+        ; Conversion to a vector code format, which sorts the code and flattens the :meta out into the vec.
+        c (bcode-to-vec c)
+        c (_collapse-meta c)
+        ; Prevents interaction between different tokens, like back-to-back symbols and ;comments.
+        c (_spacers c)
+        ; Trnasform back by default, as most of the time the code is not in vector form.
+        c (if (first keep-as-vector-form?) c (bcode-from-vec c))] c))
+
+(defn blit-code-to-str [c]
+  "Converts the code-with-string-blits back into a string. Used after the refactoring is done.
+   We SHOULD always have:
+     (blit-code-to-str (reads-string-blit s)) = s if s is valid code.
+        valid means if (reads-string s) does not make an error.
+     And (= (blit-code-to-code (reads-string-blit s)) (reads-string s))
+   Note: reads-string would be like read-string but with an extra [] so it reads the whole string."
+   (naive-str (blit-code-project c true)))
+
+(defn _blit-code-decrowd [bcodev]
+  (let [b #(str (:head %) (:body %) (:tail %)) o (:obj bcodev)
+        sp-start? (fn [oi] (if (collections/col? (:obj oi)) (ccom-white? (first (:head oi))) (ccom-white? (first (b oi)))))
+        sp-end? (fn [oi] (if (collections/col? (:obj oi)) (ccom-white? (last (:tail oi))) (ccom-white? (last (b oi)))))]
+    (if (collections/col? o)
+      (let [o (mapv _blit-code-decrowd o)
+            sp-start?s (mapv sp-start? o) sp-end?s (mapv sp-end? o) n (count sp-start?s)
+            add-space?s (conj (mapv #(and (not (nth sp-start?s (inc %))) (not (nth sp-end?s %))) (range (dec n))) false) ; at the end.
+            add-end-sp (fn [oi] (if (collections/col? (:obj oi))
+                                    (update oi :tail #(str % " ")) 
+                                    (assoc oi :head "" :tail "" :body (str (:head oi) (:body oi) (:tail oi) " "))))]
+        (assoc bcodev :obj (mapv #(if %2 (add-end-sp %1) %1) o add-space?s)))
+      bcodev)))
+(defn blit-code-decrowd [codeb]
+  "Ensures that there is at least one space, comma, etc between adjacent elements in a collection.
+   Valid code should stay valid.
+   Only adds spaces, does not remove spaces."
+  (bcode-from-vec (_blit-code-decrowd (bcode-to-vec codeb))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn test-blit-reader [s]
   "Compares the vanilla read-string vs our version that keeps track of position.

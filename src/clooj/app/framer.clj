@@ -185,8 +185,11 @@
 	s-new))
 
 (defn code-to-repl!! [s]
-  (do (repl/add-to-repl!! (:Text (get-in s (get-in s [:id-paths :input])))) 
-    (assoc s :one-frame-repl-update-block? true))) ; repl change.
+  (repl/add-to-repl!! (:Text (get-in s (get-in s [:id-paths :input])))) 
+  (assoc s :one-frame-repl-update-block? true)) ; repl change.
+
+(defn bind-repl-text-as-s!! [s]
+  (repl/bind-as-str!! "s" (:Text (get-in s (get-in s [:id-paths :input])))) s)
 
 (defn line-nos [s] 
   "Graphics commands that will draw the line numbers."
@@ -282,7 +285,7 @@
            (if (jfile/is-file choice) (assoc-in s tpath (str "Already exists: " choice))
                (save-file!!! (assoc s :cur-file choice)))
            (assoc-in s tpath "No filename choosen."))))}
-     {:Type 'JMenuItem :Text "save" :callback 
+     {:Type 'JMenuItem :Text "save (C+S)" :callback 
        #(if (:cur-file %) (save-file!!! %)
           (do (repl/add-to-repl!! "No file is open. Use file -> new to save any text in the editor." false) %))}
      {:Type 'JMenuItem :Text "delete (non-folders only)" 
@@ -300,7 +303,8 @@
       {:Type 'JMenuItem :Text "reset app" :callback reset-app}]}
     {:Type 'JMenu :Text "repl"
      :Children
-     [{:Type 'JMenuItem :Text "eval input (sh + enter)" :callback code-to-repl!!}
+     [{:Type 'JMenuItem :Text "eval input (S + enter)" :callback code-to-repl!!}
+      {:Type 'JMenuItem :Text "Repl's text->var s (C + enter)" :callback bind-repl-text-as-s!!}
       {:Type 'JMenuItem :Text "clc done tasks" :callback #(do (repl/clear-done-cmds!!) %)}
       {:Type 'JMenuItem :Text "try to abort all tasks" :callback #(do (repl/clear-all-cmds!!) %)}
       {:Type 'JMenuItem :Text "reset namespace" :callback #(do (repl/reset-ns!!) %)}]}]})
@@ -347,12 +351,14 @@
   ; This event runs the repl:
   :below-keyPressed
   (fn [s e o]
-    (let [shifting? (boolean (:ShiftDown e)) ; TODO: why do we need a boolean cast?
+    (let [shifting? (boolean (:ShiftDown e)) ; TODO: why do we need a boolean cast? Need to fix the event clojurizer...
           ctrl? (boolean (:MetaDown e))]
       (cond (and (= (:descendent e) (get-in s [:id-paths :input])) ; repl input...
               shifting? (= (:KeyCode e) 10)) (code-to-repl!! s) ; ...and shift + enter = repl 
         ; saving files:
         (and ctrl? (= (:KeyCode e) 83)) (if (:cur-file s) (save-file!!! s) (do (repl/add-to-repl!! "No file is open. Use file -> new to save any text in the editor." false) s))
+        ; s is now a string corresponding to whatever value the stuff was:
+        (and ctrl? (= (:KeyCode e) 10)) (bind-repl-text-as-s!! s)
         :else s))); no hotkey
   :Children
  {:menu (menu)
@@ -370,8 +376,11 @@
 (defn window [] (let [w (_window)] (assoc w :id-paths (id-paths w))))
 
 (defn reset-app [s]
-   "Completely resets the application."
-  (window))
+   "Almost Completely resets the application.
+    TODO: the almost is some bug with the JTrees maybe?"
+  (let [src-text ((:get-src-text s) s)
+        w-new (window)]
+    ((:set-src-text w-new) w-new src-text)))
   
 (defn _reload-fn [s r]
   (let [ca (widget/align-children s r)
@@ -386,4 +395,3 @@
    (saving this file reloads the namespace and this reload the functions).
    Note: only internal editing will do this (TODO external edits should update)."
    (_reload-fn s (window)))
-   

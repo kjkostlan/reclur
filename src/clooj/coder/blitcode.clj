@@ -1,5 +1,6 @@
 (ns clooj.coder.blitcode
   (:require [clooj.coder.grammer :as grammer]
+            [clooj.collections :as collections]
             [clojure.set :as set]
             [clojure.walk :as walk]))
 

@@ -34,7 +34,6 @@
             [clooj.app.state_old :as app_old]
             [clooj.utils :as utils]
             [clooj.navigate :as navigate]
-            [clooj.indent :as indent]
             [clooj.brackets :as brackets]
             [clooj.highlighting :as highlighting]
             [clooj.search :as search]
@@ -370,7 +369,6 @@
   ;(activate-caret-highlighter!!)
   (utils/attach-action-keys! (:textarea @app_old/src-text-area)
     ["cmd1 ENTER" #(repl_old/send-selected-to-repl!!!)])
-  ;(indent/setup-autoindent! app_old/repl-in-text-area)
   (dorun (map #(attach-global-action-keys!! %)
               [(:tree @app_old/src-tree) (:textarea @app_old/src-text-area) (:textarea @app_old/repl-in-text-area) (:textarea @app_old/repl-out-text-area)
                (.getContentPane @app_old/frame)])))
@@ -588,7 +586,6 @@
       ["Show visit file history" "S" "cmd1 shift H" #(show-history!!)])    
     (utils/add-menu! menu-bar "Source" "U"
       ["Comment" "C" "cmd1 SEMICOLON" #(utils/toggle-comment! (:textarea @app_old/src-text-area))]
-      ["TODO Auto-indent" "F" "cmd1 BACK_SLASH" #(indent/fix-indent-selected-lines! app_old/src-text-area)]
       ["Indent lines" "I" "cmd1 shift CLOSE_BRACKET" #(utils/indent! (:textarea @app_old/src-text-area))]
       ["Unindent lines" "D" "cmd1 shift OPEN_BRACKET" #(utils/unindent! (:textarea @app_old/src-text-area))]
       ["Goto line num..." "G" "cmd1 L" #(jtext_old/move-caret-to-line! app_old/src-text-area)]

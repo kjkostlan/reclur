@@ -2,6 +2,7 @@
 (ns clooj.coder.repl
   (:require [clooj.java.file :as jfile] [clojure.string :as string]
      [clojure.walk :as walk] [clooj.coder.grammer :as grammer]
+     [clooj.coder.indent :as indent]
      [clooj.collections :as collections])
   (:import (java.io ByteArrayOutputStream OutputStreamWriter)))
 
@@ -174,6 +175,16 @@
     ;http://stackoverflow.com/questions/3636364/can-i-clean-the-repl
     (mapv #(ns-unmap nms %) (keys (ns-interns nms)))))
 
+(defn bind-as-str!! [var-name s]
+  "Binds the string s to a given var-name.
+   Used, i.e. when a string is pasted into the repl
+    and the string itself should be stored as a variable.
+    The string can't be surrounded with quotes b/c it may have quotes inside of it as well."
+  (intern user-ns (symbol var-name) (str s)))
+
+
+;; Easy code writing functions:
+
 (defn brevity [code nms] 
   "Represents the code in a more consice function. Uses a namespace to prevent collisions.
    Use (pr-str (brevity code *ns*)) to get a more-readable function. Use pr-str DONT use str."
@@ -207,63 +218,11 @@
                          (collections/cmap :flatten _brevity code) 
                          :else code))]
     (_brevity code)))
-(defn _get-breaks [bcode targetn]
-  "Puts a :break in some elements. :break means start with a newline + indent.
-   :breaks prevent the line before from bieng overly long.
-   Assumes bcode has no newlines in it."
-  (let [ob (:obj bcode)]
-    (if (and (coll? ob) (not (empty? ob)))
-      (let [cf #(count (grammer/blit-code-to-str %))
-            ; Convention to put keys and vals on the same line so one count per kv pair for maps.
-            counts (if (map? ob) (mapv #(+ (cf %1) (cf %2)) (keys ob) (vals ob)) (mapv cf ob))
-            ; recursive part:
-            bcode (assoc bcode :obj (collections/cmap :flatten #(_get-breaks % targetn) ob))
-            ck (collections/ckeys (:obj bcode))
-            n (count ck)]
-      (loop [acc (:obj bcode) n-at-acc 0 ix 0]
-        (if (= ix n) (assoc bcode :obj acc)
-          (let [codei (collections/cget (:obj bcode) (nth ck ix))
-                ni (nth counts ix)
-                bust? (and (> n-at-acc 0) (> (+ n-at-acc ni) targetn))
-                c1 (if bust? (assoc codei :break true) codei)]
-            (if bust? 
-                (recur (cond 
-                         (vector? acc) (assoc acc ix c1)
-                         ; maps always key, val on same line.
-                         (map? acc) (assoc acc (nth ck ix) c1)
-                         (set? acc) (conj (disj acc codei) c1) ; codei = (nth ck ix) b/c keys = vals for a set.
-                         :else (collections/lassoc (apply list acc) ix c1)) ; O(n^2) but n is at most 21 for valid code.
-                  0 (inc ix))
-                (recur acc (+ n-at-acc ni) (inc ix))))))) bcode)))
-(defn _apply-breaks [bcode level]
-  "Replaces :break with an indent before the head (or body)."
-  (let [bcode (if (and (coll? (:obj bcode)) (not (empty? (:obj bcode)))) ; recursive step.
-                (update bcode :obj (fn [o] (collections/cmap :flatten #(_apply-breaks % (inc level)) o))) bcode)
-        indnt (apply str "\n" (repeat level "  "))
-        cs #(str indnt %)]
-    (if (:break bcode) (update bcode (if (> (count (:head bcode)) 0) :head :body) cs) bcode)))
-(defn indent [str-or-code]
-  "Automatically newlines and indents the str.
-   Use for visualizing code that has undergone substantial transformations, or debugging macro code.
-   Code is treated as not blitted."
-  (let [target-len 50
-        ; gets rid of newlines. The comments will still generate newlines when bit -> string b/c grammer checks for that.
-        rm-nl (fn rm-nl [bcod] 
-                (let [bcodr (if (and (coll? (:obj bcod)) (not (empty? (:obj bcod)))) 
-                              (update bcod :obj #(collections/cmap :flatten rm-nl %)) bcod)
-                      nn (fn [m k] (update m k #(.replace (str %) "\n" "")))]
-                 ; head and tail but not body.
-                 (nn (nn bcodr :head) :tail)))
-        bcode (rm-nl (grammer/reads-string-blit (if (string? str-or-code) str-or-code (grammer/code-to-str str-or-code))))
-        break-code (_apply-breaks (_get-breaks bcode target-len) -1)]
-    ;(reset! rdebug break-code)
-    ;(println break-code)
-    (grammer/blit-code-to-str break-code))) ; -1 because of the outer [].
+
 (defn previty [code & hint-dont-print]
   "EZ function generating printouts."
-  (let [out (indent (brevity (try (read-string code) (catch Exception e code)) *ns*))]
+  (let [out (indent/indent (brevity (try (read-string code) (catch Exception e code)) *ns*))]
     (if (not (second hint-dont-print)) (println (str (first hint-dont-print)) out) out)))
-
 
 ; Use the core and this ns so we have access to the functions.
 ; This must be in a future because we have to wait untill this ns is loaded.

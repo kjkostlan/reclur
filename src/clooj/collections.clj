@@ -251,8 +251,21 @@
     (fn ([] @at) 
      ([& xis] (swap! at #(apply f-red % xis)) nil))))
 
+(defn _paths-walked [acc t p] ; p = path to get to this tree t, acc is the traversal.
+  (let [kys (reverse (if (coll? t) (ckeys t) []))
+        acc1 (reduce (fn [a k] (_paths-walked a (gett t k) (conj p k))) acc kys)] 
+          (into [] (concat [p] acc1))))
+(defn paths-walked [t]
+  "Returns a vector of all paths in the tree t, in depth-first order.
+   Handles all clojure collections (but isn't lazy)."
+    (_paths-walked [] t []))
+
 ; These simple functions come up a lot, because of let statements, etc:
 (defn evens [coll] (take-nth 2 coll)) 
 (defn odds [coll] (take-nth 2 (rest coll)))
 (defn evensv [coll] (into [] (take-nth 2 coll))) ; vector form.
 (defn oddsv [coll] (into [] (take-nth 2 (rest coll))))
+(defn col? [x]
+  "Is x a non-empty collection?
+   Mainly used when dealing with blitted code."
+  (and (coll? x) (not (empty? x))))
