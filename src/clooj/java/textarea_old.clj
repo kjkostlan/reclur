@@ -22,7 +22,7 @@
 ;; The retnia likes to draw half resolution images. Set this to 2 to maintain high resolution.
 (def superes (int 2))
 
-(def parsy (fn [text] (try (let [p (grammer/basic-parse text false false)]
+(def parsy (fn [text] (try (let [p (#(throw (Exception. "Deprecated link: grammer/basic-parse")) text false false)]
                                 {:level (into [] (:level p)) :mode (into [] (:mode p))})
                            (catch Exception e (do (println "parse problems: " e)
                                                 (cio/parse-summary text))))))

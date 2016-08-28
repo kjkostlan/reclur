@@ -1,6 +1,7 @@
 (ns clooj.coder.debugger
   (:require [clooj.coder.grammer :as grammer] [clooj.coder.strmap :as strmap] [clojure.walk :as walk]
-            [clooj.coder.repl :as repl]))
+            [clooj.coder.repl :as repl]
+            [clooj.collections :as collections]))
 ;; (require '[clooj.coder.debugger :as debugger])
 ;; Functional debugging tool in the spirit of elm debugger.
 

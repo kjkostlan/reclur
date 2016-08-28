@@ -9,7 +9,9 @@
             [clooj.coder.repl :as repl]
             [clooj.utils :as utils]
             [clooj.collections :as collections]
-            [clooj.coder.grammer :as grammer]))
+            [clooj.app.colorful :as colorful]
+            [clooj.coder.grammer :as grammer]
+            [clooj.coder.blitcode :as blitcode]))
 
 ; (require '[clooj.app.framer :as framer] '[clooj.java.gui :as gui])
 
@@ -35,73 +37,44 @@
   (let [p (first (:jtree-descendents-selected value-changed-e))
         filepath (get-in jtree (concat p [:filepath]))] filepath))
 
-(defn hilite-same-level! [text caret obj]
- "Simply gets the graphics to draw. Our graphics for now are spartan:
-  outlining the region at the current selection level."
-  ; TODO: optimize both the parse code (reflection?) and look at differences in the text.
-  ; This IS noticably slow as is, but still usable most of the time.
-  ; TODO: we can centralize the side effects (bury them in the changes in state) if we change the details of the text. 
+(defn hilite-cursor-region! [text caret obj]
+ "Hilights the region around the cursor."
+  ; TODO: we can centralize the side effects (bury them in the changes in state) but including hilighter/ctext. 
   (if (> (count text) 0)
 	(if (and text caret obj)
-          (let [parse (grammer/basic-parse text)
-			^ints levels (:level parse)
-			^ints tokens (:token parse)
-            ^ints modes (:mode parse)
-			^ints breaks (:break parse)
-            ^ints boosts (:boost parse)
-            ^ints escapes (:escape parse)
-            ^chars cs (.toCharArray text)
-			n (int (count levels)) ; all three arrays are 1:1.
-                        
-			; Wedges mean that the cursor is actually between stuff but there is no space:
-			; Since we are between tokens we should behave like we are.
-			crt? (and (> caret 0) (< caret n))
-			wc? (if crt? (grammer/cclose? (aget ^chars cs (dec caret))))
-			wo? (if crt? (and (grammer/copen? (aget ^chars cs caret)) (= (aget ^ints escapes (dec caret)) 0)))
-			wedge-paren? (and wc? wo?); ()|()
-			wedge-pmacro? (and wc? (grammer/creader? (aget ^chars cs caret))  ; ()|'foo
-                                        (or (= caret (dec n)) (not= (aget ^chars cs caret) \#) ; Avoid #{ and #" macros.
-                                          (and (not= (aget ^chars cs (inc caret)) \{) (not= (aget ^chars cs (inc caret)) \"))))
-			wedge-macrop? (or (and wo? (> (aget ^ints boosts (dec caret)) (aget ^ints boosts caret))) ; 'foo|() '(foo)|()
-                                          (and wedge-pmacro? (= (aget ^ints boosts (dec caret)) (aget ^ints boosts caret)))) ; 'foo|'() and '(foo)|'()
-                                        
-			wedge? (or wedge-paren? wedge-pmacro? wedge-macrop?)
-			dual-m-wedge? (and wedge-pmacro? wedge-macrop?)
-;_ (if (= (first text) \X) (println "caret: " caret "wedge?" wedge-paren? wedge-pmacro? wedge-macrop?))
-			; Hilighter ends: the first char that end the hilighting at the same location as we do.
-			lev+ (fn [ix] (grammer/level-boost-end cs modes levels boosts ix (and wedge? (not dual-m-wedge?)) dual-m-wedge?))
-			lev- (fn [ix] (grammer/level-boost-beginning cs modes levels boosts ix (and wedge? (not dual-m-wedge?)) dual-m-wedge?))
-			tok+ (fn [ix] (grammer/token-end tokens breaks ix))
-			tok- (fn [ix] (grammer/token-beginning tokens breaks ix))
+          (let [parse (blitcode/basic-parse text)
+                ^ints inter-depth (:inter-depth parse)
+                n (count text)
+                next-clo-chi (fn [clo chi] 
+                               (let [cl #(max 0 (min % n))] ; dec and inc.
+                                 [(cl (dec (blitcode/depth-bracket inter-depth (cl clo) -1)))
+                                  (cl (inc (blitcode/depth-bracket inter-depth (cl chi) 1)))]))
+                
+                max-levels-to-show 75
+                ladder (loop [acc [[caret caret]] ix (int 0) c [caret caret]] ; working outwards.
+                         (if (= ix max-levels-to-show) acc
+                           (let [c1 (next-clo-chi (first c) (second c))]
+                             (if (= c1 c) acc (recur (conj acc c1) (inc ix) c1)))))
+                depth-at-cursor (aget ^ints inter-depth (int (max 0 (min n caret))))
+                
+                numl (count ladder) ; How deep each ladder element is:
+                ladder-hilite-levels (mapv #(- (dec numl) %) (range numl)) 
+			    hltr (.getHighlighter obj)
 
-			; level-based hilite. inclusive ix for chars to be hilighted.
-			soft0 (min (lev- caret) (lev- (dec caret)))
-			soft0 (if (and (> soft0 0) (= (aget ^chars cs soft0) \{) (= (aget ^chars cs (dec soft0)) \#))
-			         (dec soft0) soft0) ; include the # for hash-sets. 
-			soft1 (max (lev+ caret) (lev+ (dec caret)))
-;_ (if (< (count text) 100) (println "lev:" (into [] levels) "boost:" (into [] boosts) "mode:" (into [] modes) "break: " (into [] breaks)  "soft:" soft0 soft1 "caret:" caret))
-            in-token? (and (> caret 0) (< caret n) (not= (aget ^ints breaks caret) 1)
-                        (= (aget ^ints tokens (dec caret)) 1) (= (aget ^ints tokens caret) 1))
-			hard0 (if in-token? (tok- (dec caret)))
-			hard1 (if in-token? (tok+ caret))
-			hltr (.getHighlighter obj)
-			hpainter-soft (DefaultHighlighter$DefaultHighlightPainter. (Color. (float 1.0) (float 0.9) (float 0.85)))
-			hpainter-hard (DefaultHighlighter$DefaultHighlightPainter. Color/orange)]
+			    hpainters (mapv #(DefaultHighlighter$DefaultHighlightPainter. (colorful/level2col %)) ladder-hilite-levels)]
 	  (.removeAllHighlights hltr)
 	  (.setDrawsLayeredHighlights hltr false)
-	  (.addHighlight hltr soft0 (inc soft1) hpainter-soft)
-	  (if in-token? (.addHighlight hltr hard0 (inc hard1) hpainter-hard))))))
+	  (mapv #(.addHighlight hltr (first %1) (second %1) %2) (reverse ladder) (reverse hpainters))))))
           
 (defn hilight-update! [s e o] 
   "Selection hilight superscedes the syntax-level hilight" 
   (let [s0 (:SelectionStart s) s1 (:SelectionEnd s)]
 	(if (or (not s0) (not s1) (= s0 s1)) ; selection => don't hilight the level.
-	  (try (hilite-same-level! (:Text s) (:CaretPosition s) o)
+	  (try (hilite-cursor-region! (:Text s) (:CaretPosition s) o)
 	    (catch Exception e (println "Syntax hilight error: " e)))
 	  (let [hltr (.getHighlighter o)
 			hpainter (DefaultHighlighter$DefaultHighlightPainter. (Color. (float 0.75) (float 0.75) (float 1.0)))]
 		(.removeAllHighlights hltr) (.addHighlight hltr s0 s1 hpainter)))) s)
-
 
 (defn update-tree-keep-settings [tree-old tree-new]
   "Updates tree-old's structure to reflect tree-new, but tries to keep the settings of tree-new."

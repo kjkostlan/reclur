@@ -2,7 +2,7 @@
 ; Very similar to pprint EXCEPT it preserves the code's structure, comments, reader-macros, etc.
 ; The main function is indent/indent.
 (ns clooj.coder.indent
-  (:require [clooj.coder.grammer :as grammer]
+  (:require [clooj.coder.grammer :as grammer] [clooj.coder.blitcode :as blitcode]
             [clooj.collections :as collections]))
 
 (defn _remove-extra-space [bcode & dont-project]
@@ -12,7 +12,7 @@
         bcodenl (fn bcodenl [c] (let [c (if (collections/col? (:obj c))
                                             (update c :obj #(collections/cmap :flatten bcodenl %)) c)]
                                   (update (update (update c :head nnl) :tail nnl) :body nnl)))]
-    ((if (first dont-project) identity grammer/blit-code-project) (bcodenl bcode))))
+    ((if (first dont-project) identity blitcode/blit-project) (bcodenl bcode))))
 
 (defn _get-n-lines [^chars cs]
   "Now many lines are in the cs array."
@@ -35,11 +35,11 @@
                      (recur lx (inc ix))))))
         n-non-w (loop [acc (int 0) ix (int 0)] ; non white chars are the only chars that count.
                   (if (= ix n) acc
-                    (recur (if (grammer/ccom-white? (aget ^chars cs ix)) 1 0) (inc ix))))
-  
+                    (recur (+ acc (if (grammer/ccom-white? (aget ^chars cs ix)) 0 1)) (inc ix))))
+
        ; Cost is normalized so that 1 is bad and 0 is good.
-        waste-cost (let [capacity (min 1 (* n-lines line-length-scale))] ; 0 = no waste, 1 = complete waste.
-                     (min 0.0 (/ (- capacity n-non-w) capacity)))
+        waste-cost (let [capacity (double (max 1 (* n-lines line-length-scale)))] ; 0 = no waste, 1 = complete waste.
+                     (max 0.0 (/ (- capacity n-non-w) capacity)))
 
         overshoot-cost (let [line-length-scale (double line-length-scale) ; 0 = no overshoot. 1 = rms 200% as long as ideal.
                              sum-sqr (loop [acc (double 0.0) ix (int 0)]
@@ -48,7 +48,7 @@
                                            (recur (+ acc (* n+ n+)) (inc ix)))))]
                           (/ sum-sqr (* line-length-scale line-length-scale n-lines)))]
     (+ waste-cost overshoot-cost)))
-(defn _get-cs-with-indents [^chars cs0 ^ints depth ^ints choices ^ints choice-ix]
+(defn _get-cs-with-indents [^chars cs0 ^ints level ^ints depth ^ints choices ^ints choice-ix]
   (let [n (count cs0)
         nc (count choice-ix)
         ; Set the characters to spaces or newline depending on the target:
@@ -71,17 +71,19 @@
           (let [^ints d2s (make-array Integer/TYPE (+ max-indent-level 2))]
             ; d2s is how many spaces an indentation at a certain level needs.
             ; The main loop:
-            (loop [acc (int 0) ix (int 0) x (int 0) y (int 0)]
+            (loop [acc (int 0) ix (int 0) x (int 0) y (int 0)] ; x includes indentation spaces we will add, not just what we have now.
               (if (= ix n) acc ; value of total # spaces added for indentation.
                 (let [c (aget ^chars cs-newl ix) d (aget ^ints depth ix)
+                      l (aget ^ints level ix) old-l (if (> ix 0) (aget ^ints level (dec ix)) (int 0))
                       sp (aget ^ints d2s d)] ; # spaces we add to the next line if this is a newline.
-                   (if (= c \newline) ; add the indentation but don't change d2s.
-                     (let [ic (aget ^ints d2s d)]
-                       (aset ^ints i-counts y ic)
-                       (recur (+ acc ic) (inc ix) ic (inc y))) ; x set do d = # of spaces in.
-                     ; Set the d2s for the depth one deeper than us to our x-value.
-                     (do (aset ^ints d2s (inc d) (+ x 3)) ; The +3 ensures that it is TWO chars deeper.
-                       (recur acc (inc ix) (inc x) y)))))))
+                  ; Increase in level => an opening "(" => mark x+2 as the location we indent to:
+                  (if (> l old-l) (aset ^ints d2s l (+ x 2)))
+                  ; decreasing in level changes nothing.
+                  (if (= c \newline)
+                    (let [ic (aget ^ints d2s d)] ; record the indentation. We will add it later.
+                      (aset ^ints i-counts y ic)
+                      (recur (+ acc ic) (inc ix) ic (inc y))) ; x set do d = # of spaces in.
+                      (recur acc (inc ix) (inc x) y))))))
        ; Apply indents at each line:
        ^chars out (make-array Character/TYPE (+ total-i-count n))]
     (loop [ix (int 0) shift (int 0) y (int 0)]
@@ -97,7 +99,7 @@
             (recur (inc ix) shift y)))))
  out))
 
-(defn _optimize-indent [^chars cs ^ints depth ^ints breakable line-length-scale]
+(defn _optimize-indent [^chars cs ^ints level ^ints depth ^ints breakable line-length-scale]
   "Optimizes the indentation by trying to maximize the efficiency.
    Use the results of _indent-parse. Returns a string.
    TODO: uses a slow crappy algorythim. Optimize."
@@ -107,7 +109,7 @@
         ^ints choice-ixs (into-array Integer/TYPE _choice-ixs) ; where on the chars array we get to choose.
 
         ; Costs:
-        get-new-cs (fn [^ints choices] (_get-cs-with-indents cs depth choices choice-ixs))
+        get-new-cs (fn [^ints choices] (_get-cs-with-indents cs level depth choices choice-ixs))
         get-cost (fn [^ints choices] 
                    (let [^chars cs1 (get-new-cs choices)]
                      (_indent-cost cs1 line-length-scale)))
@@ -127,17 +129,16 @@
         (if (< energy1 energy0) (recur) "Done with optimization.")))
     (get-new-cs choices)))
 
-(defn indent [str-or-code]
+(defn indent [str-or-code & target-len]
   "Automatically newlines and indents the code (removing old newlines if they aren't needed).
    Use for visualizing code that has undergone substantial transformations, or debugging macro code.
    If a string: It is read into blit-code, preserving the reader-macros, etc.
    TODO: the algorythim to determine the best place to put newline is not good at all."
-  (let [target-len 50 ; scales the line-length but not 1:1 exactly.
-
+  (let [target-len (if (first target-len) (first target-len) 50) ; scales the line-length but not 1:1 exactly.
         ; Accept both strings and unblitted code:
-        bcode (_remove-extra-space (grammer/reads-string-blit (if (string? str-or-code) str-or-code (grammer/code-to-str str-or-code))))
-        bcode-sp (grammer/blit-code-decrowd bcode)
-        ^String s (grammer/blit-code-to-str bcode-sp)
-        p (grammer/newline-parse s)
-        ^chars indented-cs (_optimize-indent (.toCharArray s) (:depth p) (:breakable p) target-len)]
+        bcode (_remove-extra-space (blitcode/reads-string-blit (if (string? str-or-code) str-or-code (grammer/code-to-str str-or-code))))
+        bcode-sp (blitcode/blit-decrowd bcode)
+        ^String s (blitcode/blit-to-str bcode-sp)
+        p (blitcode/newline-parse s true)
+        ^chars indented-cs (_optimize-indent (.toCharArray s) (:level p) (:depth p) (:breakable p) target-len)]
     (apply str indented-cs)))

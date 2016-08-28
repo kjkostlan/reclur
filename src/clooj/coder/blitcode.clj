@@ -1,825 +1,669 @@
+; Reads a string into code that preserves the format.
+
 (ns clooj.coder.blitcode
-  (:require [clooj.coder.grammer :as grammer]
-            [clooj.collections :as collections]
-            [clojure.set :as set]
-            [clojure.walk :as walk]))
-
-; The core of this file is a macro that converts functions built to operate on vanilla code
-; operate on blitted code code.
-; Use for refactoring, for which the output needs to be a string and preserve the input as much as possible.
-
-;; Notes:
-; TODO: some level of "strength" of blittedness, i.e. fns like tree-seq would return blitted code but at a lower strength.
-; Data has two flavors: blitted and unblitted. Blitting puts information as to the string, etc
-;   as well as the code itself. We assume that a partially blitted variable is never created.
-; Equality: checks for equality on unblitted code.
-; Reporter functions (most functions) are work on non-blitted code, return a non-map.
-  ; the output is reblitted iff the input is a leaf-blitted code and the output is a leaf.
-    ; Leafs are empty collections as well as non-collections that can be represetned as strings.
-  ; Custom or third party library functions, which are NOT defined in the code sent to the macro,
-    ; are assumed to be reporter functions. This can be overriden by 
-      ; replacing (f a b c) with (refactor/ident-fn f a b c), or even other fn-appliers 
-      ; (each fn-applier itself is an ident fun so the arguments will be applied normally).
-; Respecting Laziness with blitted code:
-  ; Most things don't need to be changed much:
-    ; get/nth/take/map/etc: The :obj(s) simply get passed through the vanilla functions.
-    ; concat/conj/next/rest/etc: Operates on the :obj(s) just like vanilla as well.
-    ; lazy-seq/lazy-cat: It still gets wrapped into the clojure.lang.LazySeq constructure and not immediatly evaluated.
-      ; These are macros so there is no need to include functions.
-  ; blit and unblit are lazy if the data on them is lazy (leaf-blit is not but that doesn't matter).
-     ; This is because of the use of cmap.
-  ; Conversion at the end: all lazy seqs will become lists (since lists and lazy sequences print the same way).
-; Functions:
-  ; (fn ...) recursivly prepares the stuff inside to allow fn to act as an identity function as is.
-    ; Inside functions are treated as identities, because they get compatablized upon bieng passed in.
-    ; Apply will ensure all arguments are blitted or unblitted. Within reason it will blit all args if one is blitted.
-      ; Unlike the "in-place" functions like inc, there is less of a reason to use the blitted code as a template to blit other code.
-    ; Variable arguments are treated as b-apply does.
-; Multimethods:
-  ; Not changed, but the functions inside of them are changed when defined.
-; Transduce:
-  ; Stuff like (map inc) acts normally. Like most fns inc first gets modified to dual-use vanilla and blitted, but this has nothing to do with transducers.
-  ; Inside transducers defined elsewhere:
-     ; Scalar inputs blitted, vector inputs not (at the outer level) blitted.
-     ; Both should work fine, no outside function gets to see the dangerous vector.
-  ; Inside transducers defined in the macro code:
-     ; Nothing inside will change, since there are no calls to outside functions.
-  ; eduction is unchanged, the call to reduce will handle the blitting stuff.
-  ; Thus we don't have to modify functions that make transducers, but we DO have to modify transduce.
-
-(def debug (atom nil))
-
-;;;;;;;;;;;;;;;;; Combining normal code and blit-code.
-
-(defn impatient-find [f coll]
-  "Infinitite-safe for variable function arguments.
-   For non-lazy it simply uses find(filter).
-   For lazy it only tries the first element of coll."
-  (first (filter f (if (collections/lazy? coll) (take 1 coll) coll))))
-
-; grammer/blit-code-to-code useful?
-(defn default-blit-code [code]
-  "Generates default blitted code. This is nessessary when code is created.
-   Note: code must be vanilla code."
-  (let [cstr (grammer/code-to-str code)]
-    (try (read-string cstr) (catch Exception e (throw (Exception. (str "Clojure bug: esoteric code makes an invalid string, trying to read it back gives: " e)))))
-    ; TODO: formatting of the string to make it look pretty?
-    (first (grammer/reads-string-blit cstr))))
-
-(defn mpr-str [x]
-  "Like pr-str but with the meta enabled."
-  (binding [*print-meta* true] (pr-str x)))
-
-(defn cmerge [reference-code processed-code] 
-  "Generates code that is equivalent to the processed-code that best matches the 
-   reference code's format. Processed-code is a vanilla code object but reference-code has the 
-   string formatting, etc.
-   This merge function isn't that good at alignment, thus the need for the
-    tools below."
-  (let [eq? (= (mpr-str (grammer/blit-code-to-code reference-code)) (mpr-str processed-code))]
-    (if eq? (throw "TODO"))))
-
-(def _secret-salt (keyword (str "clooj_coder_refactor_salt_1248421" "qwerty")))
-(defn _salt-blit-code [c]
-  "Takes c and salts it so we know it's blitted code. Even if the user provides something with
-   the same fields as blitted code, they won't have the salt."
-    (assoc (if (:head (:obj c)) (update c :obj #(collections/cmap :flatten _salt-blit-code %)) c) 
-      _secret-salt true))
-(defn _unsalt-blit-code [c]
-  "Removes the salt."
-  (dissoc (if (:head (:obj c)) (update c :obj #(collections/cmap :flatten _unsalt-blit-code %)) c) 
-      _secret-salt))
-
-(defn blitted? [c]
-  "Are we blitted code? All code MUST be salted first.
-   Only returns true if the OUTER level is blitted, but all data is fully blitted or not blitted,
-     unless the user enters mixed data."
-  (boolean (_secret-salt c))) ; empty vectors always are false, as it's meaningless to see what's blitted.
-
-(defn unblit [x]
-  "Deblits x if x is blitted?, otherwise just returns x.
-   get-obj can be used to peel off only one level, rather than blitting all the way down."
-  (if (blitted? x) (grammer/blit-code-to-code x) x)) ; this puts in the metadata as well.
-(defn unblit! [x]
-  "Deblits x if x is blitted?, otherwise just returns x.
-   get-obj can be used to peel off only one level, rather than blitting all the way down."
-  (if (blitted? x) (transient (grammer/blit-code-to-code (persistent! x))) x)) ; this puts in the metadata as well.
-
-(defn leaf-fluff [x]
-  ; The fluff part of the :body of x. Changes such as inc will change the body but not the fluff.
-  ; x must be a leaf, so that (:obj x) is a normal object and :head and :body are empty.
-  ; nil x produces one space.
-  (if x 
-    (let [o (mpr-str (:obj x)) b (mpr-str (:body x))]
-      (subs o (count b)))))
-
-(defn can-leaf-blit? [x]
-  "Can we apply the leaf blit to this object. Stuff like numbers, string, and empty collections."
-  (or (and (coll? x) (= (count (take 1 x)) 0)) ; use take to not count infinite lazies.
-           (number? x) (string? x) (symbol? x) (keyword? x)))
-
-(defn leaf-blit 
-  "Makes an x into a blitted (and salted) leaf (with adjustable fluff), with a default blit setting.
-   Only one level of meta fluff can be specified, but meta rarely goes more than one level anf fluff is for looks only.
-   Stuff that can't be blitted, such as atoms or collections, will be unchanged."
-  ([x] (leaf-blit x " ")) 
-  ([x f] (leaf-blit x f " "))
-  ; DONT print the meta. The meta goes to :meta x.
-  ([x f metaf] 
-    ; blittability criterian (zero-element collection or standard clojure non-collection):
-    (if (can-leaf-blit? x)
-      (let [out (assoc {:head "" :tail "" :body (str (pr-str x))} _secret-salt true)]
-        (if (meta x) (assoc out :meta (leaf-blit (meta x) metaf)) out)) x)))
-
-(defn blit [x]
-  "Also salts. Respects laziness. Does not yet ensure a valid string-form."
-  (let [obj (if (coll? x) (collections/cmap :flatten x blit) x)
-        body (if (coll? x) "" (pr-str x))] 
-    ; most collections are ()
-    (assoc {:head (cond (map? x) "{" (set? x) "#{" (vector? x) "[" (coll? x) "(" :else "")
-            :body body 
-            :tail (cond (map? x) "}" (set? x) "}" (vector? x) "]" (coll? x) ")" :else "")
-            :obj obj} _secret-salt true)))
-(defn blit! [x]
-  "Also salts. Respects laziness. Does not yet ensure a valid string-form."
-  (let [obj (if (coll? x) (collections/cmap :flatten x blit!) x)
-        body (if (coll? x) "" (pr-str x))] 
-    ; most collections are ()
-    (assoc! {:head (cond (map? x) "{" (set? x) "#{" (vector? x) "[" (coll? x) "(" :else "")
-             :body body 
-             :tail (cond (map? x) "}" (set? x) "}" (vector? x) "]" (coll? x) ")" :else "")
-             :obj obj} _secret-salt true)))
-
-(defn leaf-blit? [x]
-  "blitted and it's :obj is also a leaf."
-  (and (blitted? x) (can-leaf-blit? (:obj x))))
-
-(defn get-obj [x]
-  "Gets the :obj of a blitted x, otherwise returns x.
-   The :obj will still be blitted if it's not a leaf."
-  (if (blitted? x) (:obj x) x))
-
-(defn blit-odd-unblit-even [kvs]
-  "Blits all odd and unblits all even. The even is the key and the odd is the value
-   in a kvs array."
-  (map #(if (odd? %2) (blit %1) (unblit %1)) kvs (range)))
-(defn blit-odd-unblit-even! [kvs]
-  (map #(if (odd? %2) (blit! %1) (unblit! %1)) kvs (range)))
-
-(defn _blit-key [mb k] ; So that (get (get-ob %) (_blit-key % k)) works when given a vanilla or blitted k.
-  (let [ob (:obj mb)]
-    (cond (nil? ob) k
-          (empty? ob) k
-          (or (not (map? mb)) (not (set? mb))) (unblit k)
-          (contains? ob k) k
-          (contains? ob (unblit k)) (unblit k)
-          (contains? ob (blit (unblit k))) (blit (unblit k))
-          ; slow O(n) part.
-          :else (let [ku (unblit k)] (first (filter #(= (unblit %) ku) (keys ob)))))))
-(defn _blit-dkey [mb k] ; like _blit-key but uses the default blitting. Used when adding keys with assoc, avoids O(n) search.
-  (let [b? (and (blitted? mb) (or (set? mb) (map? mb)))] 
-   (if b? (blit k) (unblit k))))
-
-(defn blit-key-even [mb kvs]
-  "Applies _blit-key to all the even elements (the keys, not the vals) of kvs."
-  (map #(if (odd? %2) (_blit-key mb %1) %1) kvs (range)))
-
-(defn blit-dkey-even [mb kvs]
-  "Like blit-key-even but has default blits for sets."
-  (let [b? (and (blitted? mb) (or (set? mb) (map? mb)))]
-    (map #(if (odd? %2) ((if b? blit unblit) %1)) kvs (range))))
-(defn robust-get [m k]
-  "Like (get m k) but valid for unblitted k and blitted m, valid for all three other combos as well with m determine output blitting.
-   WARNING: This is O(n) on code (but O(1) on defaultly-blitted data)."
-    (if (blitted? m) (get (:obj m) (_blit-key m k)) (get m (unblit k))))
-
-(defn path-to-blit-path [collb path] 
-  "Converts a path of keys from non-blitted code to blitted code, collb must be blitted.
-   It both interleaves :obj and blits keys for hash-maps (and hash-sets?), but does not blit for sequential.
-   [1 :two :tres] => [:obj (b 1) :obj (b :two) :obj ( b'tres)], and gets the blited code. Not lazy.
-   (b x) = x for non-hash-maps, but (b x) will depend on how the key is blitted in the map.
-   Returns a mixed blitted/unblitted dataset when b blits stuff."
-  (if (not (blitted? collb)) (throw (Exception. "Error in blitcode.clj: path-to-blit-path given non-blitted coll.")))
-  (let [path (get-obj path)] ; incase it is blitted.
-    (loop [acc [] c collb ix 0]
-      (if (= ix (count path)) acc
-        (let [ki (nth path ix)
-              ; Empty collections bieng leaf-blitted does not hurt us here.
-              ki1 (if (or (map? (:obj c)) (set? (:obj c))) (_blit-key c ki) (unblit ki))]
-          (recur (conj acc :obj ki1) (get-in c [:obj ki1]) (inc ix)))))))
-
-;;;The tool to turn a function that works on normal code to a function on blitted code.
-
-(defn reporter-fn [f]
-  "The BULK of functions, which take NON blitted input.
-   These return NON-collections such as numbers, symbols, strings, etc OR take in java objects, 
-   that are NOT elements of said collections.
-   The output will be blitted based on an input iff at least one input argument is blitted AND is a leaf (Note: includes empty collections).
-   (the first blitted argument sets how the output will be blitted)."
-  (fn [& args]
-    (let [first-blit (impatient-find leaf-blit? args)
-          result (apply f (map unblit args))]
-      (if first-blit
-        ; The fluff in the first-blit = the fluff in the output.
-        (leaf-blit result (leaf-fluff first-blit) (str (leaf-fluff (:meta first-blit)))) result)))) ; unblitted mode.
-
-(def fns-unblit-reporter 
-  #{`flatten `hash `hash-ordered-coll `hash-unordered-coll `mix-collection-hash
-    `set/join `set/index})
-(defn unblit-reporter-fn [f]
-  "Like reporter-fn but the output is never blitted. It's not meaningful to do so."
-  (fn [& args] (apply f (map unblit args))))
-
-(def fns-single-get
-  #{`but-last `first `get `find `nth `peek `second })
-(defn single-get-fn [f]
-  "Gets a single element from collection.
-   For blitted code, simply pass the :obj into f."
-  (fn [coll & args]
-    (apply f (if (blitted? coll) (:obj coll) coll) (map unblit args))))
-
-; Functions that don't need modification to run on the blitted code (including all special forms):
-; Typically functions that return non-clojure collections such as atom (although stuff like atom is rarely needed).
-; This includes packing functions such as atom that TAKE a clojure but RETURN a non-clojure.
-; We store blitted code into atoms, etc but deref with non-blitted code.
-; Note: many functions such as aclone can go here but they don't need to.
-; Note: atom creation et al goes here because they should store the blitted code.
-;   the (fn ...) is key as it produces a function that IS compatable with both types.
-; not needed, causes errors with special forms (defn ident-fn [f] "No blitting or unblitting done." f)
-(def fns-ident #{`. `..
-                 `agent `agent-error `agent-errors 
-                 `alter `alter-meta `atom `cat
-                 `comment `commute `compare-and-set! `completing
-                 `constantly `def `delay `deliver `deref `do `finally `eduction `fn `identity
-                 `if `let `letfn `loop `monitor-enter `monitor-exit `persistent! 
-                 `prn `pr `println
-                 `quote `recur
-                 `reduced
-                 `ref `ref-set `reset! `reset-meta! `restart-agent `run
-                 `send `send-off `send-via `transient `throw `try `unreduced `volatile!
-                 `vreset! 
-                  ; add our function appliers:
-                  `_salt-blit-code `blitted? `unblit `unblit! `leaf-blit `blit `blit!
-                  `reporter-fn `single-get-fn  `unblit-reporter-fn `identity-fn
-                  `grammer/blit-code-to-str `grammer/blit-code-to-code})
-
-;; Convience stuff.
-(defmacro if-blit [code-coll code-blit code-vanilla]
-  "Checks if coll is blitted. 
-   If so it replaces (:obj coll) with (code-blit1) which is code-blit but using (:obj coll) in place of coll. 
-     It keeps the other fields unchanged.
-   If not it runs code-vanilla on coll."
-  (let [code-blit1 (walk/postwalk #(if (= % code-coll) (list :obj %) %) code-blit)]
-   `(if (blitted? ~code-coll) (assoc ~code-coll :obj ~code-blit1) ~code-vanilla)))
-(defmacro if-blit! [code-coll code-blit code-vanilla]
-  (let [code-blit1 (walk/postwalk #(if (= % code-coll) (list :obj %) %) code-blit)]
-   `(if (blitted? ~code-coll) (assoc! ~code-coll :obj ~code-blit1) ~code-vanilla)))
-(defmacro ifblit [code-coll code-blit-and-vanilla]
-  "a little shorter when there what's done to :obj in blitcode = what's done to vanilla."
-  (let [code-blit1 (walk/postwalk #(if (= % code-coll) (list :obj %) %) code-blit-and-vanilla)]
-   `(if (blitted? ~code-coll) (assoc ~code-coll :obj ~code-blit1) ~code-blit-and-vanilla)))
-(defmacro ifblit! [code-coll code-blit-and-vanilla]
-  (let [code-blit1 (walk/postwalk #(if (= % code-coll) (list :obj %) %) code-blit-and-vanilla)]
-   `(if (blitted? ~code-coll) (assoc! ~code-coll :obj ~code-blit1) ~code-blit-and-vanilla)))
-(defn bf [f] #(blit (f %))) ; Blitted-gaurentee and unblitted gaurentee of a function.
-(defn uf [f] #(unblit (f %)))
-
-
-;; Individual functions that need thier own wierdness:
-; They work on either blitted or unblitted inputs.
-; Outputs are blitted iff it makes sense to blit based on inputs and what the fn does.
-(defn _b-apply [f args-fixed args-vary]
-  "A single blitted argument, if we can find them without risking (near)infinite searchings,
-   maks all arguments blitted."
-  (let [first-blit (first (filter blitted? args-fixed))
-        first-blit (if first-blit first-blit (first (filter blitted? (take 20 args-vary)))) ; up to 20 fixed args.
-        first-blit (if first-blit first-blit (impatient-find blitted? args-vary))
-        args (concat args-fixed args-vary)]
-    (apply f (if first-blit (map blit args)) args)))
-(defn _ag-body [body]
-  (let [args (first body)]
-    (if (= (last (butlast args)) '&)
-      (update body 1 #(list 'let* [(last args) `(b-apply identity ~(last args))] %)) 
-      body)))
-(defn _b-concat [& args]
-  "Creates laziness. The first blitted argument sets the properties (and ensures everything gets blitted)."
-  (let [first-blit (impatient-find blitted? args)]          ; :obj b/c we are pulling out the internal array.
-    (if first-blit (assoc first-blit :obj (apply concat (map #(:obj (blit %)) args)))
-      (apply concat (map unblit args)))))
-(defn _b-first [coll]
-  (ifblit coll (first coll)))
-(defn _b-next [coll]
-  (ifblit coll (next coll)))
-(defn _b-vector [& args] 
-  "Not lazy because vector is not lazy."
-  (let [first-blit (first (filter blitted? args))]
-    (apply vector (mapv (if first-blit blit unblit) args))))
-(defn _b-hash-map [& kvs]
-  "Iff any of the hash-kvs are blitted default blit. Not lazy as hash-map is not lazy."
-  (let [first-blit (first (filter blitted? kvs))]
-    (if first-blit (blit (apply hash-map (blit-odd-unblit-even kvs))) (apply hash-map (map unblit kvs)))))
-(defn _b-hash-set [& kys] 
-  (let [first-blit (first (filter blitted? kys))]
-    (if first-blit (apply hash-set (map blit kys)) (apply hash-set (map unblit kys)))))
-(defn _b-map
-  ([f] (map f))
-  ([f & args] 
-    (let [first-blit (first (filter blitted? (take 20 args)))
-          first-blit (if first-blit first-blit (impatient-find blitted? args))] 
-      (if first-blit (assoc first-blit :obj (map blit (map (bf f) (map blit args))))
-                     (map unblit (map (uf f) (map unblit args)))))))
-(defn _b-repeat 
-  ([x] (if (blitted? x) (assoc (blit ()) :obj (repeat (:obj x))) (repeat x)))
-  ([n x] (if (blitted? x) (assoc (blit ()) :obj (repeat (unblit n) (:obj x))) (repeat (unblit n) x))))
-(defn _b-meta [x]
-  "Blitted metadata is stored in :meta."
-  (if (blitted? x) (:meta x) (meta x)))
-(defn _b-walk_walk [inner outer form]
-  (if (blitted? form)
-    (let [obj (get-obj form) inner #(blit (inner %)) outer #(unblit (outer %))]
-      (assoc form :obj 
-        (cond
-          (list? obj) (outer (apply list (map inner obj)))
-          (instance? clojure.lang.IMapEntry obj) (outer (vec (map inner obj)))
-          (seq? obj) (outer (doall (map inner obj)))
-          (instance? clojure.lang.IRecord obj)
-            (outer (reduce (fn [r x] (conj r (inner x))) obj obj))
-          (coll? obj) (outer (into (empty form) (map inner obj)))
-          :else (outer obj))))
-    (walk/walk #(unblit (inner %)) #(unblit (outer %)) form)))
-(defn _b-walk_prewalk [f form] (_b-walk_walk (partial _b-walk_prewalk f) identity (f form)))
-(defn _b-walk_postwalk [f form] (_b-walk_walk (partial _b-walk_postwalk f) f form))
-
-(def fns-manual-overrides { ; map from fully-qualified symbol to fn definition.
-
-`apply (fn 
-  ; some common arities, avoind variable arg reduces extranoius lazyness.
-  ([f args] (_b-apply [f] args)) ([f a args] (_b-apply [f a] args))
-  ([f a b args] (_b-apply [f a b] args)) ([f a b c args] (_b-apply [f a b c] args))
-  ([f a b c d args] (_b-apply [f a b c d] args)) ([f a b c d e args] (_b-apply [f a b c d e] args))
-  ([f a b c d e f args] (_b-apply [f a b c d e f] args)) ([f a b c d e f g args] (_b-apply [f a b c d e f g] args))
-  ([f a b c d e f g h & args] (_b-apply [f a b c d e f g h] args)))
-
-`assoc (fn [m k v & kvs]
-  "Can't easily check for duplicate keys with different fluff without O(n) lookup, so skipped this step.
-   But giving a properly blitted key (i.e. with our get) will avoid this issue."
-  (let [kvs (concat [k v] (get-obj kvs))]
-    (if-blit m (apply assoc m (blit-dkey-even m (map blit-odd-unblit-even kvs))) 
-      (apply assoc m (map unblit kvs)))))
-`assoc! (fn [m k v & kvs]
-  (let [kvs (concat [k v] (get-obj kvs))]
-    (if-blit m (apply assoc! m (blit-dkey-even m (map blit-odd-unblit-even kvs))) 
-      (apply assoc! m (map unblit kvs)))))
-
-`assoc-in (fn [m ks v]
- ; Extract the stuff out of :obj.
- (if (blitted? m) (assoc-in m (path-to-blit-path m ks) (blit v)) (assoc-in m ks v)))
-
-`concat _b-concat
-
-`conj (fn [coll x & args]
-  "Respect laziness. The apply conj will not create laziness on vectors.
-   No good way without always O(n) to prevent dublicate keys in sets"
-  (if-blit coll (apply conj coll (map blit args)) (apply conj coll (map unblit args))))
-`conj! (fn [coll x & args]
-  (if-blit! coll (apply conj! coll (map blit args)) (apply conj! coll (map unblit args))))
-
-`cons (fn [x sq]
-  (if-blit sq (cons (blit x) sq) (cons (unblit x) sq)))
-
-`cycle (fn [coll]
-  (cycle (get-obj coll)))
-
-`dedupe (fn
-  ([] (dedupe))
-  ([coll] (ifblit coll (dedupe coll))))
-
-`disj (fn [st & ks]
-  "Set keys are values so are (un)blitted as values."
-  (if-blit st (apply disj st (map blit ks)) (apply disj st (map unblit ks))))
-`disj! (fn [st & ks]
-  (if-blit! st (apply disj! st (map blit ks)) (apply disj st (map unblit ks))))
-
-`dissoc (fn [mp & ks] ; not the default key since dissoc must work fine:
-  (if-blit mp (apply dissoc mp (map #(_blit-key mp %) ks)) (apply dissoc mp (map unblit ks))))
-`dissoc! (fn [mp & ks]
-  (if-blit! mp (apply dissoc! mp (map #(_blit-key mp %) ks)) (apply dissoc! mp (map unblit ks))))
-
-`distinct (fn ; doesn't check for keys bieng the same with different fluff.
-  ([] (distinct))
-  ([coll] (ifblit coll (distinct coll))))
-
-`doall (fn
-  ([coll] (ifblit coll (doall coll)))
-  ([n coll] (ifblit coll (doall (unblit n) coll))))
-
-`dorun (fn
-  ([coll] (ifblit coll (dorun coll)))
-  ([n coll] (ifblit coll (dorun (unblit n) coll))))
-
-`drop (fn
-  ([n] (drop))
-  ([n coll] (ifblit coll (drop n coll))))
-
-`drop-last (fn
-  ([s] (ifblit s (drop-last s)))
-  ([n s] (ifblit s (drop-last (unblit n) s))))
-
-`drop-while (fn
-  ([pred] (drop-while))
-  ([pred coll] (ifblit coll (drop-while (uf pred) coll))))
-
-`ffirst (fn [coll] (_b-first (_b-first coll)))
-
-`filter (fn ([pred] (filter (uf pred))) 
-  ([pred coll] (ifblit coll (filter (uf pred) coll))))
-
-`filterv (fn [pred coll]
-  ([pred coll] (ifblit coll (filterv (uf pred) coll))))
-
-`first _b-first
-
-`fn* (fn [& name-bodies]
-  "Uses b-apply identity on any variable arguments to normalize the blittedness."
-  (apply list `fn* (map #(if (list? %) (_ag-body %) %) name-bodies)))
-
-`get-in (fn [coll ks] 
-  (let [ks (unblit ks)]
-    (if (blitted? coll) (get-in coll (path-to-blit-path coll ks)) (get-in coll ks))))
-
-`hash-map _b-hash-map
-
-`hash-set _b-hash-set
-
-`interleave (fn [& colls] 
-  "Are some collections blitted and some not?
-   Checks the first 20 collections to capture all but apply."
-  (let [first-blit (first (filter blitted? (take 20 colls)))]
-    (if first-blit (apply interleave (map blit colls)) (apply interleave (map unblit colls)))))
-
-`interpose (fn
-  ([sep] (interpose))
-  ([sep coll] (if-blit coll (interpose (blit sep) coll) (interpose (unblit sep) coll))))
-
-
-`into (fn ;from or it's transduced value determines blitting and comments, etc.
-  ([to from] 
-    (if-blit from (into (:obj (blit to)) from) (into (unblit to) from)))
-  ([to xform from]
-    ; Let the transducer determine if we are blitted (is into ever lazy?):
-    (let [tr-vec (into [] xform (get-obj from))]
-      (cond (and (blitted? from) (blitted? (first tr-vec)))
-        (assoc from :obj (into (collections/cmap :flatten blit (get-obj to) tr-vec))) ; reuse the :from object.
-        (blitted? (first tr-vec)) 
-          (let [out (into (collections/cmap :flatten blit (get-obj to) tr-vec))]
-            (assoc (cond (map? out) (blit {0 1}) (set? out) (blit #{0}) (vector? out) (blit [0]) :else (blit (list 0))) 
-              :obj out))
-        ; not blitted.
-        :else (into (collections/cmap :flatten unblit (get-obj to)) tr-vec)))))
-
-`keep (fn
-  ([f] (keep (uf f)))
-  ([f coll] (ifblit coll (keep (uf f) coll))))
-
-`keep-indexed (fn
-  ([f] (keep-indexed (uf f)))
-  ([f coll] (ifblit coll (keep-indexed (uf f) coll))))
-
-`keys (fn [mp] (keys (get-obj mp)))
-
-`last (fn [coll] (last (get-obj coll)))
-
-`list (fn [& items] 
-  "Iff any are blitted the output is blitted."
-  (let [first-blit (first (filter blitted? items))] ; list is NOT lazy.
-    (if first-blit (blit (apply list (map blit items))) 
-      (apply list (map unblit items)))))
-
-`list* (fn ;Args determines whether stuff is blitted. This fn IS lazy, unlike list.
-  ([args] args)
-  ([a args] (if-blit args (list* (blit a) args) (list* (unblit a) (map unblit args))))
-  ([a b args] (if-blit args (list* (blit a) (blit b) args) (list* (unblit a) (unblit b) (map unblit args))))
-  ([a b c args] (if-blit args (list* (blit a) (blit b) (blit c) args) (list* (unblit a) (unblit b) (unblit c) (map unblit args))))
-  ([a b c d & more] (if-blit more (list* (blit a) (blit b) (blit c) more) 
-                      (list (unblit a) (unblit b) (unblit c) (unblit d) (map unblit more)))))
-
-`map _b-map
-
-`map-indexed  (fn
-  ([f] (map-indexed f))
-  ([f coll] (if-blit coll (map (bf f) coll) (map (uf f) coll))))
-
-`mapcat (fn
-  ([f] (mapcat f))
-  ([f & colls] (apply _b-concat (apply _b-map f colls))))
-
-`mapv (fn [f & colls] 
-    (let [first-blit (first (filter blitted? colls))] ; mapv is not lazy. 
-      (if first-blit (assoc first-blit :obj (mapv blit (mapv (bf f) (mapv blit colls))))
-                     (mapv unblit (mapv (uf f) (mapv unblit colls))))))
-
-`merge (fn [& mps] ; not lazy.
-  (let [first-blit (first (filter blitted? mps))]
-    (if first-blit (assoc first-blit :obj (apply merge (map #(:obj (blit %)) mps)))
-        (apply merge (map unblit mps)))))
-
-`merge-with (fn [f & mps] ; not lazy.
-  (let [first-blit (first (filter blitted? mps))]
-    (if first-blit (assoc first-blit :obj (apply merge-with (bf f) (map #(:obj (blit %)) mps)))
-        (apply merge-with (uf f) (map unblit mps)))))
-
-`meta _b-meta
-
-`next _b-next 
-
-`nfirst (fn [coll]
-  (_b-next (_b-first coll)))
-
-`nnext (fn [coll]
-  (_b-next (_b-next coll)))
-
-`nthnext (fn [coll]
-  (ifblit coll (nthnext coll)))
-
-`nthrest (fn [coll]
-  (ifblit coll (nthrest coll)))
-
-`partition (fn
-  ([n coll] (ifblit coll (partition (unblit n) coll)))
-  ([n step coll] (ifblit coll (partition (unblit n) (unblit step) coll)))
-  ([n step pad coll] (if-blit coll (partition (unblit n) (unblit step) (:obj (blit pad)) coll)
-                                   (partition (unblit n) (unblit step) (unblit pad) coll))))
-
-`partition-all  (fn
-  ([n] (partition-all n))
-  ([n coll] (ifblit coll (partition-all (unblit n) coll)))
-  ([n step coll] (ifblit coll (partition-all (unblit n) (unblit step) coll))))
-
-`partition-by (fn
-  ([f] (partition-by f))
-  ([f coll] (if-blit coll (partition-by (bf f) coll) (partition-by (uf f) coll))))
-
-`pmap (fn
-  ([f & args] 
-    (let [first-blit (first (filter blitted? (take 20 args)))
-          first-blit (if first-blit first-blit (impatient-find blitted? args))] 
-      (if first-blit (assoc first-blit :obj (pmap blit (pmap (bf f) (pmap blit args))))
-                     (pmap unblit (pmap (uf f) (pmap unblit args)))))))
-
-`pop (fn [coll] (ifblit coll (pop coll)))
-`pop! (fn [coll] (ifblit! coll (pop! coll)))
-
-`reduce (fn
-  ([f coll] (ifblit coll (reduce f coll)))
-  ([f val coll] (if-blit coll (reduce (bf f) (blit val) coll) (reduce (uf f) (unblit val) coll))))
-
-`reduce-kv (fn [f init coll]
-  (if-blit coll (reduce-kv (bf f) (blit init) coll) (reduce-kv (uf f) (unblit init) coll)))
-
-`reductions (fn ;Now :obj becomes the reductions of :obj.
-  ([f coll] (if-blit coll (reductions (bf f) coll) (reductions (uf f) coll)))
-  ([f init coll] (if-blit coll (reductions (bf f) (:obj (blit init)) coll) (reductions (uf f) (unblit init) coll))))
-
-`remove (fn
-  ([pred] (remove (uf pred)))
-  ([pred coll] (ifblit coll (remove (uf pred) coll))))
-
-`repeat _b-repeat
-
-`replace (fn ; Can cause time complexity issues since each key in smap must be looked-up
-  ([smap] (replace smap))
-  ([smap coll] (if-blit coll (replace (zipmap (map #(_blit-key smap %) (keys (get-obj smap))) 
-                                              (map blit (vals (get-obj smap)))) coll)
-                 (replace (unblit smap) coll))))
-
-`replicate (fn [n x] (_b-repeat n x))
-
-`rest (fn [coll] (ifblit coll (rest coll)))
-
-`reverse (fn [coll] (ifblit coll (reverse coll)))
-
-`rseq (fn [coll] (ifblit coll (rseq coll)))
-
-`rsubseq (fn
-  ([sc test ky] (ifblit sc (rsubseq sc test (unblit ky))))
-  ([sc start-test start-key end-test end-key] 
-    (ifblit sc (rsubseq sc start-test (unblit start-key) end-test (unblit end-key)))))
-
-`select-keys (fn [mp kys] ; can cause time complexity issues with large blitted collections.
-  (if-blit mp (select-keys mp (map #(_blit-key mp %) kys)) (select-keys mp (unblit kys))))
-
-`seq (fn [coll] (ifblit coll (seq coll)))
-
-`seque (fn
-  ([s] (ifblit s (seque s)))
-  ([n-or-q s] (ifblit s (seque (unblit n-or-q) s))))
-
-`sequence (fn
-  ([coll] (ifblit coll (sequence coll)))
-  ([xform & colls]
-    (let [first-blit (first (filter blitted? (take 20 colls)))
-          first-blit (if first-blit first-blit (impatient-find blitted? colls))] 
-      (if first-blit (assoc first-blit :obj (map blit (apply sequence xform (map get-obj colls))))
-                     (apply sequence xform (map unblit colls))))))
-
-`take (fn
-  ([n] (take (unblit n)))
-  ([n coll] (ifblit coll (take (unblit n) coll))))
-
-`take-last (fn [n coll] (ifblit coll (take-last (unblit n) coll)))
-
-`take-nth (fn
-  ([n] (take-nth (unblit n)))
-  ([n coll] (ifblit coll (take-nth (unblit n) coll))))
-
-`take-while (fn
-  ([pred] (take-while (uf pred)))
-  ([pred coll] (ifblit coll (take-while (uf pred) coll))))
-
-`test (fn [v] (test (_b-meta v)))
-
-`transduce (fn
- ([xform f coll] (if-blit coll (transduce (bf f) coll) (transduce (uf f) coll)))
- ([xform f init coll] (if-blit coll (transduce (bf f) (blit init) coll) (transduce (uf f) (unblit init) coll))))
-
-`tree-seq (fn [branch? children root]
-  (if (blitted? root) (blit (tree-seq branch? children root)) (tree-seq branch? children root)))
-
-`update (fn [m k f & more]
- (if-blit m (apply update (_blit-key m k) (bf f) more)
-   (apply update m (unblit k) (uf f) more)))
-
-`update-in (fn [m ks f & more]
-  (let [ks (unblit ks)]
-    (if (blitted? m) (apply update-in m (path-to-blit-path m ks) (bf f) more) 
-      (apply update-in m (unblit ks) (uf f) more))))
-
-`vec (fn [coll] (ifblit coll (vec coll)))
-
-`vector _b-vector
-
-`with-meta (fn [obj m]
-  "Blitted metadata is stored in :meta"
-  (if (blitted? obj) (assoc obj :meta (blit m)) (with-meta obj (unblit m))))
-
-`zipmap (fn [kys vals]
-  "vals determines blitting."
-  (if-blit vals (zipmap (map (blit kys)) vals) (zipmap (unblit kys) vals)))
-
-;; Now other namespaces
-`set/difference (fn [& sets]
-  (let [first-blit (first (filter blitted? sets))]
-    (if first-blit (assoc first-blit :obj (apply set/difference (map #(get-obj (blit %)) sets)))
-      (apply set/difference sets))))
-
-`set/map-invert (fn [m]
-  (ifblit m (set/map-invert m)))
-
-`set/project  (fn [xrel ks]
-  (ifblit xrel (set/project (unblit ks))))
-
-`set/rename (fn [xrel kmap]
-  (ifblit xrel (set/rename (unblit kmap))))
-
-`set/rename-keys (fn [mp kmap]
-  (ifblit mp (set/rename-keys mp (unblit kmap))))
-
-`set/select (fn [pred xset]
-  (ifblit xset (set/select (uf pred) xset)))
-
-`set/union (fn [& sets]
-  (let [first-blit (first (filter blitted? sets))]
-    (if first-blit (assoc first-blit :obj (apply set/union (map #(get-obj (blit %)) sets)))
-      (apply set/union sets))))
-
-`walk/keywordize-keys (fn recur-f [m]
-  (if-blit m 
-    (let [om1 (reduce #(assoc %1 (assoc %2 :obj (if (string? (:obj %2)) (keyword (:obj %2)) (:obj %2))))
-               m (keys m))]
-      (reduce (fn [acc k] (update acc k #(if (map? (:obj %)) (recur-f %) %))) om1 (keys om1)))
- (walk/keywordize-keys m)))
-
-`walk/postwalk _b-walk_postwalk
-
-`walk/postwalk-demo (fn [form] 
-  (let [f (fn [x] (print "Walked: ") (prn (unblit x)) x)]
-    (_b-walk_postwalk f form)))
-
-`walk/postwalk-replace (fn [smap form] 
-  (let [f (fn [x] (if-blit x (if (contains? (unblit smap) (unblit x)) (blit (smap x)) x) 
-                             (if (contains? (unblit smap) (unblit x)) (unblit (smap x)) x)))]
-    (_b-walk_postwalk f form)))
-
-`walk/prewalk _b-walk_prewalk
-
-`walk/prewalk-demo (fn [form] 
-  (let [f (fn [x] (print "Walked: ") (prn (unblit x)) x)]
-    (_b-walk_prewalk f form)))
-
-`walk/prewalk-replace (fn [smap form] 
-  (let [f (fn [x] (if-blit x (if (contains? (unblit smap) (unblit x)) (blit (smap x)) x) 
-                             (if (contains? (unblit smap) (unblit x)) (unblit (smap x)) x)))]
-    (_b-walk_prewalk f form)))
-
-`walk/stringify-keys (fn recur-f [m]
-  (if-blit m 
-    (let [om1 (reduce #(assoc %1 (assoc %2 :obj (if (keyword? (:obj %2)) (str (:obj %2)) (:obj %2))))
-               m (keys m))]
-      (reduce (fn [acc k] (update acc k #(if (map? (:obj %)) (recur-f %) %))) om1 (keys om1)))
- (walk/stringify-keys m)))
-
-`walk/walk _b-walk_walk
-
-`collections/cdissoc (fn [c k] (ifblit c (collections/cdissoc c (unblit k))))
-`collections/ckeys (fn [c] (ifblit c ((if (set? c) identity unblit) (collections/ckeys c))))
-`collections/cmap (fn [map-option f code & args] 
-                (if-blit code (apply collections/cmap (unblit map-option) f code (map unblit args))
-                              (apply collections/cmap (unblit map-option) f code (map blit args))))
-`collections/cvals (fn [c] (ifblit c (collections/cvals c)))
-`collections/lassoc 
-
-(fn [l k v & kvs]
-  "l determines the blitting."
-  (if-blit l (apply list (apply assoc (into [] l) (unblit k) (unblit v) (map unblit kvs)))
-    (apply list (apply assoc (into [] l) (unblit k) (blit v) (blit-odd-unblit-even unblit kvs)))))
-
-
-`grammer/pos-to-blit-code (fn [s c] (_salt-blit-code (grammer/pos-to-blit-code (unblit s) (unblit c))))
-`grammer/reads-string-blit (fn [s] (_salt-blit-code (grammer/reads-string-blit (unblit s))))
-
-})
-; Assert that everything is working:
-(let [kys (keys fns-manual-overrides)
-      vs (vals fns-manual-overrides)
-      t (fn [k m] (throw (Exception. (str "error at: " k ": " m))))]
-  (mapv #(cond (not (symbol %1)) (t %1 "not a symbol")
-               (and (not= %1 'fn*) (not (.contains ^String (str %1) "/"))) (t %1 "can't resolve symbol")
-               (not (fn? %2)) (t %1 "doesn't map to a function.") :else true) kys vs))
-
-(defn coll-literal-convert [code]
-  "Converts literal vectors, maps, and sets non-literals.
-   Example: [a b c] => (b-vector a b c).
-   This allows the b-vector to get blitted iff at least one element is blitted."
-  ; These function handle both empty and non-empty sets.
-  (cond (vector? code) (apply list `_b-vector code)
-        (map? code) (apply list `_b-hash-map code)
-        (set? code) (apply list `_b-hash-set code)
-        :else code))
-
-(defn keyword-get [kwd coll]
-  "Keyword getting."
-  (kwd (get-obj coll)))
-
-; The main macro that converts the code:
-; IMPORTANT: macroexpand the code before we manipulate it.
-; IMPORTANT: coll-literal-convert.
-; IMPORTANT: blit the output argument but wrapping the entire thing into a blit.
-; IMPORTANT: ensure-valid-fluff (should be done by grammer).
-; Types of fns: fns-ident, fns-single-get, fns-unblit-reporter.
-  ; default is reporter-fn.
-(defn wrap-var [f-sym local-vars nms]
-  ;wraps a variable-as-symbol, if nessessary, otherwise just returns the var.
-  ; Sometimes we don't know the function at runtime, so have to defensivly wrap the function in checks.
-  ; Note: Namespace variables won't collide with fns-manual-overrides, etc b/c they are fully qualified.
-  ; Example: (inc x) => ((reporter-fn inc) x)
-  (let [fns-id (set/union fns-ident local-vars)]
-    (cond (get fns-id f-sym) f-sym ; include local variables.
-         (get fns-manual-overrides f-sym) `(get fns-manual-overrides (quote ~f-sym))
-         (get fns-single-get f-sym) (`single-get-fn (quote ~f-sym))
-         (get fns-unblit-reporter f-sym) (`unblit-report-fn (quote ~f-sym))
-         :else
-         (let [vr (ns-resolve nms f-sym)]
-            (cond (nil? vr) `(if (fn? ~f-sym) (reporter-fn ~f-sym) (quote ~f-sym)) ; we don't know. 
-                 (fn? (var-get vr)) `(reporter-fn (quote ~f-sym)) ; known function.
-                 :else f-sym))))) ; known non-fn.
-(defn _blit-translate-leaf [code local-vars nms]
-  (if (symbol? code) (wrap-var code local-vars nms) code))
-(defn _blit-translate-step [c nms]
-  ; quoteing code blocks blitifying the code:
-  (cond (and (collections/listoid? c) (= (first c) 'quote) (not (contains? (grammer/get-locals c) 'quote))) c
-        ; Collections are recursive:
-        (coll? c) (collections/cmap :flatten #(_blit-translate-step % nms) c)
-        ; symbols are leaf-translated:
-        (symbol? c) (_blit-translate-leaf c (grammer/get-locals c) nms)
-        ; Other stuff is not changed:
-        :else c))
-(defn _blit-translate-fn-body [f-body arg-c-sym arg-b-sym nms] ;f-body does not include the fn and vector.
-  (let [f-body1 (grammer/calculate-locals f-body #{arg-c-sym arg-b-sym})]
-    ; keywords must be handled using the entire list.
-    (walk/postwalk grammer/remove-locals (_blit-translate-step f-body1 nms))))
-(defn blit-translate [f-code nms]
-  "For use in macros. Accepts a function of two arguments: the-code (a vector), and blit?s (1:1 with code).
-   The body of the function was built to work on NON blitted code.
-   Returns a body that is built to work on blittified code.
-   nms is the namespace that f-code lives in."
-  (if (string? f-code) (throw (Exception. "Must be code, not a string representation of code.")))
-  (let [f-code (grammer/qualify-in (apply list (walk/macroexpand-all f-code)) nms false)]
-    (if (not= (first f-code) `fn*) (throw (Exception. "Must be a function's code.")))
-    (if (not= (count (first (second f-code))) 2) (throw (Exception. "Function must have two arguments.")))
-    ; Salt what's blitted.
-    (let [arg-c (first (first (second f-code))) arg-b? (second (first (second f-code)))]
-     `(fn [~arg-c ~arg-b?]
-        ; shadow ~arg-c.
-        (let [~arg-c (mapv #(if (nth ~arg-b? %) (_salt-blit-code (nth ~arg-c %)) (nth ~arg-c %)) 
-                       (range (count ~arg-b?)))] 
-          (_unsalt-blit-code ~@(_blit-translate-fn-body (rest (second f-code)) arg-c arg-b? nms)))))))
+ (:require [clojure.string :as string] [clooj.coder.grammer :as grammer] [clooj.coder.io :as cio]
+           [clooj.collections :as collections] [clojure.pprint :as pprint]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;; Jumper functions that get the cursor past a given thingy.
+;;;;; Each function takes (^chars cs ^int ix0 ^int n), where ix0 is the start of the whatever and n is the len of cs.
+;;;;; The function returns the index one after the last index of said token.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn space-jump [^chars cs ix0 n]
+  ; Returns the end of empty space (if ix0 is not
+  ; in empty space it returns ix0).
+  (loop [ix (int ix0)]
+    (if (>= ix (int n)) ix
+      (let [c (aget ^chars cs ix)]
+        (if (not (grammer/ccom-white? (aget ^chars cs ix))) ix
+          (recur (inc ix)))))))
+
+(defn sym-kwd-jump [^chars cs ix0 n]
+  ; Standard fare 101.
+  (loop [ix (int ix0)]
+    (if (>= ix (int n)) ix
+      (let [c (aget ^chars cs ix)]
+        (if (= (aget ^ints grammer/sym-kwd-stop (int c)) 1) ix
+          (recur (inc ix)))))))
+
+(defn string-jump [^chars cs ix0 n] ; Get the ending quote but watch out for escaped chars!
+  (loop [escape (int 0) ix (int (inc ix0))]
+    (if (>= ix (int n)) ix
+      (let [c (aget ^chars cs ix)]
+        (if (and (= escape 0) (= c \")) (inc ix) 
+          (recur (if (= c \\) (- 1 escape) 0) (inc ix)))))))
+
+(defn num-jump [^chars cs ix0 n]
+  ; Only slightly different than kyds or syms.
+  (loop [ix (int ix0)]
+    (if (>= ix (int n)) ix
+      (let [c (aget ^chars cs ix)]
+        (if (or (= (aget ^ints grammer/sym-kwd-stop (int c)) 1)
+                (grammer/creader? c)) ix
+          (recur (inc ix)))))))
+
+(defn char-jump [^chars cs ix0 n]
+  ; Most literals are only 1 char long.
+  ; The exceptions = (filterv #(> (count %) 2) (mapv #(pr-str (char %)) (range 65535)))
+    ;["\\backspace" "\\tab" "\\newline" "\\formfeed" "\\return" "\\space"]
+  (let [^char c1 (if (< ix0 (- n 1)) (aget ^chars cs (+ ix0 1)) \x)
+        ^char c2 (if (< ix0 (- n 2)) (aget ^chars cs (+ ix0 2)) \x)]
+    (cond (and (= c1 \b) (= c2 \a)) 
+                    (+ ix0 10) ;\backspace
+          (= c2 \a) (+ ix0  4) ;\tab
+          (and (= c1 \n) (= c2 \e)) 
+                    (+ ix0  8) ;\newline
+          (= c2 \o) (+ ix0  9) ;\formfeed
+          (= c2 \e) (+ ix0  7) ;\return
+          (= c2 \p) (+ ix0  6) ;\space
+          :else     (+ ix0  2) ;\1,\x,...
+    )))
+; nil, booleans, keywords: uses the symbol jumper at the top.
+
+(defn open-jump [^chars cs ix0 n] (inc ix0)) ; lists vectors and maps.
+(defn close-jump [^chars cs ix0 n] (inc ix0))
+
+(defn comment-jump [^chars cs ix0 n]
+  (loop [ix (int ix0)]
+    (if (>= ix (int n)) ix
+      (let [c (aget ^chars cs ix)]
+        (if (= c \newline) (inc ix) ; include the newline in the comment token (self-contained). Multi-line comments are seperate tokens.
+          (recur (inc ix)))))))
+
+(defn rmacro-jump [^chars cs ix0 n] ; Reader macros including stuff that we won't turn into a reader macro and metadata.
+  ; (not= (read-string "#{1 2}")  (read-string "(hash-set 1 2)")), even if it technically isn't a reader macro.
+  ; This function lumps multible reader macros together.
+  ; The reader macro CAN contain comments.
+  ; Does NOT include character literals.
+  ; Includes reader conditionals and read-eval but doesn't calculate them.
+  (loop [ix (int ix0)]
+    (if (>= ix (int n)) ix
+      (let [c (aget ^chars cs ix)]
+        (if (and (> ix 0) (= (aget ^chars cs (dec ix)) \#) ;The # dispatches:
+              (or (= c \:) (= c \_) (= c \?) (= c \!) (= c \<))) (recur (inc ix))
+              ; the start of a collection, keyword, string, token, or number:
+          (if (or (grammer/copen? c) (= (aget ^ints grammer/sym-kwd-start (int c)) 1) (grammer/cnumber? c) (= c \")) ix 
+            (if (= c \;) (recur (comment-jump cs ix n)) ; Comments splitting between a ' and xyz, very rare case!
+              (recur (inc ix)))))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;; The tokenizer which generates arrays that determine the syntax
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Token id list:
+; 0 = empty space, 1 = symbols, 2 = keywords, 3 = strings, 4 = numbers, 5 = char literls, 
+; 6 = open ([{, 7 = close }]), 8 = comments, 9 = reader macros.
+
+(defn tokenize [^String s]
+  "Tokenizes the string s. Does not yet evaluate the token's value.
+   :token-type = what is each token's value.
+     Includes regexp and hash-sets as reader macros for now, they get changed later.
+   :token-index = counts upward, incementing at each new token.
+   :chars = (.toCharArray s) convenience field.
+   25 ns/char for ~5kb strings."
+  (let [^chars cs (.toCharArray s) n (int (count cs))
+        ^ints token-type (make-array Integer/TYPE n) ; What tokens we belong to.
+        ^ints token-index (make-array Integer/TYPE n) ; 0001112223334567788... as the tokens pass.
+        ix0 (space-jump cs 0 n)] ; we start as if we are in empty space.
+    (loop [ix (int ix0) tix (int (if (> ix0 0) 1 0))] ; one run of the loop per token.
+       (if (>= ix n) {:token-type token-type :token-index token-index :chars cs}
+         (let [ci (aget ^chars cs ix)
+               ; Switchyard:
+               id (int (cond (grammer/ccom-white? ci) 0
+                        (= ci \:) 2 (= ci \") 3
+                        (grammer/cnumber? ci) 4 (= ci \\) 5 
+                        (grammer/copen? ci) 6(grammer/cclose? ci) 7
+                        (= ci \;) 8 (grammer/creader? ci) 9
+                        :else 1)) ; symbols bieng a catch-all.
+               ; Next index:
+               nx (cond (= id 0) (space-jump cs ix n)
+                        (or (= id 1) (= id 2)) (sym-kwd-jump cs ix n)
+                        (= id 3) (string-jump cs ix n) (= id 4) (num-jump cs ix n)
+                        (= id 5) (char-jump cs ix n) (= id 6) (open-jump cs ix n)
+                        (= id 7) (close-jump cs ix n) (= id 8) (comment-jump cs ix n)
+                        (= id 9) (rmacro-jump cs ix n)) nx (int nx)]
+           (loop [jx (int ix)] ; Set the token-type and token-index arrays.
+             (if (< jx nx) ; nx is the first index after the token.
+               (do (aset ^ints token-type jx id)
+                   (aset ^ints token-index jx tix)
+                   (recur (inc jx)))))
+           (recur nx (inc tix)))))))
+
+(defn basic-parse [s]
+  "Tokenizes + adds a :inter-depth field.
+   inter-depth is interstitial: it has one more element than (count s)
+     and the i'th element is the depth of a cursor between the i-1'th and i'th char.
+   The depth includes any macro characters in as part of the () they are attached to.
+   About 40 ns/char for a 5kb string."
+  (let [tk (tokenize s) ^chars cs (:chars tk) n (count cs)
+        ^ints ty (:token-type tk) ^ints tix (:token-index tk)
+        ^ints inter-depth (make-array Integer/TYPE (inc n))]
+    ; Depth field: counting paranethesis.
+    (loop [ix (int 0) l (int 0)]
+      (if (< ix n)
+        (let [ti (aget ^ints ty ix)
+              ; open and closing syntax is only one level (we haven't yet added macros):
+              l1 (int (if (= ti 6) (inc l) (if (= ti 7) (max (dec l) 0) l)))] 
+          (aset ^ints inter-depth (inc ix) l1) ; the decrement is delayed one char.
+          (recur (inc ix) l1))))
+    ; Add 1 for reader-macros before an indent, including hash-sets.
+    (loop [ix (int (dec n)) d (int (aget ^ints inter-depth ix))] ; backwards.
+      (if (>= ix 0)        ;d is what depth a reader macro here would do.
+        (let [ti (aget ^ints ty ix)]
+          (if (= ti 9) (aset ^ints inter-depth (inc ix) (int d)))
+          (recur (dec ix) (if (= ti 6) (aget ^ints inter-depth (inc ix)) ; depth after the open (
+                            (if (not= ti 9) (aget ^ints inter-depth ix) (int d))))))) ; depth here if not 9
+    (assoc tk :inter-depth inter-depth)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;; The vectorizer which takes parse-arrays and makes a recursive, vector form.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn depth-bracket [^ints depth ix0 dir]
+  "Finds the ending ix that matches the depth of ix0. dir = -1 or +1"
+  (let [n (alength ^ints depth) d0 (aget ^ints depth ix0)] 
+    (loop [ix (int ix0)]
+      (if (or (>= ix n) (< ix 0) (< (aget ^ints depth ix) d0)) (- ix dir)
+        (recur (+ ix dir))))))
+
+(defn token-end [^ints tix ix0 dir]
+  "The last index of the token, inclusive"
+  (let [n (alength ^ints tix) t0 (aget ^ints tix ix0)]
+    (loop [ix (int ix0)]
+      (if (or (>= ix n) (< ix 0) (not= (aget ^ints tix ix) t0)) (- ix dir) (recur (+ ix dir))))))
+
+(def _comment (keyword (str "clooj.coder.blitcode_comment" "1234321232121")))
+(def _err (keyword (str "clooj.coder.blitcode_error" "1234321232121")))
+
+(defn _parse-t-piece [^chars cs ^ints tix ^ints tys ^ints inter-depth n start-ix end-ix] ; indexes are inclusive.
+  (let [ty (aget ^ints tys start-ix)
+        ; After the reader macro:
+        start-ix1 (int (if (= ty 9) (inc (token-end tix start-ix 1)) start-ix))
+
+        ; What type we are starting in, after the reader macro:
+        ty1 (aget ^ints tys start-ix1)
+
+        ; The reader macro head, empty if there is no reader macro:
+        rmac (collections/asus cs start-ix start-ix1)
+
+        ^String body (collections/asus cs start-ix1
+                       (inc (min end-ix (token-end tix start-ix1 1))))]
+    (cond (and (< ty1 6) (> ty1 0)) ; leaf objects. Read-str would be easier but lets take a tiny loss and play fair implimenting it all ourselves.
+         {:head rmac :tail body :obj (cond (= ty1 1) (symbol body) (= ty1 2) (keyword (collections/sus body 1)) (= ty1 3) body
+                                       (= ty1 4) (let [zp #(str (if (= (first %) \0) "" "0") %)
+                                                       body (zp body) ; initial pad to avoid empty exceptions.
+                                                       bulast (apply str (butlast body)) lst (if (last body) (last body) \a)
+                                                       split-dash (let [x (string/split body (re-pattern "/"))] (mapv zp x))
+                                                       nums-only #(.replaceAll % "[^0-9]" "")
+                                                       nums-edot (fn [s] (let [s1 (.replaceAll s "[^0-9e\\.]" "") n (count s1)]
+                                                                           (loop [acc [] ix (int 0) dot? false e? false]
+                                                                             (if (= ix n) (apply str acc)
+                                                                               (let [ci (nth s1 ix)]
+                                                                                 (cond (= ci \e) (recur (if e? acc (conj acc ci)) (inc ix) dot? true)
+                                                                                   (= ci \.) (recur (if dot? acc (conj acc ci)) (inc ix) true e?)
+                                                                                   :else (recur (conj acc ci) (inc ix) dot? e?)))))))
+                                                       iparse #(let [bi (bigint %)] (if (or (< bi Long/MIN_VALUE) (> bi Long/MAX_VALUE)) bi (long bi)))]
+                                                   (cond (= lst \N) (bigint (nums-only bulast))
+                                                         (= lst \M) (bigdec (nums-edot bulast))
+                                                         (> (count split-dash) 1) (let [nu (iparse (first split-dash)) den (iparse (second split-dash))]
+                                                                                    (if (= den 0) _err (/ nu den)))
+                                                         (.contains body ".") (Double/parseDouble (nums-edot body)) :else (iparse body)))
+                                       (= ty1 5) (cond (= body "\\newline") \newline (or (= body "\\ ") (= body "\\space")) \  (= body "\\backspace") \backspace
+                                                       (= body "\\formfeed") \formfeed (= body "\\tab") \tab (= body "\\return") \return 
+                                                   :else (if (second body) (second body) (char 0))))}
+         (= ty1 0) {:head rmac :tail body} ; empty space => nothing.
+         (= ty1 8) {:head rmac :tail body :obj _comment}
+         (or (= ty1 7) (= ty1 9)) {:head rmac :tail body :obj _err} ; An error that prevented us from jumping past a reader macro.
+         (= ty1 6) ; Open parenthesis tricky recursive code.
+         (let [start-ix2 (inc (token-end tix start-ix1 1)) ; the stuff inside the ( starts here. 
+               d0 (aget ^ints inter-depth start-ix2)
+               ; There is at least one valid token-start b/c of the closing ) unless the string is wrong.
+               token-starts (loop [acc [start-ix2] ix (int start-ix2)]
+                              (let [d (aget ^ints inter-depth (inc ix)) tyi (aget ^ints tys ix)
+                                    ix1 (inc (if (> d d0) (depth-bracket inter-depth (inc ix) 1) ;Collections (maybe with a macro) go one index past the closing ).
+                                             ; Go to the start of the next token (or next next token if we have reader macros):
+                                             (token-end tix (if (= tyi 9) (min (inc (token-end tix ix 1)) (dec n)) ix) 1)))]
+                                (if (> ix1 end-ix) acc (recur (conj acc ix1) ix1))))]
+           {:head (str rmac body) :tail (collections/asus cs (last token-starts) (inc end-ix))
+            :obj (mapv #(_parse-t-piece cs tix tys inter-depth n %1 (dec %2)) (butlast token-starts) (rest token-starts))}))))
+(defn _lump [bcodev] ; Lumps whitespace and comments into the whatever.
+  (let [o (:obj bcodev)]
+    (if (vector? o) ; Look at stuff inside o.
+        (let [o (mapv _lump o) ; recursive.
+              sp? (mapv #(let [oi (:obj %)] (or (nil? oi) (= oi _comment) (= oi _err))) o) n (count o)
+              ; The first group is non-coding DNA only, unless it's empty it will add to the head:
+              groups (reduce (fn [acc ix]
+                               (let [oi (nth o ix)]
+                                 (if (nth sp? ix) (update acc (dec (count acc)) #(conj % oi)) 
+                                     (conj acc [oi])))) [[]] (range n))
+              stry (fn [gi] (apply str (:head gi) (mapv #(str (:head %) (:tail %)) gi)))
+              ; Exclude the first group in the object:
+              o1 (mapv (fn [gi] (let [gi0 (first gi)]
+                                  (if (> (count (:head gi0)) 0) 
+                                    (assoc gi0 :tail (str (:tail gi0) (stry (rest gi))))
+                                    (assoc gi0 :tail (stry gi))))) 
+                   (rest groups))
+              ; Instead put the first group in the head:
+              h1 (str (:head bcodev) (stry (first groups)))]
+           (assoc bcodev :obj o1 :head h1)) 
+      bcodev)))
+(defn parse-to-vcode [p] ; p = a basic parse.
+  "Reads string into the vectorized format of blitted code, should be lossless to the original string.
+   :head = the opening (, also any macros (including hash-sets, meta-data), etc.
+   :tail = the body and the closing ).
+     Both :head and :tail can include comments, space, etc.
+   :obj = a vector of any children objects."
+  (let [n (alength ^chars (:chars p))
+        bcodev (_parse-t-piece (:chars p) (:token-index p) (:token-type p) (:inter-depth p) n 0 (dec n))]
+    (_lump bcodev)))
+(defn reads-string-vcode [s] (parse-to-vcode (basic-parse (str "[" s "\n]"))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;; The blitter which takes the vectorized code, applis macros, packs meta, and changes the map type. 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Some reader macro functions must be stored as symbols, but they cannot be called:
+(defn _x [] (throw "Reader macros symbols be called directly as functions.")) 
+(def syntax-quote _x) (def meta-tag _x) 
+(def anon-fn _x) (def read-eval _x) (def condition _x) (def ignore _x) (def map-ns _x) ; anon-fns are later expanded.
+(def condition-splicing _x) (def hash-literal _x) (def regex-literal _x) ; literals are later expanded.
+(defn rmacro-expand [^String head-plus-tail]
+  "Expands a reader-macro into a :strings and :symbols. The string may include whitespace and intra-macro-comments."
+  (let [^chars cs (.toCharArray head-plus-tail) n (alength ^chars cs) ix1 (rmacro-jump cs 0 n)]
+    (loop [strs [] syms [] ti [] yi nil ix (int 0)] ; ti = the growing string. yi = the symbol.
+      (if (>= ix ix1) (let [strs1 (if (nil? yi) strs (conj strs (apply str ti))) syms1 (if (nil? yi) syms (conj syms yi))]
+                        {:strings (if (> (count strs1) 0) (assoc (into [] (rest strs1)) 0 (str (first strs1) (second strs1))) []) 
+                         :symbols (into [] (rest syms1))}) ; The first string is extra space and symbol is nil.
+        (let [c (aget ^chars cs ix)]
+          (cond (grammer/ccom-white? c) (recur strs syms (conj ti c) yi (inc ix)) ; bridging mode.
+                (= c \;) (let [ixe (comment-jump cs ix n)] 
+                           (recur strs syms (apply conj ti (into [] (collections/asus cs ix ixe))) yi ixe))
+                :else
+                (let [c1 (if (< (inc ix) n) (aget ^chars cs (inc ix)) (char \a)) ; deciding mode.
+                      c2 (if (< (+ ix 2) n) (aget ^chars cs (+ ix 2)) (char \a))
+                      yix1 (cond (= c \') ['quote (inc ix)] (= c \`) [`syntax-quote (inc ix)]
+                                 (= c \^) [`meta-tag (inc ix)] (= c \@) [`deref (inc ix)] ; any unquote-splicing skips over the @.
+                                 (= c \~) (if (= c1 \@) [`unquote-splicing (+ ix 2)] [`unquote (inc ix)])
+                                 (= c \#)
+                                 [(cond (= c1 \_) `ignore (= c1 \() `anon-fn (= c1 \:) `map-ns
+                                        (= c1 \') 'var (= c1 \=) `read-eval (= c1 \?) (if (= c2 \@) `condition-splicing `condition) 
+                                        (= c1 \{) `hash-literal (= c1 \") `regex-literal)
+                                  (+ ix (if (and (= c \#) (= c1 \?) (= c2 \@)) 3 2))])
+                      yix1 (if yix1 yix1 [_err (inc ix)]) ; null case oops.
+                      ti1 (into [] (collections/asus cs ix (second yix1)))] ; the string we just advanced across.
+                  (recur (conj strs (apply str ti)) (conj syms yi) ti1 (first yix1) (second yix1)))))))))
+(defn _rmacro-extract [vcode]
+  "Adds (recursivly) :rmacro which has :symbols and :strings, iff there are reader macros (including hash-sets and regexp)."
+  (let [vec? (vector? (:obj vcode)) rmac (rmacro-expand (if vec? (:head vcode) (str (:head vcode) (:tail vcode))))
+        vcode (if vec? (assoc vcode :obj (mapv _rmacro-extract (:obj vcode))) vcode)]
+    (if (> (count (:strings rmac)) 0) (assoc vcode :rmacro rmac) vcode)))
+(defn _unpack-anon-fns [blit-obj]
+  ; Unpacks #(%1 %2 ...) functions, blit is the :obj at the #() level.
+  ; There is no need to replace the % symbols they are valid symbols.
+  (let [deeper-symbols (filterv symbol? (mapv #(collections/gett-in blit-obj %) (collections/paths-walked blit-obj)))
+        index (fn [sym] (cond (= sym '%) 1 (= (first (str sym)) \%) (Integer/parseInt (collections/sus (str sym) 1)) :else 0))
+        nargs (apply max 0 (mapv index deeper-symbols))] ; One-based array going on for the fn args.
+    ; It goes: fn* [%1 %2 %3...] (body) but tiwh :obj's of course.
+    (list {:obj 'fn*} {:obj (mapv #(hash-map :obj (symbol (str "%" %))) (range 1 (inc nargs)))} {:obj blit-obj})))
+(defn _meta-pack [vcode-r] ; vcode-r = vcode + reader macros encoded
+  "Puts metadata into a :meta category, unpacking the :tag as well."
+  (let [o (:obj vcode-r)]
+    (if (vector? o)
+      (let [o (mapv _meta-pack o) ; recursive. Metadata can be inside of other meta-data.
+            r-strings (mapv #(:strings (:rmacro %)) o) r-symbols (mapv #(:symbols (:rmacro %)) o)
+            is-meta? (mapv #(= (last %) `meta-tag) r-symbols)] ; Error if metadata is not applied last.
+        (assoc vcode-r :obj
+          (loop [occ [] ix (int 0)] 
+            (if (>= ix (count o)) occ
+              (if (nth is-meta? ix) ; Meta-things attach to the next object.
+                (let [mstuff (nth o ix) target (get o (inc ix)) 
+                      target (if (nil? target) {:obj _err :begin "" :end ""} target) ; _err if nothing to attach to.
+                      ; The reader macros attached to the meta become attached to the target:
+                      meta-rstrs (:strings (:rmacro mstuff)) meta-syms (:symbols (:rmacro mstuff))
+                      target-rmacro {:strings (into [] (concat (butlast meta-rstrs) (:strings (:rmacro target))))
+                                     :symbols (into [] (concat (butlast meta-syms) (:symbols (:rmacro target))))}
+                      mstuff (dissoc mstuff :rmacro) ; No reader macros will be attached if the metadata is involved.
+                      mstuff (update mstuff :obj #(if (coll? %) % {{:obj :tag} {:obj %}}))] ; Expand the :tag shorthand.
+                  (recur (conj occ (assoc target :meta mstuff :rmacro target-rmacro)) (+ ix 2))) ; Non-meta must always be after meta.
+                (recur (conj occ (nth o ix)) (inc ix))))))) vcode-r)))
+(defn _vcode-to-blit [vcode-rm] ; vcode-rm = vcode + reader macros encoded + meta packing.
+  (let [vcode-rm (if (coll? (:meta vcode-rm)) (update vcode-rm :meta _vcode-to-blit) vcode-rm)
+        o (:obj vcode-rm)
+        total-n-r (reduce + (mapv count (:strings (:rmacro vcode-rm))))
+        rmacro (:rmacro vcode-rm)
+        ; Recursive and sets the type of o.
+        o (if (vector? o) ; Use the opening character (after the rmacro part) to determing the type.
+            (let [o (mapv _vcode-to-blit o) ;recursive.
+                  open-c (get (str (:head vcode-rm) (:tail vcode-rm)) (- total-n-r (if (grammer/copen? (last (last (:strings (:rmacro vcode-rm))))) 1 0)))
+                  set? (and (= open-c \{) (= (last (:symbols (:rmacro vcode-rm))) `hash-literal))
+                  oo (fn [o] (mapv #(assoc %1 :order %2) o (range)))] ; order the macro.
+              (cond set? (apply hash-set (oo o))
+                    (or (= open-c \{) (= open-c \^)) (let [o1 (oo o) o1 (if (even? (count o1)) o1 (conj o1 {:obj _err :order (count o1)}))] 
+                                                       (zipmap (collections/evens o1) (collections/odds o1)))
+                    (= open-c \[) o :else (apply list o))) o) ; List is the default if it isn't recognized (i.e. reader macros).
+        ; Apply any macro expansions to o, inside-out. Most convert foo into (symbol foo).
+        blito (reduce (fn [occ sym] (cond
+                                      (= sym `anon-fn) (_unpack-anon-fns occ)
+                                      (= sym `map-ns) (throw (Exception. "TODO for 1.9: Map-namespace syntax."))
+                                      (= sym `regex-literal) (re-pattern occ) 
+                                      :else (list {:obj sym} {:obj occ})))
+                o (reverse (filterv #(not= % `hash-literal) (:symbols rmacro))))]
+    (assoc (if (:rmacro vcode-rm) (assoc vcode-rm :rmacro (:strings (:rmacro vcode-rm))) vcode-rm) :obj blito))) ; store macros as strings 
+(defn vcode-to-blit [vcode]
+  "Lossless conversion from the vcode to the bcode format,
+   the blit format is 1:1 with what (read-string (str [ s newline ])) would do.
+   :rmacro holds the string(s) that this level's reader macro cooresponds to, if there is any.
+     i.e. for :obj = (quote x y) :rmacro would be the string ' (with possible added spaces).
+     It is stored in the outer level. :head still contains the macro strings.
+   :order, holds the order for objects inside sets and maps."
+  (_vcode-to-blit (_meta-pack (_rmacro-extract vcode))))
+(defn reads-string-blit [s] (vcode-to-blit (parse-to-vcode (basic-parse (str "[" s "\n]")))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;; Conversion of the blitted code back to vectorized code ;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn mash-tokens-of-ty [s ty]
+  (let [^ints tty (:token-type (tokenize s)) ty (int ty) n (count s)]
+    (loop [acc [] ix (int 0)]
+      (if (= ix n) (apply str acc)
+        (recur (if (= (aget ^ints tty ix) ty) (conj acc (nth s ix)) acc) (inc ix))))))
+
+(defn blit-to-code [blit]
+  "Converts blitted code to regular code. Useful to check for map duplications."
+  (let [o (:obj blit)] (if (collections/col? o) (collections/cmap :flatten blit-to-code o) o)))
+
+(defn leaf-project [s reader-symbols val]
+  "Projects s to v. v is a non-collection or an open/close parenthesis.
+   reader-symbos is a vector of reader macros that prefix s.
+   v can be a hash-set with one element, the character, to look for opening and closing (),[],{}."
+  (let [^chars cs (.toCharArray (str " " s "\n xyz ")) n (alength ^chars cs)
+        reader-symbols (into [] reader-symbols)
+        end-cl #(min % (- n 6)) ; clamps the ending index, exclusive.
+        ; Use an empty, reader, token, empty pattern:
+        r-ix (dec (space-jump cs 0 n)) ; the reader macro, if any, starts here.
+        r-is-reader? (grammer/creader? (aget ^chars cs (inc r-ix)))
+        t-ix (dec (if r-is-reader? (rmacro-jump cs (inc r-ix) n) (inc r-ix))) ; the token starts here.
+        ix (inc t-ix) ct (aget ^chars cs ix) ; ix is the main (token) starting place on cs.
+        s-ix (dec (cond (grammer/copen? ct) (open-jump cs ix n) (grammer/cclose? ct) (close-jump cs ix n)
+                    (= ct \\) (char-jump cs ix n) (= ct \") (string-jump cs ix n) (= ct \;) (comment-jump cs ix n)
+                    (grammer/cnumber? ct) (num-jump cs ix n)
+                    :else (sym-kwd-jump cs ix n))) ;The start of the empty space, no space, or readermacro.
+        x-ix (dec (space-jump cs (inc s-ix) n)) ; The start of any other crap.
+        thier-stuff-b4-rmacro (collections/sus s 0 (end-cl r-ix))
+        thier-macro-str (collections/sus s r-ix t-ix)
+        thier-macro-syms (:symbols (rmacro-expand thier-macro-str))
+        
+        ; Use thiers unless it's wrong. We could have a more detailed projection but that's such a small improvement in close-to-original-string.
+        r-ending-space (if (and r-is-reader? (not (= thier-macro-syms reader-symbols))) ; salvage this space.
+                         (let [first-space (loop [jx (int (dec ix))] ; first space after the r macro.
+                                             (if (or (< jx 0) (not (grammer/ccom-white? (aget ^chars cs jx)))) (inc jx)
+                                               (recur (dec jx))))] 
+                           (collections/asus cs first-space (end-cl ix))) "")
+        r-macro-str (if (= thier-macro-syms reader-symbols) thier-macro-str
+                      (str (apply str
+                          (mapv #(cond (= %1 'quote) "'" (= % `syntax-quote) "`"
+                                       (= %1 `meta-tag) "^" (= %1 `unquote-splicing) "~@" (= %1 `condition-splicing) "#?@"
+                                       (or (= % `anon-fn) (= % `map-ns) (= % `hash-literal) (= % `regex-literal)) "#" ; there can't be anything after the #.
+                                       (= %1 `read-eval) "#=" (= %1 'var) "#'" (= %1 `deref) "@"
+                                       (= %1 `unquote) (str "~" (if %2 " " "")) (= %1 `condition) (str "#?" (if %2 " " ""))) ; condition probably doesn't need this @ check.
+                            reader-symbols (into [] (map #(= % `deref) (concat (rest reader-symbols) [false]))))) r-ending-space))
+        thier-token-str (collections/sus s t-ix s-ix)
+        token-str (cond (coll? val) (str (first (into [] val))) ; parenthesis ; Equality check:
+                    (= (try (read-string thier-token-str) (catch Exception e (not val))) val) thier-token-str
+                    :else (pr-str val))
+        thier-extra-stuff (collections/sus s (end-cl s-ix) (end-cl x-ix))]
+    (str thier-stuff-b4-rmacro r-macro-str token-str thier-extra-stuff)))
+
+(defn _macro-extract [blit]
+  ":val = what was extracted. :symbols = hirararchy of macro symbols. 
+   Does NOT use the string info except to check for use of :body."
+  (loop [val blit symbols []]
+    (let [o (:obj val)]
+      (cond (set? o) {:val val :symbols (conj symbols `hash-literal)}
+            (instance? java.util.regex.Pattern o) {:val val :symbols (conj symbols `regex-literal)}
+        (not (list? o)) {:val val :symbols symbols} ; only on lists can macros create more levels.
+        (let [o0 (first o) o1e? (= (count (str (:head o0) (:tail o0))) 0)] ; is the first element not a string.
+          (and (= (count o) 2)
+            (or (and o1e? (get #{`map-ns 'var `read-eval 'quote `syntax-quote 
+                                  `meta-tag `deref  `unquote-splicing  `unquote `ignore} (:obj o0))))))
+        (recur (second o) (conj symbols (:obj (first o)))) ; standard-issue macros. 
+        (let [fn-maby (:obj (first o)) %vec-maby (:obj (second o)) body-maby (:obj (second (rest o)))]
+          (and (= (count o) 3)
+            (#(or (= % 'fn) (= % `fn) (= % 'fn*)) fn-maby)
+            (vector? %vec-maby) (not (first (filterv not (mapv #(and (symbol? (:obj %1)) (= (str (:obj %1)) (str "%" %2))) %vec-maby (range 1 1e100)))))
+            (list? body-maby))) ; anon-functions can be a pain.
+        {:val (:obj (nth o 2)) :symbols (conj symbols `anon-fn)} ; Anon-fns are always the deepest in.
+        :else {:val val :symbols symbols}))))
+(defn _vec-and-pullmetamacro [blit]
+  "Makes the blit code's :obj into a vector. Shallow function, does not act recursivly.
+   Projects thier :head's and :tail's of each element of :obj.
+   Also pulls out the element's meta and macros.
+   The blit itself is assumed to have gone through this process. This allows recursive functions:
+     The outer level itself is a vector with no rmacros nesting things, etc, and we apply this fn to it to get it's children that way and so on."
+  (let [ordr #(into [] (sort-by :order (into [] %))) o (:obj blit)
+        ov (cond (vector? o) o (set? o) (ordr (into [] o)) (map? o) (ordr (concat (keys o) (vals o))) (sequential? o) (into [] o)) ; Vector form.
+        ovm (mapv :meta ov)
+        n (count ov) ov-extracts (mapv _macro-extract ov)
+        thier-rmacros (mapv #(mash-tokens-of-ty (if (coll? (:obj %)) (str (:head %)) (str (:head %) (:tail %))) 9) ov)
+        thier-meta-rmacros (mapv #(if (:meta %) (mash-tokens-of-ty (:head (:meta %)) 9) "") ov) ; Includes the ending ^
+        ; Reader macros attached to the metadata will fall onto whatever the metadata is attached to.
+        ; We have to split them back up but only if they actually do agree with the actual object.
+        rmacro-symbols (mapv :symbols ov-extracts) ; The ground-truth what reader macros we have.
+        thier-rmacro-symbols-meta (mapv #(:symbols (rmacro-expand %)) thier-meta-rmacros) ; Two halfs of what may assemble to ground-truth, or may not.
+        thier-rmacro-symbols-not-meta (mapv #(:symbols (rmacro-expand %)) thier-rmacros)
+        macro-agree?s (mapv #(= (into [] (concat %1 %2)) (into [] (concat %3 [`meta-tag]))) ;Do the halfs assemble?
+                         thier-rmacro-symbols-meta thier-rmacro-symbols-not-meta rmacro-symbols)]
+    (assoc blit :obj 
+      (loop [acc [] ix (int 0)]
+        (if (= ix n) acc
+             (let [ovi (nth ov ix) rm-agree? (nth macro-agree?s ix)
+                   ovei (:val (nth ov-extracts ix)) mi (nth ovm ix) c? (coll? (:obj ovei)) ; for not c? it doesn't matter head vs tail.
+                   xi (if c? (cond (vector? (:obj ovei)) [#{\[} #{\]}] (or (map? (:obj ovei)) (set? (:obj ovei))) [#{\{} #{\}}] :else [#{\(} #{\)}]))
+                   rm-syms (nth rmacro-symbols ix) ; Reader macros applying to us, including the metadata.
+                   ; rm-agree means (concat thier-rmacro-symbols-meta[ix] thier-rmacro-symbols-not-meta[ix]) = rmacro-symbols[ix]
+                   ;   which means we should use the :head's to divide up which reader-macros were attached to the meta vs the main token.
+                   ;   If it disagrees we will default and attach all the reader-macros to the main token except the ^.
+                   rm-syms (if rm-agree? (nth thier-rmacro-symbols-not-meta ix) (nth rmacro-symbols ix)) ; These don't go on b4 meta symbol.
+                   rm-syms-meta (if rm-agree? (nth thier-rmacro-symbols-meta ix) [`meta-tag]) ; These do.
+                   h (if c? (leaf-project (:head ovi) rm-syms (first xi)) "") ; head and tail.
+                   t (if c? (leaf-project (:tail ovi) [] (second xi)) (leaf-project (str (:head ovi) (:tail ovi)) rm-syms (:obj ovei)))
+                   short-hand-meta? (and (map? (:obj mi)) (= (mapv :obj (keys (:obj mi))) [:tag]) 
+                                     (= (count (mash-tokens-of-ty (str (:head mi) (:tail mi)) 6)) 0)) ; The shortcut is both requested and legal.
+                   mo (if mi (if short-hand-meta? (:obj (get (:obj mi) {:obj :tag})) (:obj mi)))
+                   hm (if mi (if short-hand-meta? (leaf-project (str (:head mi) (:tail mi)) rm-syms-meta mo)
+                               (leaf-project (str (:head mi)) rm-syms-meta #{\{})))
+                   tm (if mi (if short-hand-meta? "" 
+                               (leaf-project (str (:tail mi)) [] #{\}})))
+                   clean #(if (map? %) (dissoc % :rmacro :meta :order) (throw (Exception. (str "Not a map:" %))))
+                   add-this (clean {:head h :tail t :obj (:obj ovei)})]
+               (if mi (recur (conj acc (clean {:head hm :tail tm :obj mo}) add-this) (inc ix))
+                 (recur (conj acc add-this) (inc ix)))))))))
+
+(defn _begin-power [s]
+  "How powerful the beginning is at isolating s.
+   -1 (end only) = ends in a comment. 0 = none at all. 1 = no space. 2 (beginning only) = built in newline."
+  (let [tok (tokenize s) ^ints ty (:token-type tok) ^chars cs (:chars tok) n (count s)]
+    (loop [ix (int 0)]
+      (if (= ix n) 0 ; off-the-end never should happen for normal code.
+        (let [t (aget ^ints ty ix) c (aget ^chars cs ix) oa? (or (= t 0) (= t 8))]
+          (cond (and oa? (= c \newline)) 2 ; newline is awesome.
+            (not oa?) (if (or (grammer/copen? c) (grammer/cclose? c) (= c \") (> ix 0)) 1 0) ; Started the token.
+            :else (recur (inc ix))))))))
+(defn _end-power [s] ; and the end. Isolation depends on the end + the next beginning bieng isolating enough.
+  (if (nil? s) (throw (Exception. "Null string given.")))
+  (let [tok (tokenize s) ^ints ty (:token-type tok) ^chars cs (:chars tok) n (count s)]
+    (loop [ix (int (dec n))]
+      (if (= ix -1) 0 ; off-the-end never should happen for normal code.
+        (let [t (aget ^ints ty ix) c (aget ^chars cs ix) oa? (or (= t 0) (= t 8))]
+          (cond (or (= c \newline) (and oa? (grammer/ccom-white? c))) 1
+            (and (= t 8) (not= c \newline)) -1 ; Comment entered b4 newline.
+            (not oa?) (if (or (grammer/copen? c) (grammer/cclose? c) (= c \")) 1 0)
+            :else (recur (dec ix))))))))
+(defn _vcode-prevent-smash [vcode]
+  "Ensures that the pieces of vcode do not intefere with eachother. Acts recursivly.
+   The two main sources of inteference is not having a space when it is nessessary and "
+  (let [v? (vector? (:obj vcode))] 
+    (if v?
+      (let [o (mapv _vcode-prevent-smash (:obj vcode))
+        
+            gh (fn [oi] (str (:head oi) (if (vector? (:obj oi)) "" (:tail oi))))
+            gt (fn [oi] (str (if (vector? (:obj oi)) "" (:head oi)) (:tail oi)))
+
+            ; Any children that are collections: the stuff inside is irrelevent.
+            bp (mapv #(_begin-power (gh %)) o) ep (mapv #(_end-power (gt %)) o)
+
+            sp (fn [end-s next-begin-s]  ; calculates the space fn.
+                 (let [endp (_end-power end-s) next-beginp (_begin-power next-begin-s)]
+                   (if (>= (+ endp next-beginp) 1) "" (if (= endp -1) "\n" " "))))
+
+            ; Children-children collision prevention:
+            spacers (conj (mapv sp (butlast (mapv gh o)) (rest (mapv gt o))) "") ; Spacers go after the tails.
+            o (mapv #(assoc %1 :tail (str (:tail %1) %2)) o spacers)
+            ;v?s (mapv #(vector? (:obj %)) o)
+            
+            v1? (and v? (> (count o) 0)) ; if v1? head-first child and last-child-tail, else head-tail collision prvention.
+            head (if v1? (str (:head vcode) (sp (:head vcode) (gh (first o)))) (:head vcode))
+            tail (if v1? (str (sp (gt (last o)) (:tail vcode)) (:tail vcode)) (str (sp (:head vcode) (:tail vcode)) (:tail vcode)))]
+        (assoc vcode :obj o :head head :tail tail)) vcode)))
+(defn _naive-str [vcode]
+  (let [o (:obj vcode)]
+    (str (apply str (:head vcode) (if (vector? o) (mapv _naive-str o) [])) (:tail vcode))))
+
+(defn blit-to-vcode [blit]
+  "Should be the perfect inverse of vcode-to-blit.
+   In addition it does a macro projection step."
+  (if (coll? (:obj blit))
+    (let [vb (_vec-and-pullmetamacro blit)]
+      (update vb :obj #(mapv blit-to-vcode %))) blit))
+
+(defn _vcode-to-str [vcode]
+  "Converts to a string. Beware: the leaf objects should already have been projected (but it projects away squashed tokens and collisions)."
+  (let [vcode1 (_vcode-prevent-smash vcode) out (_naive-str vcode1)]
+    (collections/sus out 1 (- (count out) 2)))) ; remove the head [ and tail \n]
+
+(defn blit-to-str [blit]
+  "Converts the blitcode to a string. Extracts metadata and reader macros.
+   Projects the result so that it resembles the string demarcated by :head and :tail but
+   also produces code equal to the value of :obj. For any VALID .clj source string,
+   (blit-to-str (str-to-blit s)) = s (unless there are bugs!)."
+  (_vcode-to-str (blit-to-vcode blit)))
+
+(defn blit-project [blit]
+  "Keeps as much of the original string as possible but keeping the meaning that of the new code."
+  (reads-string-blit (blit-to-str blit)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;; Pretty printing functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn newline-parse [s]
+  "Same as basic-parse but adds the :breakable [I:
+     0 = illegal OR unnessessary places to replace a space with a newline.
+     1 = optional, for example for foo bar it would be the space in between.
+     2 = manditory (wherever s has new-lines and we are leaving a comment or in a string)."
+  (let [n (count s) p (basic-parse s) 
+        ^chars cs (:chars p)
+        ^ints breakable (make-array Integer/TYPE n)
+        ^ints token-ty (:token-type p)]
+    ; Set breakable => 1 whenever it's whitespace without macro bridges or in a string/comment/etc
+    (loop [ix 0]
+      (if (= ix n) "done with breakable"
+        (do (if (and (grammer/ccom-white? (aget ^chars cs ix)) ; whitespace (includes commas).
+                     (= (aget ^ints token-ty ix) 0)) ; not in a token (includes strings and comments).
+              (aset ^ints breakable ix 1))
+          (recur (inc ix)))))
+    ; Set breakable to 2 at the \n at the end of each comment :
+    (loop [ix 1]
+      (if (>= ix n) "Done with comment and string-forcings"
+         (do (if (and (= (aget ^chars cs ix) \newline) ; newline.
+                   (or (= (aget ^ints token-ty (dec ix)) 8) ; ending a comment.
+                       (= (aget ^ints token-ty ix) 3))) ; in a string.
+               (aset ^ints breakable ix (int 2))) (recur (inc ix)))))
+    (assoc p :breakable breakable)))
+
+(defn _vcode-decrowd [vcode]
+  (let [b #(str (:head %) (:body %) (:tail %)) o (:obj vcode)
+        sp-start? (fn [oi] (if (coll? (:obj oi)) (grammer/ccom-white? (first (:head oi))) (grammer/ccom-white? (first (b oi)))))
+        sp-end? (fn [oi] (if (coll? (:obj oi)) (grammer/ccom-white? (last (:tail oi))) (grammer/ccom-white? (last (b oi)))))]
+    (if (coll? o)
+      (let [o (mapv _vcode-decrowd o) ; recursive.
+            sp-start?s (mapv sp-start? o) sp-end?s (mapv sp-end? o) n (count sp-start?s)
+            add-space?s (conj (mapv #(and (not (nth sp-start?s (inc %))) (not (nth sp-end?s %))) (range (dec n))) false) ; at the end.
+            add-end-sp (fn [oi] (if (coll? (:obj oi))
+                                    (update oi :tail #(str % " ")) 
+                                    (assoc oi :head "" :tail "" :body (str (:head oi) (:body oi) (:tail oi) " "))))]
+        (assoc vcode :obj (mapv #(if %2 (add-end-sp %1) %1) o add-space?s))) vcode)))
+(defn blit-decrowd [blit]
+  "Ensures that there is at least one space, comma, etc between adjacent elements in a collection.
+   Valid code should stay valid. Only adds spaces, does not remove spaces."
+  (vcode-to-blit (_vcode-decrowd (blit-to-vcode blit))))
+
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;; Testing functions ;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn jtest [s ix0 f]
+  "Tests jumping. The |'s seperate the string.
+   ix0 should be set so that the token starts at the char AFTER the first bar.
+   f is the xyz-jump function that matches the token starting at ix0.
+   the token should end right BEFORE the second bar. 
+   Thus the bars contain the token but nothing more."
+  (let [x (f (.toCharArray s) ix0 (count s))]
+    (str (collections/sus s 0 ix0) "|" (collections/sus s ix0 x) "|" (collections/sus s x))))
+
+(defn basic-parse-test [s] ; (do (clc) (blitcode/basic-parse-test "foo"))
+  "Tests the arrays created by (basic-parse s)."
+  (let [parse (dissoc (basic-parse s) :chars) ks (keys parse)
+        n (count s)
+        nis (fn [c] (if (= (count c) (inc n)) "" "  ")) ; Interstitial offset.
+        pd (fn [c] (apply str (mapv #(if (number? %) (format " %02d" %) (collections/sus (str %) 0 3)) (into [] c)))) ; always 3 chars long.
+        sts (apply str (mapv #(cond (= % \formfeed) "\\F " (= % \return) "\\r " 
+                    (= % \newline) "\\n " (= % \tab) "\\t " (= % \ ) "   "
+                    :else (str " " % " ")) s))
+        n-ky (apply max (mapv #(count (str %)) ks)) _ps (apply str (repeat n-ky " "))
+        ks-pad (mapv #(subs (str % _ps) 0 n-ky) ks)]
+    (apply str (butlast (apply str _ps "   " sts "\n" (mapv #(str %2 (nis (get parse %1)) (pd (get parse %1)) "\n") ks ks-pad))))))
+
+(defn _ob-last [x] (if (nil? (:obj x)) x (assoc (dissoc x :obj) :obj (if (coll? (:obj x)) (collections/cmap :flatten _ob-last (:obj x)) (:obj x)))))
+
+(defn vcode-test [s & r-extract] ; (do (clc) (blitcode/vcode-test "foo bar"))
+  "Shows the tree of (vcode s) in a simple indented form (uses pprint does not use indent.clj circular dependency issue)."
+  (let [vcode (reads-string-vcode s)]
+    (println (str "[" s "\n]"))
+    (pprint/pprint (_ob-last ((if (first r-extract) _rmacro-extract identity) vcode)))))
+
+(defn blit-test [s] ; (do (clc) (blitcode/bcode-test "foo bar"))
+  "Shows the tree of (vcode s) in a simple indented form (uses pprint does not use indent.clj circular dependency issue)."
+  (let [bcode (reads-string-blit s)]
+    (println (str "[" s "\n]"))
+    (pprint/pprint (_ob-last bcode))))
+
+(defn going-back-test 
+  "Can we go from s to vcode to bcode back to vcode. 
+   You can add a function that changes the blitted code to test the projection at off-manifold points.
+   collections/updayte-in et al are useful to work with short lists."
+  ([s] (going-back-test s nil))
+  ([s mod-f] ; (do (clc) (blitcode/going-back-test "foo bar"))
+    (let [vcode (reads-string-vcode s)
+          bcode (reads-string-blit s) 
+          bcode1 (try (if (nil? mod-f) bcode (mod-f bcode)) 
+                   (catch Exception e (throw (Exception. (str "Error with user function " (.getMessage e))))))
+          vcode1 (blit-to-vcode bcode1)
+          s1 (_vcode-to-str vcode1)]
+      (println "STRING:")
+      (println s)
+      (println "VCODE:")
+      (pprint/pprint (_ob-last vcode))
+      (println "BCODE:")
+      (pprint/pprint (_ob-last bcode))
+      (if mod-f (do (println "BCODE (after custom function acts on it):") (pprint/pprint bcode1)))
+      (println "VCODE: (after conversion, leaf-level strings maby shuffled head<->tail):")
+      (pprint/pprint (_ob-last vcode1))
+      (println "STRING (after the round-trip):")
+      (println s1))))

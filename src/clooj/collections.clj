@@ -260,6 +260,23 @@
    Handles all clojure collections (but isn't lazy)."
     (_paths-walked [] t []))
 
+(defn sus 
+  "Like subs but does not throw an error for out of bounds. 
+  Instead, indexes are clamped to the bounds."
+  ([s lo]
+    (sus s lo (count s)))
+  ([s lo hi]
+    (let [lo_ (min (max 0 lo) (count s)) hi_ (min (max 0 hi) (count s))]
+      (if (< lo_ hi_)
+        (subs s lo_ hi_) ""))))
+
+(defn asus [^chars cs lo hi]
+  "Array to string like sus. Clamps to the end of the array instead of throwing errors.
+   hi must always be specified, use a large value to go all the way to the end."
+  (let [n (alength ^chars cs)]
+    (if (= n 0) "" ; woops.
+      (apply str (mapv #(aget ^chars cs %) (range (max lo 0) (min hi n)))))))
+
 ; These simple functions come up a lot, because of let statements, etc:
 (defn evens [coll] (take-nth 2 coll)) 
 (defn odds [coll] (take-nth 2 (rest coll)))

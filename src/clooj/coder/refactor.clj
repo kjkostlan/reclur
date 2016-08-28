@@ -5,6 +5,7 @@
   (require [clooj.coder.grammer :as grammer]
            [clooj.coder.repl :as repl]
            [clojure.walk :as walk]
+           [clooj.coder.indent :as indent]
            [clooj.coder.blitcode :as blitcode]
            [clooj.collections :as collections]
            [clooj.coder.debugger :as debugger]))
@@ -72,7 +73,7 @@
 ; Test functions and cases:
 (defn pr0 [x] (repl/previty x))
 (defn prp [x] (repl/previty (walk/macroexpand-all x)))
-(defn prp0 [x] (println (repl/indent (walk/macroexpand-all x))))
+(defn prp0 [x] (println (indent/indent (walk/macroexpand-all x))))
 
 (def s-test0 "(ns foo.bar) (def x 1) (def y 2) (def z 3)")
 
@@ -83,7 +84,7 @@
 ;(println (str "Conversion test: \n" s "\n" (code2str (str2code s)))) ; using str prevents extra spaces.
 
 
-;(repl/pr-err (prp '(add-statement s '(+ 1 2))))
+(repl/pr-err (prp '(add-statement s '(+ 1 2))))
 (def ns-this *ns*)
 (defn test101 [] (binding [*ns* ns-this] (repl/pr-err (prp '(add-statement s '(+ 1 2))))))
 
@@ -111,7 +112,6 @@
       [c] [true])] (code2str c1))
 
 )
-;(repl/pr-err (test-code-that-is-generated))
 
 
 ;(prp '(ensure-require simple-code 'added.ns 'addns))
