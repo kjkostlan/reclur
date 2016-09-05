@@ -243,7 +243,6 @@
   ([code nms qualify-stuff-in-quotes?]
     (_with-locals #(_qualify-in-leaf %1 nms %2) code #{} (not qualify-stuff-in-quotes?))))
 
-
 (defn code-to-str [c]
   "Code to string that preserves all metadata."
   (binding [*print-meta* true] (pr-str c)))
@@ -278,9 +277,10 @@
 (def ^ints sym-kwd-start
   "Whether the character, as an int, can start either a symbol or a keyword.
    Add a check for : to differentiate keyword and symbol starts.
-   Cast the chars to ints (casting is cheap)."
+   Cast the chars to ints (casting is cheap).
+   Includes / but for division but that can only be a symbol that standa alone."
   (let [^ints outs (make-array Integer/TYPE 65536)
-        valid "-=qwertyuiopasdfghjklzxcvbnm!$%&*_+QWERTYUIOP|ASDFGHJKL:ZXCVBNM<>?"
+        valid "-=qwertyuiopasdfghjklzxcvbnm./!$%&*_+QWERTYUIOP|ASDFGHJKL:ZXCVBNM<>?"
         n (count valid) i1 (int 1)] ; having fun with a tiny performace challange that isn't too important.
     (loop [ix (int 0)]
       (if (= ix n) outs

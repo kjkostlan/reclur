@@ -95,26 +95,32 @@
           (update-cached-string!!)))))
 (alter-var-root (var *out*) (fn [_] out-writer)) ; Dangerous alter-var-roots of the printing functions:
 
-(defn eval!! [cmd]
-   "Evaluate cmd (a string) in our repl-ns, returning the result.
-    Returns a vector with a header iff there are multible commands, otherwise just returns the command.
-    Does not catch errors."
-  (binding-wrap @bindings
-    (let [codes (read-string (str "[" cmd "]"))
-          results (mapv eval codes) nr (count results)]
-      (reset! bindings (get-bindings)) ; the eval may have changed the results.
-      (cond (= nr 0) [] ; can this ever happen?
-            (= nr 1) (first results)
-            :else (apply list (concat ["Multible commands:    "] (interpose "    " results)))))))
 
 (defmacro undef [var]
   "Undefines a variable. e.g. (undef foo) no quotes on foo as we are a macro."
   `(ns-unmap repl-ns (quote ~var)))
 
-(defn err-report [e]
-  "A string form that also gives stack info. (str exception) does not have stack info."
-  (apply str (str (.getMessage e) " (" (last (string/split (str (type e)) #"\.")) ")") "\n" 
-    (interpose "\n" (mapv str (.getStackTrace e)))))
+(defn err-report
+  "A string form that also gives stack info (stack info can be disabled by passing in false)."
+  ([e] (err-report e false))
+  ([e short?]
+    (apply str (str (.getMessage e) " (" (last (string/split (str (type e)) #"\.")) ")") "\n" 
+      (if short? [] 
+        (let [trace (mapv str (.getStackTrace e))]
+          (interpose "\n" (take-while #(not (.startsWith % "clooj.coder.repl$eval_BANG__BANG_.invoke")) trace)))))))
+      
+(defn eval!! [cmd]
+   "Evaluate cmd (a string) in our repl-ns, returning the result.
+    Returns a vector with a header iff there are multible commands, otherwise just returns the command.
+    Does not catch errors."
+  (binding-wrap @bindings
+    (let [codes (try (read-string (str "[" cmd "\n]")) (catch Exception e e))
+          results (if (vector? codes) (mapv eval codes) [(str "Syntax error: " (err-report codes true))])
+          nr (count results)]
+      (reset! bindings (get-bindings)) ; the eval may have changed the results.
+      (cond (= nr 0) [] ; can this ever happen?
+            (= nr 1) (first results)
+            :else (apply list (concat ["Multible commands:    "] (interpose "    " results)))))))
 
 ;;;;;;;;;; Simple debugging functions ;;;;;;;;;;
 ; How to use machine lerarning to not have to fish and slow down version 4.

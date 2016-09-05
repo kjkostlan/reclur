@@ -11,7 +11,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn space-jump [^chars cs ix0 n]
-  ; Returns the end of empty space (if ix0 is not
+  ; Returns the index after the end of empty space (if ix0 is not
   ; in empty space it returns ix0).
   (loop [ix (int ix0)]
     (if (>= ix (int n)) ix
@@ -49,7 +49,8 @@
     ;["\\backspace" "\\tab" "\\newline" "\\formfeed" "\\return" "\\space"]
   (let [^char c1 (if (< ix0 (- n 1)) (aget ^chars cs (+ ix0 1)) \x)
         ^char c2 (if (< ix0 (- n 2)) (aget ^chars cs (+ ix0 2)) \x)]
-    (cond (and (= c1 \b) (= c2 \a)) 
+    (min n 
+      (cond (and (= c1 \b) (= c2 \a)) 
                     (+ ix0 10) ;\backspace
           (= c2 \a) (+ ix0  4) ;\tab
           (and (= c1 \n) (= c2 \e)) 
@@ -58,7 +59,7 @@
           (= c2 \e) (+ ix0  7) ;\return
           (= c2 \p) (+ ix0  6) ;\space
           :else     (+ ix0  2) ;\1,\x,...
-    )))
+    ))))
 ; nil, booleans, keywords: uses the symbol jumper at the top.
 
 (defn open-jump [^chars cs ix0 n] (inc ix0)) ; lists vectors and maps.
@@ -83,7 +84,7 @@
         (if (and (> ix 0) (= (aget ^chars cs (dec ix)) \#) ;The # dispatches:
               (or (= c \:) (= c \_) (= c \?) (= c \!) (= c \<))) (recur (inc ix))
               ; the start of a collection, keyword, string, token, or number:
-          (if (or (grammer/copen? c) (= (aget ^ints grammer/sym-kwd-start (int c)) 1) (grammer/cnumber? c) (= c \")) ix 
+          (if (or (grammer/copen? c) (= (aget ^ints grammer/sym-kwd-start (int c)) 1) (grammer/cnumber? c) (= c \") (= c \\)) ix 
             (if (= c \;) (recur (comment-jump cs ix n)) ; Comments splitting between a ' and xyz, very rare case!
               (recur (inc ix)))))))))
 
@@ -131,30 +132,35 @@
            (recur nx (inc tix)))))))
 
 (defn basic-parse [s]
-  "Tokenizes + adds a :inter-depth field.
+  "Tokenizes + adds an :inter-depth and :inter-depth-no-rmacro field.
    inter-depth is interstitial: it has one more element than (count s)
      and the i'th element is the depth of a cursor between the i-1'th and i'th char.
    The depth includes any macro characters in as part of the () they are attached to.
-   About 40 ns/char for a 5kb string."
+   :inter-depth-no-rmacro like inter-depth but does not include the reader macros
+   About 50 ns/char for a 5kb string."
   (let [tk (tokenize s) ^chars cs (:chars tk) n (count cs)
         ^ints ty (:token-type tk) ^ints tix (:token-index tk)
-        ^ints inter-depth (make-array Integer/TYPE (inc n))]
+        ^ints inter-depth (make-array Integer/TYPE (inc n))
+        ^ints inter-depth-no-rmacro (make-array Integer/TYPE (inc n))]
     ; Depth field: counting paranethesis.
     (loop [ix (int 0) l (int 0)]
       (if (< ix n)
         (let [ti (aget ^ints ty ix)
               ; open and closing syntax is only one level (we haven't yet added macros):
               l1 (int (if (= ti 6) (inc l) (if (= ti 7) (max (dec l) 0) l)))] 
-          (aset ^ints inter-depth (inc ix) l1) ; the decrement is delayed one char.
+          (aset ^ints inter-depth-no-rmacro (inc ix) l1) ; the decrement is delayed one char.
           (recur (inc ix) l1))))
+    (loop [ix (int 0)] ; Array copy step.
+      (if (<= ix n) (do (aset ^ints inter-depth ix (aget ^ints inter-depth-no-rmacro ix)) (recur (inc ix)))))
     ; Add 1 for reader-macros before an indent, including hash-sets.
-    (loop [ix (int (dec n)) d (int (aget ^ints inter-depth ix))] ; backwards.
-      (if (>= ix 0)        ;d is what depth a reader macro here would do.
-        (let [ti (aget ^ints ty ix)]
-          (if (= ti 9) (aset ^ints inter-depth (inc ix) (int d)))
-          (recur (dec ix) (if (= ti 6) (aget ^ints inter-depth (inc ix)) ; depth after the open (
-                            (if (not= ti 9) (aget ^ints inter-depth ix) (int d))))))) ; depth here if not 9
-    (assoc tk :inter-depth inter-depth)))
+    (if (> n 0)
+      (loop [ix (int (dec n)) d (int (aget ^ints inter-depth (int (dec n))))] ; backwards.
+        (if (>= ix 0)        ;d is what depth a reader macro here would do.
+          (let [ti (aget ^ints ty ix)]
+            (if (= ti 9) (aset ^ints inter-depth (inc ix) (int d)))
+            (recur (dec ix) (if (= ti 6) (aget ^ints inter-depth (inc ix)) ; depth after the open (
+                              (if (not= ti 9) (aget ^ints inter-depth ix) (int d)))))))) ; depth here if not 9
+    (assoc tk :inter-depth inter-depth :inter-depth-no-rmacro inter-depth-no-rmacro)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;; The vectorizer which takes parse-arrays and makes a recursive, vector form.
@@ -365,6 +371,15 @@
 ;;;;;;;;;;;;;; Conversion of the blitted code back to vectorized code ;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defn break-up-by-token [s ^ints token-index]
+  "Breaks up the cs array into an array of tokens given token-index."
+  (let [n (alength ^ints token-index)
+        breaks (loop [acc [0] ix (int 0) tx (int (if (= n 0) 0 (aget ^ints token-index (int 0))))]
+                 (if (= ix n) (conj acc n)
+                   (let [ti (aget ^ints token-index ix)]
+                     (recur (if (> ti tx) (conj acc ix) acc) (inc ix) ti))))]
+    (if (= n 0) [] (mapv #(subs s %1 %2) breaks (rest breaks)))))
+
 (defn mash-tokens-of-ty [s ty]
   (let [^ints tty (:token-type (tokenize s)) ty (int ty) n (count s)]
     (loop [acc [] ix (int 0)]
@@ -375,68 +390,75 @@
   "Converts blitted code to regular code. Useful to check for map duplications."
   (let [o (:obj blit)] (if (collections/col? o) (collections/cmap :flatten blit-to-code o) o)))
 
+(defn _comment-space-jump [^chars cs ix0 n]
+  (if (= (aget ^chars cs ix0) \;)
+    (comment-jump cs ix0 n) (space-jump cs ix0 n)))
+
+
+(def _sym2mstr {`syntax-quote "`" `meta-tag "^" `anon-fn "#" `read-eval "#=" `condition "#?"
+                 `ignore "#_" `map-ns "#" `condition-splicing "#?@" `hash-literal "#" `regex-literal "#"
+                 'quote "'" `unquote "~" `unquote-splicing "~@" `deref "@"})
+(defn _mreader-str-proj [r reader-symbols]
+  "Projects r onto the space of reader-macros. Does not include the last ("
+  (let [x (rmacro-expand r) st (:strings x) sy (:symbols x)]
+    (if (= sy reader-symbols) r ; It agrees with the expansion. No change needed.
+      ; Pointwise substitute projection:
+      (let [out-pieces (mapv #(if (= (get sy %) (nth reader-symbols %)) (nth st %) 
+                                (get _sym2mstr (nth reader-symbols %))) (range (count reader-symbols)))
+            ; An unquote and deref is not an unquoute splice:
+            out-pieces (mapv #(let [bump? (and (not (grammer/ccom-white? (last %1))) (not (grammer/ccom-white? (first %2)))) ; no space inbetween.
+                                    pair? (or (and (= %3 `unquote) (= %4 `deref)) (and (= %3 `condition) (= %4 `deref)))] ; A pairing that can fuse.
+                                (if (and bump? pair?) (str %1 " ") %1)) 
+                        out-pieces (concat (rest out-pieces) [""] ) reader-symbols (concat (rest reader-symbols) ['xyz]))]
+        (apply str out-pieces)))))
 (defn leaf-project [s reader-symbols val]
-  "Projects s to v. v is a non-collection or an open/close parenthesis.
+  "Projects s to v. S is a leaf string OR the opening (INCLUDING the reader-macro chars) or closing of the reader-symbols.
+   v is a non-collection or a hash-set with a single open/close character.
    reader-symbos is a vector of reader macros that prefix s.
    v can be a hash-set with one element, the character, to look for opening and closing (),[],{}."
-  (let [^chars cs (.toCharArray (str " " s "\n xyz ")) n (alength ^chars cs)
-        reader-symbols (into [] reader-symbols)
-        end-cl #(min % (- n 6)) ; clamps the ending index, exclusive.
-        ; Use an empty, reader, token, empty pattern:
-        r-ix (dec (space-jump cs 0 n)) ; the reader macro, if any, starts here.
-        r-is-reader? (grammer/creader? (aget ^chars cs (inc r-ix)))
-        t-ix (dec (if r-is-reader? (rmacro-jump cs (inc r-ix) n) (inc r-ix))) ; the token starts here.
-        ix (inc t-ix) ct (aget ^chars cs ix) ; ix is the main (token) starting place on cs.
-        s-ix (dec (cond (grammer/copen? ct) (open-jump cs ix n) (grammer/cclose? ct) (close-jump cs ix n)
-                    (= ct \\) (char-jump cs ix n) (= ct \") (string-jump cs ix n) (= ct \;) (comment-jump cs ix n)
-                    (grammer/cnumber? ct) (num-jump cs ix n)
-                    :else (sym-kwd-jump cs ix n))) ;The start of the empty space, no space, or readermacro.
-        x-ix (dec (space-jump cs (inc s-ix) n)) ; The start of any other crap.
-        thier-stuff-b4-rmacro (collections/sus s 0 (end-cl r-ix))
-        thier-macro-str (collections/sus s r-ix t-ix)
-        thier-macro-syms (:symbols (rmacro-expand thier-macro-str))
-        
-        ; Use thiers unless it's wrong. We could have a more detailed projection but that's such a small improvement in close-to-original-string.
-        r-ending-space (if (and r-is-reader? (not (= thier-macro-syms reader-symbols))) ; salvage this space.
-                         (let [first-space (loop [jx (int (dec ix))] ; first space after the r macro.
-                                             (if (or (< jx 0) (not (grammer/ccom-white? (aget ^chars cs jx)))) (inc jx)
-                                               (recur (dec jx))))] 
-                           (collections/asus cs first-space (end-cl ix))) "")
-        r-macro-str (if (= thier-macro-syms reader-symbols) thier-macro-str
-                      (str (apply str
-                          (mapv #(cond (= %1 'quote) "'" (= % `syntax-quote) "`"
-                                       (= %1 `meta-tag) "^" (= %1 `unquote-splicing) "~@" (= %1 `condition-splicing) "#?@"
-                                       (or (= % `anon-fn) (= % `map-ns) (= % `hash-literal) (= % `regex-literal)) "#" ; there can't be anything after the #.
-                                       (= %1 `read-eval) "#=" (= %1 'var) "#'" (= %1 `deref) "@"
-                                       (= %1 `unquote) (str "~" (if %2 " " "")) (= %1 `condition) (str "#?" (if %2 " " ""))) ; condition probably doesn't need this @ check.
-                            reader-symbols (into [] (map #(= % `deref) (concat (rest reader-symbols) [false]))))) r-ending-space))
-        thier-token-str (collections/sus s t-ix s-ix)
-        token-str (cond (coll? val) (str (first (into [] val))) ; parenthesis ; Equality check:
-                    (= (try (read-string thier-token-str) (catch Exception e (not val))) val) thier-token-str
-                    :else (pr-str val))
-        thier-extra-stuff (collections/sus s (end-cl s-ix) (end-cl x-ix))]
-    (str thier-stuff-b4-rmacro r-macro-str token-str thier-extra-stuff)))
+  (let [p (tokenize s) ^chars cs (:chars p)
+        ^ints ty (:token-type p) ^ints tix (:token-index p) n (alength ^ints ty)
+        tokens (break-up-by-token s tix) nt (count tokens)
+        token-types (loop [acc (into [] (repeat nt 0)) ix (int 0)]
+                      (if (= ix n) acc
+                        (recur (assoc acc (aget ^ints tix ix) (aget ^ints ty ix)) (inc ix))))
+        ; space/comment, reader, object, space/comment 
+        x (loop [ix (int 0) sp0 [] r [] o [] sp1 []] ; vectors of strings.
+            (if (= ix nt) {:sp0 (apply str sp0) :r (apply str r) :o (apply str o) :sp1 (apply str sp1)}
+              (let [t (nth tokens ix) y (nth token-types ix) ysp? (or (= y 0) (= y 8)) f0 (and (= r []) (= o []))]
+                (recur (inc ix) (if (and ysp? f0) (conj sp0 t) sp0)
+                  (if (= y 9) (conj r t) r) (if (and (not= y 9) (not ysp?)) (conj o t) o)
+                  (if (and ysp? (not f0)) (conj sp1 t) sp1)))))
+        ; Always false when it an an open or closing char, but that spurious error is OK:
+        val=? (= val (try (first (read-string (str "[ " (:o x) "\n]"))) (catch Exception e e))) ; 1 not= 1.0 (different types), but 1.0 = 1.00 = 1.0e0 even thoug diff strings.
+        val-str (cond (= val #{\(}) "(" (= val #{\[}) "[" (= val #{\{}) "{"
+                      (= val #{\)}) ")" (= val #{\]}) "]" (= val #{\}}) "}" :else val)]
+   (str (:sp0 x) (_mreader-str-proj (:r x) reader-symbols) (if val=? (:o x) val-str) (:sp1 x))))
 
 (defn _macro-extract [blit]
   ":val = what was extracted. :symbols = hirararchy of macro symbols. 
    Does NOT use the string info except to check for use of :body."
   (loop [val blit symbols []]
     (let [o (:obj val)]
-      (cond (set? o) {:val val :symbols (conj symbols `hash-literal)}
+      (cond (set? o) {:val val :symbols (conj symbols `hash-literal)} ; macros that don't really ever expand.
             (instance? java.util.regex.Pattern o) {:val val :symbols (conj symbols `regex-literal)}
         (not (list? o)) {:val val :symbols symbols} ; only on lists can macros create more levels.
-        (let [o0 (first o) o1e? (= (count (str (:head o0) (:tail o0))) 0)] ; is the first element not a string.
-          (and (= (count o) 2)
-            (or (and o1e? (get #{`map-ns 'var `read-eval 'quote `syntax-quote 
-                                  `meta-tag `deref  `unquote-splicing  `unquote `ignore} (:obj o0))))))
-        (recur (second o) (conj symbols (:obj (first o)))) ; standard-issue macros. 
-        (let [fn-maby (:obj (first o)) %vec-maby (:obj (second o)) body-maby (:obj (second (rest o)))]
-          (and (= (count o) 3)
-            (#(or (= % 'fn) (= % `fn) (= % 'fn*)) fn-maby)
-            (vector? %vec-maby) (not (first (filterv not (mapv #(and (symbol? (:obj %1)) (= (str (:obj %1)) (str "%" %2))) %vec-maby (range 1 1e100)))))
-            (list? body-maby))) ; anon-functions can be a pain.
-        {:val (:obj (nth o 2)) :symbols (conj symbols `anon-fn)} ; Anon-fns are always the deepest in.
-        :else {:val val :symbols symbols}))))
+        :else ; lists, which can be reader-expansions of something.
+        (let [o0 (first o) o1e? (= (count (str (:head o0) (:tail o0))) 0)] ; no :head and :tail => reader macro.
+          (cond ; Only apply the reader macro if it is valid to do so AND we want to.
+            (not o1e?) {:val val :symbols symbols}; stuff in the :head or :tail => we don't want a reader macro.
+            (and (= (count o) 2)
+              (get #{`map-ns 'var `read-eval 'quote `syntax-quote `meta-tag `deref  `unquote-splicing  `unquote `ignore} (:obj o0)))
+            (recur (second o) (conj symbols (:obj (first o)))) ; standard-issue macros.
+            (let [fn-maby (:obj (first o)) %vec-maby (:obj (second o)) body-maby (:obj (second (rest o)))
+                  %vec-check (if (vector? %vec-maby) (mapv #(and (symbol? (:obj %1)) (= (str (:obj %1)) (str "%" %2))) %vec-maby (range 1 1e100)))]
+              (and (= (count o) 3)
+                (#(or (= % 'fn) (= % `fn) (= % 'fn*)) fn-maby)
+                (vector? %vec-maby) (= (count (filterv not %vec-check)) 0)
+                (list? body-maby))) ; anon-functions can be a pain.
+             {:val (nth o 2) :symbols (conj symbols `anon-fn)} ; Don't recur, Anon-fns are always the deepest in.
+             :else {:val val :symbols symbols})))))) ; failed to ger a macro.
+
 (defn _vec-and-pullmetamacro [blit]
   "Makes the blit code's :obj into a vector. Shallow function, does not act recursivly.
    Projects thier :head's and :tail's of each element of :obj.
@@ -508,19 +530,19 @@
   (let [v? (vector? (:obj vcode))] 
     (if v?
       (let [o (mapv _vcode-prevent-smash (:obj vcode))
-        
+            ; Gets the head and tail pieces:
             gh (fn [oi] (str (:head oi) (if (vector? (:obj oi)) "" (:tail oi))))
             gt (fn [oi] (str (if (vector? (:obj oi)) "" (:head oi)) (:tail oi)))
 
             ; Any children that are collections: the stuff inside is irrelevent.
             bp (mapv #(_begin-power (gh %)) o) ep (mapv #(_end-power (gt %)) o)
 
-            sp (fn [end-s next-begin-s]  ; calculates the space fn.
+            sp (fn [end-s next-begin-s]  ; calculates the space we need to add, if any, between end-s and next-begin-s.
                  (let [endp (_end-power end-s) next-beginp (_begin-power next-begin-s)]
                    (if (>= (+ endp next-beginp) 1) "" (if (= endp -1) "\n" " "))))
 
             ; Children-children collision prevention:
-            spacers (conj (mapv sp (butlast (mapv gh o)) (rest (mapv gt o))) "") ; Spacers go after the tails.
+            spacers (conj (mapv sp (butlast (mapv gt o)) (rest (mapv gh o))) "") ; Spacers go after the tails.
             o (mapv #(assoc %1 :tail (str (:tail %1) %2)) o spacers)
             ;v?s (mapv #(vector? (:obj %)) o)
             
@@ -541,8 +563,9 @@
 
 (defn _vcode-to-str [vcode]
   "Converts to a string. Beware: the leaf objects should already have been projected (but it projects away squashed tokens and collisions)."
-  (let [vcode1 (_vcode-prevent-smash vcode) out (_naive-str vcode1)]
-    (collections/sus out 1 (- (count out) 2)))) ; remove the head [ and tail \n]
+  (let [vcode1 (_vcode-prevent-smash vcode) out (_naive-str vcode1)
+        nt (if (or (= (last out) \newline) (= (last (butlast out)) \newline)) 2 1)]
+    (collections/sus out 1 (- (count out) nt)))) ; remove the head and tail.
 
 (defn blit-to-str [blit]
   "Converts the blitcode to a string. Extracts metadata and reader macros.
@@ -559,11 +582,40 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;; Pretty printing functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn newline-parse [s]
+(defn _fix-evens! [^ints breakable ^ints token-ty ix0 ix-last]
+  "Sets the even spaces breakable => 0, in-place modification of breakable.
+   Does NOT include the spaces at ix0." 
+  (loop [ix (int ix0) parity (int 0) last-b (int 0)]
+    (if (<= ix ix-last)
+      (let [t (aget ^ints token-ty ix) b (aget ^ints breakable ix)]
+        (if (and (= t 0) (= parity 0)) (aset ^ints breakable ix (int 0)))
+;(println "Check for swap:" )
+        (recur (inc ix) (if (and (not= t 0) (not= t 8) (> last-b 0)) (- 1 parity) parity) b)))))
+(defn _next-obj [^ints token-ty ix0 n]
+  "Returns the next object's [start end] index.
+   If we start on the object we will include that."
+  (loop [ix (int ix0)] 
+    (if (>= ix0 n) [n n]
+      (if (let [t (aget ^ints token-ty ix)] (or (= t 0) (= t 8))) (recur (inc ix)) ; not an object => recur.
+        (loop [jx (int ix)]
+          (if (or (= jx n) (not= (aget ^ints token-ty jx) 1)) [ix (dec jx)] (recur (inc jx))))))))
+(defn _next-bracket [^ints token-ty ix0 n]
+  "Returns the next opening bracket's index.
+   If we start on the bracket we will include that."
+  (loop [ix (int ix0)] 
+    (if (>= ix0 n) n
+      (if (= (aget ^ints token-ty ix) 6) ix ; found it.
+        (recur (inc ix))))))
+(def _letty-stuff (apply hash-set (mapv str #{`loop 'loop 'let `let 'let* 'if-let `if-let 'when-let `when-let})))
+(defn newline-parse [s & even-force?]
   "Same as basic-parse but adds the :breakable [I:
      0 = illegal OR unnessessary places to replace a space with a newline.
      1 = optional, for example for foo bar it would be the space in between.
-     2 = manditory (wherever s has new-lines and we are leaving a comment or in a string)."
+     2 = manditory (wherever s has new-lines and we are leaving a comment or in a string).
+   The second argument (default false) is for keeping breakable zero between pairs of tokens
+     in maps and let-statements (does not check for the rare and not-recommented shadowing the core definitions).
+     Note: this only will work properly if there are spaces between the tokens.
+     Note: this will not work if the let vector is empty."
   (let [n (count s) p (basic-parse s) 
         ^chars cs (:chars p)
         ^ints breakable (make-array Integer/TYPE n)
@@ -582,10 +634,30 @@
                    (or (= (aget ^ints token-ty (dec ix)) 8) ; ending a comment.
                        (= (aget ^ints token-ty ix) 3))) ; in a string.
                (aset ^ints breakable ix (int 2))) (recur (inc ix)))))
+    (if (and (> n 4) (first even-force?)) ; Option to not allow breakables between even pairs. It does not work for fancy let-statements.
+       (throw (Exception. "TODO: get it working for metadata."))
+       (let [^ints depths (:inter-depth p) ; either with or without a macro.
+             max-level (loop [acc (int 0) ix (int 0)] (if (< ix n) (recur (max acc (aget ^ints depths ix)) (inc ix)) acc))
+             ^ints hot-levels (make-array Integer/TYPE (+ max-level 2))]
+         (loop [ix (int 0)]
+           (if (< ix n)
+             (let [c (aget ^chars cs ix) c1 (if (< ix (dec n)) (aget ^chars cs (inc ix)) (char \a))]
+               ; Different ways where even stuff is present:
+               (if (grammer/copen? c)
+                   (cond (and (= c \{) (or (= ix 0) (not= (aget ^chars cs (dec ix)) \#)))
+                         (let [nxt-obj (first (_next-obj token-ty (inc ix) n))]
+                           (if (< nxt-obj n) (_fix-evens! breakable token-ty nxt-obj (dec (depth-bracket depths nxt-obj 1)))))
+                         (and (= c \() (or (= c1 \;) (= c1 \i) (= c1 \l) (= c1 \ ) (= c1 \w) (= c1 \c))) ; Optimization or statement. 
+                         (let [next-obj (_next-obj token-ty (inc ix) n)] ; We are at the (, what is the indexes of the next-symbol after the (?
+                           (if (contains? _letty-stuff (collections/asus cs (first next-obj) (inc (second next-obj))))
+                             (let [first-sym-in-binding (first (_next-obj token-ty (inc (_next-bracket token-ty (second next-obj) n)) n))]
+                               (if (< first-sym-in-binding n)
+                                 (_fix-evens! breakable token-ty first-sym-in-binding (dec (depth-bracket depths first-sym-in-binding 1)))))))))
+               (recur (inc ix)))))))
     (assoc p :breakable breakable)))
 
 (defn _vcode-decrowd [vcode]
-  (let [b #(str (:head %) (:body %) (:tail %)) o (:obj vcode)
+  (let [b #(str (:head %) (:tail %)) o (:obj vcode)
         sp-start? (fn [oi] (if (coll? (:obj oi)) (grammer/ccom-white? (first (:head oi))) (grammer/ccom-white? (first (b oi)))))
         sp-end? (fn [oi] (if (coll? (:obj oi)) (grammer/ccom-white? (last (:tail oi))) (grammer/ccom-white? (last (b oi)))))]
     (if (coll? o)
@@ -594,15 +666,12 @@
             add-space?s (conj (mapv #(and (not (nth sp-start?s (inc %))) (not (nth sp-end?s %))) (range (dec n))) false) ; at the end.
             add-end-sp (fn [oi] (if (coll? (:obj oi))
                                     (update oi :tail #(str % " ")) 
-                                    (assoc oi :head "" :tail "" :body (str (:head oi) (:body oi) (:tail oi) " "))))]
+                                    (assoc oi :head "" :tail (str (:head oi) (:tail oi) " "))))]
         (assoc vcode :obj (mapv #(if %2 (add-end-sp %1) %1) o add-space?s))) vcode)))
 (defn blit-decrowd [blit]
   "Ensures that there is at least one space, comma, etc between adjacent elements in a collection.
    Valid code should stay valid. Only adds spaces, does not remove spaces."
   (vcode-to-blit (_vcode-decrowd (blit-to-vcode blit))))
-
-
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;; Testing functions ;;;;;;;;;;;;;;;;;;;
@@ -617,9 +686,10 @@
   (let [x (f (.toCharArray s) ix0 (count s))]
     (str (collections/sus s 0 ix0) "|" (collections/sus s ix0 x) "|" (collections/sus s x))))
 
-(defn basic-parse-test [s] ; (do (clc) (blitcode/basic-parse-test "foo"))
+(defn basic-parse-test [s & do-newline-parse?] ; (do (clc) (blitcode/basic-parse-test "foo"))
   "Tests the arrays created by (basic-parse s)."
-  (let [parse (dissoc (basic-parse s) :chars) ks (keys parse)
+  (let [parse0 ((if (first do-newline-parse?) newline-parse basic-parse) s)
+        parse (dissoc parse0 :chars) ks (keys parse)
         n (count s)
         nis (fn [c] (if (= (count c) (inc n)) "" "  ")) ; Interstitial offset.
         pd (fn [c] (apply str (mapv #(if (number? %) (format " %02d" %) (collections/sus (str %) 0 3)) (into [] c)))) ; always 3 chars long.
@@ -638,16 +708,17 @@
     (println (str "[" s "\n]"))
     (pprint/pprint (_ob-last ((if (first r-extract) _rmacro-extract identity) vcode)))))
 
-(defn blit-test [s] ; (do (clc) (blitcode/bcode-test "foo bar"))
+(defn blit-test [s] ; (do (clc) (blitcode/blit-test "foo bar"))
   "Shows the tree of (vcode s) in a simple indented form (uses pprint does not use indent.clj circular dependency issue)."
   (let [bcode (reads-string-blit s)]
     (println (str "[" s "\n]"))
     (pprint/pprint (_ob-last bcode))))
 
-(defn going-back-test 
+(defn going-back-test ;(do (clc) (blitcode/going-back-test "(foo \"bar\" baz)"))
   "Can we go from s to vcode to bcode back to vcode. 
    You can add a function that changes the blitted code to test the projection at off-manifold points.
-   collections/updayte-in et al are useful to work with short lists."
+   collections/updayte-in et al are useful to work with short lists.
+   About 260 ms for 24000-long string => 10 us/char."
   ([s] (going-back-test s nil))
   ([s mod-f] ; (do (clc) (blitcode/going-back-test "foo bar"))
     (let [vcode (reads-string-vcode s)
@@ -667,3 +738,7 @@
       (pprint/pprint (_ob-last vcode1))
       (println "STRING (after the round-trip):")
       (println s1))))
+
+(defn round-trip-test [s] (println (blit-to-str (reads-string-blit s))))
+(defn decrowd-test [s] ;(do (clc) (blitcode/decrowd-test "xox(foo()bar()[]{}#{})"))
+  (println "orginal: " s) (println "Decrowded: " (blit-to-str (blit-decrowd (reads-string-blit s)))))

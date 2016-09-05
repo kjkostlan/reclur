@@ -58,7 +58,8 @@
                 depth-at-cursor (aget ^ints inter-depth (int (max 0 (min n caret))))
                 
                 numl (count ladder) ; How deep each ladder element is:
-                ladder-hilite-levels (mapv #(- (dec numl) %) (range numl)) 
+                tweak (if (and (grammer/copen? (first text)) (grammer/cclose? (last text))) 1 0)
+                ladder-hilite-levels (mapv #(+ (- (dec numl) %) tweak) (range numl)) 
 			    hltr (.getHighlighter obj)
 
 			    hpainters (mapv #(DefaultHighlighter$DefaultHighlightPainter. (colorful/level2col %)) ladder-hilite-levels)]

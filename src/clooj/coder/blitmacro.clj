@@ -1,5 +1,5 @@
 (ns clooj.coder.blitmacro
-  (:require [clooj.coder.grammer :as grammer]
+  (:require [clooj.coder.grammer :as grammer] [clooj.coder.blitcode :as blitcode]
             [clooj.collections :as collections]
             [clojure.set :as set]
             [clojure.walk :as walk]))
@@ -62,22 +62,13 @@
   "Generates default blitted code. This is nessessary when code is created.
    Note: code must be vanilla code."
   (let [cstr (grammer/code-to-str code)]
-    (try (read-string cstr) (catch Exception e (throw (Exception. (str "Clojure bug: esoteric code makes an invalid string, trying to read it back gives: " e)))))
+    (try (read-string cstr) (catch Exception e (throw (Exception. (str "Esoteric code makes an invalid string, trying to read it back gives: " e)))))
     ; TODO: formatting of the string to make it look pretty?
-    (first (grammer/reads-string-blit cstr))))
+    (first (blitcode/reads-string-blit cstr))))
 
 (defn mpr-str [x]
   "Like pr-str but with the meta enabled."
   (binding [*print-meta* true] (pr-str x)))
-
-(defn cmerge [reference-code processed-code] 
-  "Generates code that is equivalent to the processed-code that best matches the 
-   reference code's format. Processed-code is a vanilla code object but reference-code has the 
-   string formatting, etc.
-   This merge function isn't that good at alignment, thus the need for the
-    tools below."
-  (let [eq? (= (mpr-str (grammer/blit-code-to-code reference-code)) (mpr-str processed-code))]
-    (if eq? (throw "TODO"))))
 
 (def _secret-salt (keyword (str "clooj_coder_refactor_salt_1248421" "qwerty")))
 (defn _salt-blit-code [c]
@@ -99,11 +90,11 @@
 (defn unblit [x]
   "Deblits x if x is blitted?, otherwise just returns x.
    get-obj can be used to peel off only one level, rather than blitting all the way down."
-  (if (blitted? x) (grammer/blit-code-to-code x) x)) ; this puts in the metadata as well.
+  (if (blitted? x) (blitcode/blit-to-code x) x)) ; this puts in the metadata as well.
 (defn unblit! [x]
   "Deblits x if x is blitted?, otherwise just returns x.
    get-obj can be used to peel off only one level, rather than blitting all the way down."
-  (if (blitted? x) (transient (grammer/blit-code-to-code (persistent! x))) x)) ; this puts in the metadata as well.
+  (if (blitted? x) (transient (blitcode/blit-to-code (persistent! x))) x)) ; this puts in the metadata as well.
 
 (defn leaf-fluff [x]
   ; The fluff part of the :body of x. Changes such as inc will change the body but not the fluff.
@@ -744,8 +735,8 @@
     (apply list (apply assoc (into [] l) (unblit k) (blit v) (blit-odd-unblit-even unblit kvs)))))
 
 
-`grammer/pos-to-blit-code (fn [s c] (_salt-blit-code (grammer/pos-to-blit-code (unblit s) (unblit c))))
-`grammer/reads-string-blit (fn [s] (_salt-blit-code (grammer/reads-string-blit (unblit s))))
+`blitcode/vcode-to-blit (fn [s c] (_salt-blit-code (blitcode/vcode-to-blit (unblit s) (unblit c))))
+`blitcode/reads-string-blit (fn [s] (_salt-blit-code (blitcode/reads-string-blit (unblit s))))
 
 })
 ; Assert that everything is working:
