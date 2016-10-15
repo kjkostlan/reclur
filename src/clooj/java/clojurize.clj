@@ -1,7 +1,8 @@
 ; Approximate conversion of clojure objects into java objects.
 ; Uses reflections and getters.
 (ns clooj.java.clojurize
-  (:require [clojure.string :as string] [clojure.set :as set] [clooj.java.thread :as thread])
+  (:require [clojure.string :as string] [clojure.set :as set] [clooj.java.thread :as thread]
+            [clooj.coder.history :as history])
   (:import [java.awt Point Rectangle Dimension]
    [javax.swing SwingUtilities]))
 
@@ -38,39 +39,51 @@
 ; Extra debug checking if we are on the event dispatch thread:
 (defn edt-assert [] (if (not (SwingUtilities/isEventDispatchThread)) (throw (Exception. "Java modification not from the event dispatch thread."))))
    
-(defmacro on-java-change [call root-atom-or-obj]
- "Changes to an object hiererchy (except graphical repaints) will be tracked iff
-  :debug-java-changes if non nil (should be set to the empty vector []).
-  This bridges part of the gap between Java's mutation and clojure's functions."
-  ; TODO: does this quash meta-data for type hints? Don't think so in non-debug mode, should check though.
-  (let [arg-vals-sym (gensym 'arg-vals) root-atom-sym (gensym 'root-atom)]
-    `(let [~root-atom-sym (if (instance? clojure.lang.Atom ~root-atom-or-obj) 
-                            ~root-atom-or-obj (.getClientProperty ~root-atom-or-obj "root"))
-           changes# (:debug-java-changes (deref ~root-atom-sym))]
-       (if changes# 
-         ; Change-tracking:
-         (let [_# (edt-assert)
-               ~arg-vals-sym ~(apply vector (rest call))]
-           (swap! ~root-atom-sym assoc :debug-java-changes 
-             (conj changes# (into [] (concat (vector (quote ~(first call))) ~arg-vals-sym)))) 
-           (~(first call) ~@(mapv #(list `nth arg-vals-sym %) (range 0 (dec (count call))))))
-         ~call)))) ; #normal function call.
+;(defmacro on-java-change [call root-atom-or-obj]
+; "Debugging tool that keeps track of changes to the java object's hierarchy iff :debug-java-changes if non nil
+;  :debug-java-changes, in the outer level of the root-atom, should be set to [] and it will grow as time goes on.
+;  If it is not specified or set to nil we will just run the call normally.
+;  This bridges part of the gap between Java's mutation and clojure's functions."
+;  (let [arg-vals-sym (gensym 'arg-vals) root-atom-sym (gensym 'root-atom)]
+;    `(let [~root-atom-sym (if (instance? clojure.lang.Atom ~root-atom-or-obj) 
+;                            ~root-atom-or-obj (.getClientProperty ~root-atom-or-obj "root"))
+;           changes# (:debug-java-changes (deref ~root-atom-sym))]
+;       (if changes# 
+;         ; Change-tracking:
+;         (let [_# (edt-assert)
+;               ~arg-vals-sym ~(apply vector (rest call))]
+;           (swap! ~root-atom-sym assoc :debug-java-changes 
+;             (conj changes# (into [] (concat (vector (quote ~(first call))) ~arg-vals-sym)))) 
+;           (~(first call) ~@(mapv #(list `nth arg-vals-sym %) (range 0 (dec (count call))))))
+;         ~call)))) ; #normal function call.
 
-(defn reflection-on-java-change! [method obj args]
-  "The non-macro version for code that uses reflection's .invoke 
-   (if obj is nil where we have static stuff and this simply calls the .invoke)"
-  ;(println "Reflection-on-java: " (.getName method))
-  (if (nil? obj)
-    (.invoke method nil (object-array args)) ;static methods.
-    (let [root-atom (.getClientProperty obj "root")
-          changes (if root-atom (:debug-java-changes @root-atom) (println "WARNING: no root atom for an obj of type" (type obj)))]
-      (if changes
-        (do (edt-assert)
-            (swap! root-atom assoc :debug-java-changes
-              (conj changes (into [] (concat [(.getName method)] [obj] (into [] args)))))
-            (.invoke method obj (object-array args)))
-        (do ;(println "change reflection invoking: " (.getName method) (type obj) (mapv type args))
-        (.invoke method obj (object-array args)))))))
+;(defn reflection-on-java-change! [method obj args]
+;  "The non-macro version for code that uses reflection's .invoke 
+;   (if obj is nil where we have static stuff and this simply calls the .invoke)"
+;  ;(println "Reflection-on-java: " (.getName method))
+;  (if (nil? obj)
+;    (.invoke method nil (object-array args)) ;static methods.
+;    (let [root-atom (.getClientProperty obj "root")
+;          changes (if root-atom (:debug-java-changes @root-atom) (println "WARNING: no root atom for an obj of type" (type obj)))]
+;      (if changes
+;        (do (edt-assert)
+;            (swap! root-atom assoc :debug-java-changes
+;              (conj changes (into [] (concat [(.getName method)] [obj] (into [] args)))))
+;            (.invoke method obj (object-array args)))
+;        (do ;(println "change reflection invoking: " (.getName method) (type obj) (mapv type args))
+;        (.invoke method obj (object-array args)))))))
+
+(defn reflection-on-java-change! [method obj args root-atom]
+  "Stores a java change in the atom's history. Only call this fn if the atom is valid."
+  (let [argsO (object-array args)]
+    (if (nil? obj)
+      (.invoke method nil (object-array args)) ;static methods => no need to track.
+      (do (edt-assert)
+        (history/java-update (.invoke method obj argsO) root-atom)))))
+
+;(println "Reflection-on-java: " (.getName method))
+;(println "change reflection invoking: " (.getName method) (type obj) (mapv type args))
+
 
 (defn simple? [cl]
   "Is the class a simple type, for which we have a flat clojure structure for? Nil maps to nil."
@@ -201,7 +214,7 @@
       (let [target-methods ((time-limited-memonize setters) (.getClass obj))
             ; Keep track of changes if need be.
             root-atom (try (.getClientProperty obj "root") (catch Exception e nil))
-            tracker (if (instance? clojure.lang.Atom root-atom) (:debug-java-changes @root-atom))]
+            tracker (if (instance? clojure.lang.Atom root-atom) (:history @root-atom))]
         (mapv (fn [k] 
                 (let [v (get kvs k) v-old (get kvs-old k)]
                   (if (and (get target-methods k) (not= v v-old)) ; method detected and update.
@@ -210,7 +223,7 @@
                       (if (or (not (nil? j)) (nil? v)) ; nil? j means it's not simple, unless it was nil to begin with.
                           (do ;(println "set single level:" v-old v (= v v-old))
                             (try 
-                              (if tracker (reflection-on-java-change! (get target-methods k) obj (into-array Object [j]))
+                              (if tracker (reflection-on-java-change! (get target-methods k) obj (into-array Object [j]) root-atom)
                                 (do 
                                   ;(println "Trying to invoke: " (.getName (get target-methods k)) "on: " (str obj))
                                   (.invoke (get target-methods k) obj (into-array Object [j]))

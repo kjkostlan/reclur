@@ -180,7 +180,6 @@
                             (str \newline (apply str (repeat (aget ^ints x-vals (int (inc bix))) " "))) 
                             :else " ")]
               (recur (conj acc add) (inc ix) (+ bix (if (> bi 0) 1 0))))))))))
-    
 
 (defn _remove-extra-space [bcode & dont-project]
   "Removes spaces and newlines in bcode with the exception of those nessessary because of comments, etc.

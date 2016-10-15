@@ -3,13 +3,29 @@
 
 (ns clooj.java.file
   (:require [clojure.java.io :as io]
-            [clojure.string :as string]
-            [clooj.utils :as utils])
+            [clojure.string :as string])
   (:import (java.io File BufferedWriter OutputStreamWriter FileOutputStream)
            (javax.swing JOptionPane)
            (java.nio.file Files Paths)
-           (java.nio.charset StandardCharsets)
-           (java.util.prefs Preferences)))
+           (java.nio.charset StandardCharsets)))
+
+(defn re-index [re s]
+  "Returns the indexes of where the regular expression occurs in the string s."
+  (let [ins (re-seq re s)
+        outs (string/split s re)
+        cins (map count ins) 
+        n (count cins)
+        couts (concat (map count outs) (repeat n 0))
+        cs (map + cins couts)];
+    (if (= n 0)
+      []
+      (reduce #(conj %1 (+ (last %1) %2)) [(nth couts 0)] (rest cs)))))
+
+(defn str-to-regex
+  "sometimes you don't need a fancy regular expression. This makes a regexp that is equivalent to a non-regexp match of str.
+   http://stackoverflow.com/questions/28342570/how-to-split-a-string-in-clojure-not-in-regular-expression-mode"
+  [c]
+  (re-pattern (java.util.regex.Pattern/quote (str c))))
 
 ; stupid OS difference:
 (defn sep [] (File/separator))
@@ -32,7 +48,7 @@
 
 (defn file2folder [^String file]
   "extracts the folder that the file (which is NOT a folder) is in."
-  (let [match (last (utils/re-index (utils/str-to-regex (sep)) file))]
+  (let [match (last (re-index (str-to-regex (sep)) file))]
     (if (nil? match) 
       file ; no change.
       (subs file 0 match))))

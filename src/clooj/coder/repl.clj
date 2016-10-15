@@ -3,20 +3,29 @@
   (:require [clooj.java.file :as jfile] [clojure.string :as string]
      [clojure.walk :as walk] [clooj.coder.grammer :as grammer]
      [clooj.coder.indent :as indent]
+     [clooj.java.thread :as thread]
      [clooj.collections :as collections])
-  (:import (java.io ByteArrayOutputStream OutputStreamWriter)))
+  (:import (java.io ByteArrayOutputStream OutputStreamWriter) (javax.swing SwingUtilities)))
+
+; Rebinds the var root to println's not in the terminal. Set to false if you can't
+; get the app running in the first place to see the error.
+(def rebind-printing? true)
 
 ; List of calculations that are running or finished:
 ; Each calculation:
 ;   :cmd is the string input.
 ;   :ns is what namespace it is evaled in.
 ;   :future is the future object that will yield the string result as would be seen in the repl.
+;   :thread is the thread that the future is running from.
 (defonce calculations (atom []))
 
 (def core-ns (find-ns 'clojure.core))
 
 ; Update the bindings (the bindings are global, surprisingly).
-(def star-vars ['*ns* '*compile-path* '*unchecked-math* '*warn-on-reflection*]) ; TODO: are there more? 
+(def ^{:dynamic true} *max-print* 5000)
+(def ^{:dynamic true} *check-lag-ms* 500)
+(def ^{:dynamic true} *abort-lag-ms* 1000)
+(def star-vars ['*ns* '*compile-path* '*unchecked-math* '*warn-on-reflection* '*max-print* '*check-lag-ms* '*abort-lag-ms*]) ; TODO: are there more? 
 
 (def rdebug (atom nil))
 
@@ -26,8 +35,6 @@
 (defmacro get-bindings [] ; returns a map with the bindings.
   (zipmap (mapv #(list 'quote %) star-vars) star-vars))
 (def bindings (atom (zipmap star-vars (mapv eval star-vars)))) ; start with the default namespaces.
-
-(def max-length 5000)
 
 ; Create our own repl namespace with (use) access to the clojure.core and this file.
 ; The future wrap allows waiting for this file to be compiled before (use)ing it.
@@ -60,8 +67,9 @@
 
 (defn _abridged-str [x thaw?]
   (let [sstr (if thaw? thaw-str str)
+        max-print (get @bindings '*max-print*)
         limit #(let [s (try (sstr %) (catch Exception e (sstr "STRING REPRESENTATION ERROR: " e)))]
-                 (if (> (count s) max-length) (str (subs s 0 max-length) "...<too large to show>") s))]
+                 (if (> (count s) max-print) (str (subs s 0 max-print) "...<too large to show>") s))]
     (limit x)))
 (defn abridged-str [cmd val our-ns] 
   "An abridged string representation that is formatted repl-style."
@@ -70,14 +78,15 @@
 ; Save the calculation string so that we can look it up in O(1) time.
 (def cached-string (atom nil)) ; all the commands.
 (defn update-cached-string!! []
-  "Every time the string would change."
-	(let [calcs @calculations 
+  "Updates the string that is shown on the repl."
+	(let [calcs (filterv #(not (future-cancelled? (:future %))) @calculations) 
 		  cmds (mapv :cmd calcs) futs (mapv :future calcs) ns-s (mapv :ns calcs)
 		  ; If some become done partway through this loop no big deal:
 		  done?s (mapv future-done? futs)
 		  strs (mapv #(if %3 @%2 (abridged-str %1 "<in progress>" %4)) cmds futs done?s ns-s)
-		  liny #(apply str (interpose "\n" %))]
-	  (reset! cached-string (str (liny strs) "\nprintouts >> " @printout-text))))
+		  liny #(apply str (interpose "\n" %))
+		  prtxt @printout-text]
+	  (reset! cached-string (str (liny strs) (if (> (count prtxt) 1) "\nprintouts >> " "") prtxt))))
 
 (defonce out-stream (ByteArrayOutputStream.))
 (defonce out-writer 
@@ -93,8 +102,7 @@
           (proxy-super flush)
           (reset! printout-text (_abridged-str (.toString out-stream) false))
           (update-cached-string!!)))))
-(alter-var-root (var *out*) (fn [_] out-writer)) ; Dangerous alter-var-roots of the printing functions:
-
+(if rebind-printing? (alter-var-root (var *out*) (fn [_] out-writer))) ; Dangerous alter-var-roots of the printing functions:
 
 (defmacro undef [var]
   "Undefines a variable. e.g. (undef foo) no quotes on foo as we are a macro."
@@ -132,39 +140,57 @@
 
 (defn add-to-repl!! 
     "Sends a command to the repl, running it on a future, returning immediately.
-     eval false means that we don't actually evaluate anything."
+     eval false means that we print the command as-is."
   ([cmd] (add-to-repl!! cmd true))
   ([cmd eval?] 
     (let [; Two resets! of the cached-string. Both are soon-after we make a change to the calculation array.
           ; soon-after is safe but soon-before isn't if the @calculations is between the two changes.
           ns-cmd (get @bindings '*ns*)
-          cmd (str cmd) fut (future (if eval? (abridged-str cmd (try (eval!! cmd) (catch Exception e (err-report e))) ns-cmd) cmd))]
-      (swap! calculations conj {:cmd cmd :future fut :ns ns-cmd})
+          at-t (atom nil) ; stores the thread that the future is running on.
+          cmd (str cmd) fut (future (do (reset! at-t (Thread/currentThread))
+                                      (if eval? (abridged-str cmd (try (eval!! cmd) (catch Exception e (err-report e))) ns-cmd) cmd)))]
+      (while (not @at-t) (Thread/sleep 2)) ; Wait (not that long) for at-t to be set.
+      (swap! calculations conj {:cmd cmd :future fut :ns ns-cmd :thread @at-t})
       ; Two updates to the cached string (AFTER the swap! calculations step):
       ; The first is for "we have a new calculation". The second is for "we are done".
       (future (do (update-cached-string!!) @fut (update-cached-string!!))))))
 (defn get-repl-output [] @cached-string)
 
+(defn _clean-dead-calcs! [calcs]
+  "Removes calculations that are no longer actively running.
+   This is different from future-done? because it looks at the underlying java thread."
+  (swap! calcs (fn [c] (filterv #(or (not (future-done? (:future %))) (thread/running? (:thread %))) c))))
+
 (defn clear-done-cmds!! []
   "Clears all calculations whose future is done.
    Use this upon user requesting to clear the repl (followed by a string)."
-  (swap! calculations (fn [c] (filterv #(not (future-done? (:future %))) c)))
+  ;(swap! calculations (fn [c] (filterv #(not (future-done? (:future %))) c)))
+  (_clean-dead-calcs! calculations)
   (future (update-cached-string!!)))
 
 (defn clear-all-cmds!! []
   "Clears all commands from the repl queue, using future-cancel.
    Note: future-cancel is NOT guaranteed to stop the CPU/memory usage."
-  (swap! calculations (fn [c] (mapv #(future-cancel (:future %)) c))) ; it's fine to cancel a done future.
+  (mapv #(future-cancel (:future %)) @calculations) ; it's fine to cancel a done future.
+  (_clean-dead-calcs! calculations)
+  (future (update-cached-string!!)))
+  
+(defn abort-all-cmds!! []
+  "Uses the despised thread.stop() method do destroy any still-running threads."
+  (mapv #(if (thread/running? (:thread %)) (.stop (:thread %))) @calculations)
   (reset! calculations [])
   (future (update-cached-string!!)))
 
 (defn clear-printouts!! []
   "Clears all printouts."
-  (.reset out-stream) (.flush out-stream) (println ""))
+  (.reset out-stream) (.flush out-stream) (println "")) ; The println is needed for (clc) to work.
 (clear-printouts!!)
 
 (defn clc []
-  (clear-done-cmds!!) (clear-printouts!!))
+  ; Detecting when commands are done based on thread state a bit voodoo and
+  ; seems to depend on which thread we call it from. Making this from the event dispatch 
+  ; thread just seems to work.
+  (SwingUtilities/invokeLater #(do (clear-done-cmds!!) (clear-printouts!!))))
 
 (defn reload-file!! [file]
   "Orthogonal to the other functions.
@@ -188,6 +214,25 @@
     The string can't be surrounded with quotes b/c it may have quotes inside of it as well."
   (intern user-ns (symbol var-name) (str s)))
 
+;; STOP THIS CRAZY THING emergency aborting of super resource hogs.
+
+(def _l-hint-str 
+  "WARNING: Lag detected, ABORTED all tasks.
+Lag occurs when there aren't enough resources for the even cheap threads to run mostly on time.
+This typically happens when a large or infinite amount of memory is used.
+It will not typically happen for a purely CPU-using infinite loop.
+To prevent aborting of tasks due to lag, (set! *abort-lag-ms* 3e10).")
+(defonce lag-detect
+  (let [t #(System/nanoTime)
+        t0 (atom (t))
+        t-wait (fn [_] (get @bindings '*check-lag-ms*)) ; Check every this long.
+        f!! #(let [elapsed (double (/ (- (t) @t0) 1000000))
+                   t-abort (get @bindings '*abort-lag-ms*)]
+               (if (> elapsed t-abort) 
+                 (do (abort-all-cmds!!)
+                   (add-to-repl!! _l-hint-str false)))
+               (reset! t0 (t)))]
+    (thread/pulse!! f!! t-wait "lag-detector")))
 
 ;; Easy code writing functions:
 
@@ -229,6 +274,7 @@
   "EZ function generating printouts."
   (let [out (indent/indent (brevity (try (read-string code) (catch Exception e code)) *ns*))]
     (if (not (second hint-dont-print)) (println (str (first hint-dont-print)) out) out)))
+
 
 ; Use the core and this ns so we have access to the functions.
 ; This must be in a future because we have to wait untill this ns is loaded.

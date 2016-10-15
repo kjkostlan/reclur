@@ -2,7 +2,7 @@
 ; Threading tools.
 
 ; To permently stops everything we started:
-(def emergency-stop false) ; alter-var-root can stop all functions. 
+(def emergency-stop false) ; use alter-var-root to stop all functions. 
 ; (require '[clooj.java.thread :as thread]) 
 ; (alter-var-root (var thread/emergency-stop) (fn [_] true))
 ; Later (after all the bad functions get at least one invocation):
@@ -55,12 +55,12 @@
 
 ; TODO: better fps control if f is not negligable in time, and what to do if interrupted.
 (defn pulse!!
-  "Runs f!! (which takes no args but should have side effects on other args) and
+  "Runs f!! (which takes no args but should have side effects on other variables) and
    ms-time miliseconds as long as @atom-check? is true (optional argument, defaults as always true).
    Any other threads with lookup-id will be stopped.
-   ms-pause can be a number or a function of one value (iteration #, starting at 0).
+   ms-time can be a number or a function of one value (the iteration #, starting at 0).
    include-fn-time? = include the time spent on each function call as time before the next.
-     If the function takes longer we will slow down, they won't pile on top of eachother. 
+     True: If the function takes longer we will slow down as the wait interval is constant. 
    Note: using atom-check? allows for both internal and external stoppage."
   ([f!! ms-time lookup-id] (pulse!! f!! ms-time lookup-id (atom true) true))
   ([f!! ms-time lookup-id atom-check?] (pulse!! f!! ms-time lookup-id atom-check? true))
@@ -72,3 +72,7 @@
       (stop!! lookup-id)
       (swap! _pulses assoc lookup-id pulse)
       (_go!! pulse))))
+      
+(defn running? [thread]
+  "Is a thread running currently? This is distinct from (not future-done?)."
+  (= (str (.getState thread)) "RUNNABLE"))

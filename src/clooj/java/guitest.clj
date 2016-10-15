@@ -1,13 +1,13 @@
+; Examples and debugging for our functional GUI.
 (ns clooj.java.guitest
   (:use [clooj.java.gui])
-  (:require [clooj.utils :as utils]
+  (:require
    [clooj.java.listener :as listener]
+   [clooj.collections :as collections]
    [clooj.java.updater :as updater]
    [clooj.java.widget :as widget]
    [clooj.coder.grammer :as grammer])
   (:import [jcode JFrameClient]))
-
-; Examples and debugging for our functional GUI.
 
 ; Keywords (captalized because it's java after all and to differeniate the parts of the state that are only for clojure use):
 ; :Type = :JButton, 'JPanel, etc. Don't put the javax.swing package. Keyword recommended but symbol and stirng work.
@@ -19,7 +19,7 @@
 ;   Warning: this feature may be given an out-of-date state.
 
 ;Debugging: 
-;  :debug-java-changes = keep track of what changes were made to the java object, helps see what went wrong.
+;  :history = keep track of what changes were made to the java object, helps see what went wrong.
 
 ; TODO error catching:
 ; Bad behavior when forgetting that it's JFrame -> JPanel -> stuff, not
@@ -39,7 +39,6 @@
 ; Drawing on a frame with no panel.
 
 ; TODO bugs/enhancements:
-; JFrame should self-delete by default when we close it, but gui/delete! can get rid of it.
 ; Feature to exaustivly show every thing so the user knows what to do.
 ; Some tool to edit the components written in this new paradigm of course.
 ; Currently we don't have superfulous ancestor et al keys for :self events. Is this the best strategy?
@@ -47,6 +46,9 @@
 ; Performace notes:
   ; No obvious chockpoint (apart from reflection). 
   ; But still not great: ~15 times slower in setup and ~3 times slower in run for cases with LARGE buttons.
+
+; State moniter (it requires windows, scrollpanes, and text-areas to work):
+;(TODO)
 
 ; Testing:
 ; (do (require '[clooj.java.gui :as gui]) (require '[clooj.java.guitest :as guitest]))
@@ -66,24 +68,42 @@
           ;:Resizable false ; This is the only place in the entire code where Res..able appears, but due to reflection it still works.
 
 (defn textarea []
-  "A little nesting with a textareas."
-  (setup {:Type 'JFrame :Children 
-           [{:Type 'JTextArea}]}))
+  "A little nesting with a textareas.
+   Adds buttons to do stuff to the textarea.
+   Copying the state does not appear to copy the selection 
+   but both the state AND the textarea show that it is selected!?"
+  (setup {:Type 'JFrame 
+          ;:Layout {:type :GridLayout ...}
+          :Children 
+           [{:Type 'JPanel 
+             :below-actionPerformed
+             (fn [s e o]
+               (let [a (:ActionCommand e)]
+                 (update-in s [:Children 0]
+                   (fn [t] (cond 
+                             (= a "set text") (assoc t :Text "The button did this.")
+                             (= a "cursor -> 10") (assoc t :CaretPosition 10)
+                             (= a "select 3-10") (assoc t :SelectionStart 3 :SelectionEnd 10))))))
+              :Children
+              [{:Type 'JTextArea :PreferredSize [300 300] :Text "Testing text"}
+               {:Type 'JButton :Text "cursor -> 10"}
+               {:Type 'JButton :Text "set text"}
+               {:Type 'JButton :Text "select 3-10"}]}]}))
 
 (defn button []
-  "A little nesting with a button."
+  "A little nesting with a button. Also uses the JPanel-DEV which should printout a blurb when we use this."
   (setup {:Type 'JFrame :Children 
-           [{:Type 'JPanel :Children 
+           [{:Type 'JPanel-DEV :Children 
              [{:Type 'JButton :Text "not clicked" :actionPerformed (fn [s e o] (assoc s :Text "clicked"))}
               {:Type 'JCheckBox :Text "I do nothing"}]}]}
-               ))
+    {:history true}))
 
 (defn many-buttons []
   "Performance test comparison with java."
   (setup {:Type 'JFrame :Children 
            [{:Type 'JPanel :Children 
              (let [r {:Type 'JButton :Text "Stress test #"}]
-               (mapv #(update r :Text (fn [x] (str x % " out of 2000"))) (range 2000))) }]}))
+               (mapv #(update r :Text (fn [x] (str x % " out of 2000"))) (range 2000)))}]}))
 
 (defn square []
   "A square window (it keeps itself square when resizing)."
@@ -91,7 +111,7 @@
           :componentResized
            (fn [s e o]
              (let [m (* 0.5 (+ (first (:Size e)) (second (:Size e))))] 
-               (assoc s :PreferredSize [m m])))} {:debug-java-changes true}))
+               (assoc s :PreferredSize [m m])))}))
 
 (defn whack-a-mole []
   "Whack-a-mole: The panel listenes for events on the buttons one level below,
@@ -157,32 +177,24 @@
                {:debug-java-changes true})))
 
 (defn scrollpane []
-  "Tests the amazingly finicky scrollpane.
-   Adding text makes the pane scroll to the bottom but that
-   triggers an event and properly updates the state. We have an option to suppress that."
+  "Scrollpanes automatically scroll to the end.
+   TODO: make it easy to suppress that behavior."
   (let [suppress-to-end? true ; suppess the scroll-to-end behavior.
         make-lines (fn [n] (apply str (mapv (fn [x] (str x "\n")) (range n))))]
     (setup
       {:Type 'JFrame :Size [600 600] :Children
         [{:Type 'JPanel 
-          :below-adjustmentValueChanged 
-          (fn [s e o]
-            ;TODO: why the !@#$ do we need 3 HP?
-            (if (and suppress-to-end? (:HP s) (> (:HP s) 0))
-             (assoc (update-in s [:Children 2] #(assoc % :View (:text-change-view s))) 
-              :HP (dec (:HP s))) s))
           :below-actionPerformed 
             (fn [s e o] (let [act (get-in e [:origin-state :act])]
-                        (cond (= act :mod)
-                              (assoc (update-in s [:Children 2] 
-                                        #(assoc-in % [:Children 0 :Text] (make-lines 500)))
-                              :text-change-view (get-in s [:Children 2 :View]) :HP 3) ; store the view so that we can reuse it.
-                              (= act :scroll)
-                              (update-in s [:Children 2] #(assoc % :View [90 90]))
-                              :else s)))
+                          (cond (= act :mod)
+                                (update-in s [:Children 2] 
+                                  #(assoc-in % [:Children 0 :Text] (make-lines 500)))
+                                (= act :scroll)
+                                (update-in s [:Children 2] #(assoc % :View [90 90]))
+                                :else s)))
           :Children
           [{:Type 'JButton :Text "Make long text" :act :mod}
-           {:Type 'JButton :Text "Scroll-adjust" :act :scroll}
+           {:Type 'JButton :Text "Scroll-to a point" :act :scroll}
             {:Type 'JScrollPane :View [0 0] :PreferredSize [400 400] 
             :Children 
             [{:Type 'JTextArea :Text (make-lines 50)}]}]}]})))
@@ -216,28 +228,64 @@
         :Children [{:Type 'JMenuItem :Text "1"} {:Type 'JMenuItem :Text "2"} {:Type 'JMenuItem :Text "3"}]}]}]}))
 
 (defn tree []
-  "Tests trees. Copying is still not working 100%, but at least they are usable."
+   "Test JTrees. The copying of the JTree state is still buggy as it causes the trees to glitch
+    due to arcane mysteries in the process of updating."
   (setup 
     {:Type 'JFrame :Title "trees are a BIG challange"
       :below-valueChanged (fn [s e o] 
                              (let [p (first (:jtree-descendents-selected e))
                                    t (get-in s (concat [:Children 0 :Children 0] p [:Text]))]
                                (assoc s :Title (str "selected: " p " -> " t))))
-      :Children
-      [{:Type 'JScrollPane
-        :Children
-        [{:Type 'JTree
-          :Text "Outer level"
+      :Children 
+      [{:Type 'JPanel 
+       :below-actionPerformed
+       (fn [s e o]
+         (let [c (:ActionCommand e)]
+           (cond 
+             (= c "Expand root")
+             (assoc-in s [:Children 0 :Children 0 :Expanded?] true)
+             (= c "Collapse root")
+             (assoc-in s [:Children 0 :Children 0 :Expanded?] false)
+             (= c "Add a node")
+             (update-in s [:Children 0 :Children 0 :Children]
+               #(conj % {:Type 'JTree :Text (str "Added node " (count %))}))
+             (= c "Remove a node")
+             (update-in s [:Children 0 :Children 0 :Children] pop)
+             :else s)))
+       :Children
+         [{:Type 'JScrollPane
+          :PreferredSize [200 400]
           :Children
-          [{:Type 'JTree :Text "qwerty"
+          [{:Type 'JTree
+            :Text "Outer level"
             :Children
-            [{:Type 'JTree :Text "I am at the top"}
-             {:Type 'JTree :Text "I am also at the top"}]}
-           {:Type 'JTree :Text "asdfgh"
-            :Children
-            [{:Type 'JTree :Text "I am in the middle"}
-             {:Type 'JTree :Text "I am also in the middle"}]}
-           {:Type 'JTree :Text "zxcvbn"}]}]}]}))
+            [{:Type 'JTree :Text "qwerty"
+              :Children
+             [{:Type 'JTree :Text "I am at the top"}
+               {:Type 'JTree :Text "I am also at the top"}]}
+             {:Type 'JTree :Text "asdfgh"
+              :Children
+              [{:Type 'JTree :Text "I am in the middle"}
+               {:Type 'JTree :Text "I am also in the middle"}]}
+             {:Type 'JTree :Text "zxcvbn"}]}]}
+            {:Type 'JButton :Text "Expand root"}
+            {:Type 'JButton :Text "Collapse root"}
+            {:Type 'JButton :Text "Add a node"}
+            {:Type 'JButton :Text "Remove a node"}]}]}))
+
+(defn animation0 []
+  "Uses the every-frame listener."
+  (let [gfx (fn [angle] [[:drawLine [100 100 (int (+ 100 (* 100 (Math/cos angle)))) (int (+ 100 (* 100 (Math/sin angle))))]]])]
+    (setup {:Type 'JFrame :Title "it keeps moving."
+            ;:Keep-if-headless? true
+            ;:Prevent-user-close? true
+            :Children 
+            [{:Type 'JPanel 
+             
+             :Every-frame (fn [s e o] (println "guitest/animation theta =" (:angle s)) 
+                            (assoc (update s :angle #(+ % (/ 10 360.0))) 
+                                         :Graphics (gfx (:angle s))))
+             :angle 0.0}]})))
 
 (defn animation []
   "Uses the every-frame listener."
@@ -246,12 +294,12 @@
             ;:Keep-if-headless? true
             ;:Prevent-user-close? true
             :Children 
-            [{:Type 'JPanel 
-             :Every-frame (fn [s e o] (println "animation: " (:angle s)) 
+            [{:Type 'JScrollPane 
+             :Children
+             [{:Type 'JTextArea
+             :Every-frame (fn [s e o] (println "guitest/animation theta =" (:angle s)) 
                             (assoc (update s :angle #(+ % (/ 10 360.0))) 
                                          :Graphics (gfx (:angle s))))
-             :angle 0.0}]})))
-
-;(defn atoms []
-;  "Tests atoms for bieng fast."
-;)
+              :angle 0.0
+              }]
+             }]})))

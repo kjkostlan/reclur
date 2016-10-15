@@ -2,12 +2,10 @@
 (ns clooj.app.framer
   (:import [javax.swing JSplitPane] [java.awt Font Color]
            [javax.swing.text DefaultHighlighter DefaultHighlighter$DefaultHighlightPainter])
-  (:require [clooj.java.gui :as gui]
-            [clooj.java.widget :as widget]
+  (:require [clooj.java.widget :as widget]
             [clooj.java.popup :as jpopup]
             [clooj.java.file :as jfile]
             [clooj.coder.repl :as repl]
-            [clooj.utils :as utils]
             [clooj.collections :as collections]
             [clooj.app.colorful :as colorful]
             [clooj.coder.grammer :as grammer]
@@ -246,14 +244,14 @@
      :Children
      ; :callback only takes in the state.
     [{:Type 'JMenuItem :Text "load" :callback
-       (fn [s] (let [choice (utils/user-input "type in a filename (i.e. ./src/foo/bar.clj)")
+       (fn [s] (let [choice (jpopup/user-input "type in a filename (i.e. ./src/foo/bar.clj)")
                      tpath (concat (:output (:id-paths s)) [:Text])]
          (if choice 
            (if (jfile/is-file choice) (loadfile (assoc (save-file!!! s) :Title choice :cur-file choice))
              (assoc-in s tpath (str "Can't find file: " choice)))
            (assoc-in s tpath "No filename choosen."))))}
      {:Type 'JMenuItem :Text "new" :callback
-       (fn [s] (let [choice (utils/user-input "type in a filename (i.e. ./src/foo/bar.clj)")
+       (fn [s] (let [choice (jpopup/user-input "type in a filename (i.e. ./src/foo/bar.clj)")
                      tpath (concat (:output (:id-paths s)) [:Text])]
          (if choice 
            (if (jfile/is-file choice) (assoc-in s tpath (str "Already exists: " choice))
@@ -280,7 +278,8 @@
      [{:Type 'JMenuItem :Text "eval input (S + enter)" :callback code-to-repl!!}
       {:Type 'JMenuItem :Text "Repl's text->var s (C + enter)" :callback bind-repl-text-as-s!!}
       {:Type 'JMenuItem :Text "clc done tasks" :callback #(do (repl/clear-done-cmds!!) %)}
-      {:Type 'JMenuItem :Text "try to abort all tasks" :callback #(do (repl/clear-all-cmds!!) %)}
+      {:Type 'JMenuItem :Text "try 2 nicely stop tasks" :callback #(do (repl/clear-all-cmds!!) %)}
+      {:Type 'JMenuItem :Text "force abort tasks" :callback #(do (repl/abort-all-cmds!!) %)}
       {:Type 'JMenuItem :Text "reset namespace" :callback #(do (repl/reset-ns!!) %)}]}]})
 
 ; The main window with everything:

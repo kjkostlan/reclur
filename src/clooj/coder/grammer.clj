@@ -1,6 +1,6 @@
 ; Abstractions of clojures syntax. In any non-lisp language this file would be at least 10 times more.
 ; Also, these functions are useful for non-code (homoiconicity).
-(ns clooj.coder.grammer (:require [clooj.coder.io :as io] [clooj.collections :as collections] 
+(ns clooj.coder.grammer (:require [clooj.collections :as collections] 
                                   [clojure.string :as string] [clojure.walk :as walk]
                                   [clojure.set :as set])
   (:import (clojure.lang Compiler) (java.util Arrays)))

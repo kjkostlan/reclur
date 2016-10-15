@@ -11,7 +11,8 @@
   (:import [java.awt.image BufferedImage])
   (:require [clooj.java.clojurize :as clojurize] [clojure.set :as set]))
 
-; No need for clojurize/on-java-change since we are excluding graphics from that list.
+; No need for history/java-update since we are excluding graphics from that list.
+; TODO: explain this better.
 
 (def gets (clojurize/getters java.awt.Graphics2D))
 (def sets (clojurize/getters java.awt.Graphics2D))

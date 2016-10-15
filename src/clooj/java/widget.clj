@@ -4,7 +4,8 @@
             [clooj.java.clojurize :as clojurize]
             [clooj.java.detail :as detail]
             [clojure.set :as set] [clooj.collections :as collections]
-            [clooj.coder.grammer :as grammer])
+            [clooj.coder.grammer :as grammer]
+            [clooj.coder.history :as history])
   (:import [java.awt Dimension] [java.awt Point]
            [jcode JFrameClient] [java.lang.reflect Modifier]
            [javax.swing SwingUtilities]))
@@ -94,13 +95,13 @@
 (do (import-widgets _))
 
 (defn extract-from [sub-statef component]
-  "Applys componentf to the state of component and returns the result.
-   This does not modify the component but accesses the mutable atom.
-   Returns the result, not a function (this lets you use it in reify/proxies/etc)."
+  "Uses the root-atom and the path from the component to find the component's state.
+   Next, sub-statef is applied to that state. No mutation is done, but the (mutable) root-atom is accessed."
   (if (nil? sub-statef) nil
-     (let [state (get-in @(.getClientProperty component "root") 
-                         (.getClientProperty component "path"))]
-            (sub-statef state))))
+     (let [root-atom (.getClientProperty component "root") 
+           substate (get-in (history/atom-update @root-atom)
+                         (history/java-update (.getClientProperty component "path") root-atom))]
+            (sub-statef substate))))
 
 (defn recognized-fields [ty]
   "Which fields are recognized as settings on the given object.
@@ -114,7 +115,7 @@
    does NOT include the proxy-super, so you need to:
    (proxy-super paintComponent g) (defaultPaintComponent g this)"
   (let [root-atom (.getClientProperty this-obj "root")
-        path (.getClientProperty this-obj "path")
+        path (history/java-update (.getClientProperty this-obj "path") root-atom)
         cmds (get-in @root-atom (concat [:state] path [:Graphics]))]
     (if cmds (gfx/paint! g cmds))))
         
@@ -142,13 +143,13 @@
 (defmacro default-proxy [ty]
   (let [this 'this] `(fn [] (proxy [~ty] [] ; the symbol 'this must be literal.
         (toString [] (to-string ~this))
-        (paintComponent [g#] 
+        (paintComponent [g#] ; Can't really access the root-atom to store history here...
           (if (not (.getClientProperty ~this "blockPaint")) (do (proxy-super paintComponent g#) (defaultPaintComponent! g# ~this))))))))
 
 (defmacro sized-proxy [ty]
   (let [this 'this] `(fn [] (proxy [~ty] []
         (toString [] (to-string ~this))
-        (paintComponent [g#] 
+        (paintComponent [g#] ; Can't really access the root-atom to store history here...
           (if (not (.getClientProperty ~this "blockPaint")) (do (proxy-super paintComponent g#) (defaultPaintComponent! g# ~this))))
         (getPreferredSize [] (let [siz# (defaultGetPreferredSize ~this)]
                                (if siz# siz# (proxy-super getPreferredSize))))))))
@@ -157,7 +158,7 @@
 ; Each creator function takes no arguments and returns a proxy of the desieried type.
 (defmacro _make-ob-fns []
   (let [ws mapkwd2widget-cl
-        mk-fn (fn [ty-sym ty-kwd] ; MUST be a keyword.
+        mk-fn (fn [ty-sym ty-kwd] ; Never will a -DEV type go here.
                 (if (not (keyword? ty-kwd)) (throw (Exception. "Compile-time error not passed a keyword."))
                   (let [details (ty-kwd detail/widgets)
                         proxy-class (:use-user-class details)
@@ -170,19 +171,27 @@
 
 (defn refresh! [obj]
   "A simple refresh option."
-  (clojurize/on-java-change (.revalidate obj) obj)
-  (clojurize/on-java-change (.repaint obj) obj))
+  (if (not (javax.swing.SwingUtilities/isEventDispatchThread)) (throw (Exception. "refresh not in event dispatch thread"))) ; extra security.
+  (let [root-atom (.getClientProperty obj "root")]
+    ;(clojurize/on-java-change (.revalidate obj) obj)
+    (history/java-update (.putClientProperty obj "refresh" true) root-atom) ; Some things need to force themselves to be repainted.
+    (history/java-update (.repaint obj) root-atom)))
 
 ; TODO: _reflect-call! is a little repetative with clojurize functions.
-(defn _reflect-call! [method-name changes-obj? obj & args] ; calls reflection.
+(defn _reflect-call! [method-name obj & args] ; calls reflection.
+  ; The history storage stores this one level out.
   (let [methods (.getMethods (.getClass obj)) ; About 300 methods, should that matter for performance?
         target-methods (filterv #(and (= (count (.getParameterTypes %)) 1)  (= (.getName %) method-name)) methods)]
     (if (= (count target-methods) 1)
-      (if changes-obj?
-        (clojurize/reflection-on-java-change! (first target-methods) obj (into-array Object args))
-        (.invoke (first target-methods) obj (object-array args))) ; no need to check to see if we need to track the changes.
-      (throw (Exception. (str "There should be exactly one method reflection found, but there are: " (count target-methods) " for " method-name))))))
+      (.invoke (first target-methods) obj (object-array args)) ; no need to check to see if we need to track the changes.
+      (throw (Exception. (str "There should be exactly one method reflection found, but there are: " 
+                              (count target-methods) " for " method-name " On: " (type obj) 
+                              (if (> (count args) 0) (apply str " With these args: " (mapv type args)) "with no args.")))))))
 
+(defn _hreflect-call! [root-atom method-name changes-obj? obj & args]
+  (if root-atom ; We aren't using changes-obj? for now. Maybe in the future we will need it?
+    (history/java-update (apply _reflect-call! method-name obj args) root-atom)
+    (apply _reflect-call! method-name obj args)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;More public code used by other modules;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -199,7 +208,7 @@
     (assoc out :Document #{:DocumentListener})))
 
 (defn supported-listeners [ty-kwd]
-  (let [egos (ty-kwd ego-listeners)
+  (let [egos ((detail/remove-DEV ty-kwd) ego-listeners) ; Remove the dev because this uses reflection.
         detai (ty-kwd detail/widgets)]
     (set/union egos (apply hash-set (keys (:childs-with-listeners detai))))))
 
@@ -207,7 +216,8 @@
   ; Looks for the corresponding object:
   (if (nil? lclass-as-kwd) (throw (Exception. (str "nil listener type"))))
   (if (nil? lmaker) (throw (Exception. (str "Unrecognized listener type:" lclass-as-kwd))) 
-  (let [ty-kwd (keyword (.getClientProperty obj "type"))
+  (let [root-atom (.getClientProperty obj "root")
+        ty-kwd (keyword (history/java-update (.getClientProperty obj "type") root-atom))
         ch-lookup (get-in detail/widgets [ty-kwd :childs-with-listeners lclass-as-kwd])
         ; Add the listener to these objects:
         objs (if ch-lookup (mapv #(% obj) ch-lookup) [obj])
@@ -218,11 +228,11 @@
         ; Note: only set the tracker and change flags when we are on the main object.
         lset! (if add? 
                 (fn [obs] 
-                  (mapv #(_reflect-call! java-fn-name (not ch-lookup) % ladd) obs))
+                  (mapv #(_hreflect-call! root-atom java-fn-name (not ch-lookup) % ladd) obs))
                 (fn [obs] 
                   (let [rmo (fn [o] ; single object removal.
-                              (let [lstnrs (_reflect-call! get-fn-name false o)] ; should only be one listener.
-                                (mapv #(_reflect-call! java-fn-name (not ch-lookup) o %) lstnrs)))]
+                              (let [lstnrs (_hreflect-call! root-atom get-fn-name false o)] ; should only be one listener.
+                                (mapv #(_hreflect-call! root-atom java-fn-name (not ch-lookup) o %) lstnrs)))]
                     (mapv rmo obs))))]
     (lset! objs))))
 
@@ -247,7 +257,6 @@
   "Fills in any missing values with reasonable defaults."
   ;memoize because there is a performance bottleneck. The set of allowed types is quite small.
   (let [vital-defaults (type-to-vital-defaults-memo (keyword (:Type sub-state)))]
-    
     (collections/fillin-defaults sub-state vital-defaults)))
 
 (defn upkeep-listener-fcns [ty]
@@ -271,21 +280,19 @@
 (defn make-component [state root-atom path]
   "Creates the java object. The atom is not read or written to,
    it is just .putClientProperty'ed into the widget."
-  (let [sub-state (get-in state path)
+  (let [_ (if (nil? root-atom) (throw (Exception. (str "Nill root-atom on make-component."))))
+        sub-state (get-in state path)
         ty-kwd (keyword (:Type sub-state))
-        fno (get make-ob-fns ty-kwd)
+        fno (get make-ob-fns (detail/remove-DEV ty-kwd)) ; remove DEV here since fno is a default not a detail.
         construct (get-in detail/widgets [ty-kwd :construct])
-        xtra-make! (get-in detail/widgets [ty-kwd :extra-make!])
         
         _ (if (and (not construct) (not fno)) (throw (Exception. (str "Unrecognized type: " (:Type sub-state) " (path= " path ")"))))
         
-        obj (if construct (construct state root-atom path to-string) (fno))
-        ]
-    (clojurize/on-java-change (.putClientProperty obj "root" root-atom) root-atom)
-    (clojurize/on-java-change (.putClientProperty obj "path" path) root-atom)
-    (clojurize/on-java-change (.putClientProperty obj "type" ty-kwd) root-atom)
-    (clojurize/on-java-change (.setFocusable obj true) root-atom)
-    (if xtra-make! (xtra-make! obj sub-state root-atom path))
+        obj (if construct (construct state sub-state root-atom path to-string fno) (fno))]
+    (history/java-update (.putClientProperty obj "root" root-atom) root-atom)
+    (history/java-update (.putClientProperty obj "path" path) root-atom)
+    (history/java-update (.putClientProperty obj "type" ty-kwd) root-atom)
+    (history/java-update (.setFocusable obj true) root-atom)
     (update-component! obj {:Type (:Type sub-state)} sub-state false) obj))
 
 
@@ -300,14 +307,14 @@
       (throw (Exception. (str ty " can only have " (:max-children detai) " children (not including it's own builtin children)."))))
     (if (:add-child! detai)
         ((:add-child! detai) parent-obj child-obj state path-to-parent)
-        (clojurize/on-java-change (.add parent-obj child-obj) parent-obj)))) ; default add child.
+        (history/java-update (.add parent-obj child-obj) (.getClientProperty parent-obj "root"))))) ; default add child.
 
 (defn remove-child! [parent-obj child-obj]
   "Adds the child-obj to the parent-obj, both are java objects."
   (let [ty (.getClientProperty parent-obj "type") detai (ty detail/widgets)]
     (if (:remove-child! detai)
       ((:remove-child! detai) parent-obj child-obj)
-      (clojurize/on-java-change (.remove parent-obj child-obj) parent-obj))))
+      (history/java-update (.remove parent-obj child-obj) (.getClientProperty parent-obj "root")))))
 
 (defn daycare! [obj old-substate new-substate]
   (let [ty (.getClientProperty obj "type") detai (ty detail/widgets)]

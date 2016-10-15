@@ -20,6 +20,7 @@
             [clooj.java.errcatch :as errcatch]
             [clooj.java.thread :as thread]
             [clooj.collections :as collections]
+            [clooj.coder.history :as history]
             [clooj.java.clojurize :as clojurize])
   (:import [javax.swing SwingUtilities] [java.awt Window]))
 (def debug (atom []))
@@ -58,7 +59,8 @@
       (future (spin)))))
 
 (defn dispose-all-windows!! []
-  "Simply disposes all windows. MEMORY LEAK WARNING: Does not run windowClosing events."
+  "Simply disposes all windows. MEMORY LEAK WARNING: Does not run windowClosing events.
+   Does not call any updating to java changes."
   (control-edt? (fn [] (let [windows (Window/getWindows)] (mapv #(.dispose %) windows))) true))
 
 ; TODO: is this call to .setVisible nessessary?
@@ -68,16 +70,18 @@
   ; Called at the end for performance and anti flicker (windows bieng shown then moved immediatly).
   ; only use when starting up, not when updating.
   (let [obj (get-in java (concat path [:obj]))
+        root-atom (.getClientProperty obj "root")
         substate (get-in state path)
         visible (if (:Visible obj) (:Visible obj) true)] ; Visible not specified = true. 
-    (clojurize/on-java-change (.setVisible obj visible) obj)
+    (history/java-update (.setVisible obj visible) root-atom)
     (mapv #(_set-vis! state java %)
       (mapv #(conj path :Children %) (collections/ckeys (:Children substate)))))) ; the children are 1:1.
 
 (defn setup [state & opts]
   "Creates the actual GUI from an (immutable) clojure data-structure that reperesents the GUI state.
    Returns an atom with :state and :java as well as some other flags (it may take some time for the java objects to fully setup).
-   opts is for debugging, etc.
+   opts has:
+      :history = track the history. Useful for debugging.
    The atom is created atomisticly if we are NOT on the edt (the java may take longer?)
      if we are on the edt we can check for :setting-up? = true, but we may deadlock if we wait for it.
      :state IS atomistic."
@@ -90,7 +94,7 @@
                  (catch Exception e (do (println "Error adding defaults:" e) (throw (Exception. "See above message")))))
         
         root-atom (atom {:state stated :setting-up? true :updating-java-components? true})
-        _ (if (:debug-java-changes opts) (swap! root-atom assoc :debug-java-changes [])) ; track changes to the different java objects.
+        _ (if (:history opts) (swap! root-atom assoc :history [])) ; track changes to the different java objects.
         IaW #(SwingUtilities/invokeAndWait (errcatch/wrap %)) ; takes in a function.
         setup-gui!! (fn [] ; ran NOT on the edt.
                      ; invoke-and-wait all our calls.
@@ -125,22 +129,22 @@
   "Updates a state. Does not return anything."
   (control-edt? (errcatch/wrap #(updater/update! root-atom (updater/add-defaults-recursive new-state) "gui/update call")) true))
 
-(defn debug-munge-java-changes [debug-java-changes munge-java?]
-  "Represents the java changes in a terse format that does not generate infinite loops.
-   (the java objects have references to root atom which references back to the objects)."
-  (loop [ix 0 out [] munge {} cl-counts {}] ; outer loop through each change.
-    (if (= ix (count debug-java-changes)) out
-      (let [ch (nth debug-java-changes ix) ; single change, multible arguments.
-            x (loop [jx 0 jout [] jmunge munge jcl-counts cl-counts] ; inner loop through each argument.
-                  (if (= jx (count ch)) {:munge jmunge :outi jout :cl-counts jcl-counts}
-                    (let [arg (nth ch jx)
-                          cl (.replace (.replace (str (type arg)) "class " "") "clooj.java.widget.proxy$" "")
-                          ;  Somethings don't need to be changed:
-                          m (if (or (contains? #{"clojure.lang.Atom"} cl) ; we may add more to this hash-set. 
-                                  (and munge-java? (or (.contains cl ".swing.") (.contains cl "JFrameClient")))) ; stuff to munge.
-                                (get munge arg) arg)
-                          nil2zero #(if (nil? %) 0 %)
-                          m-new (if (nil? m) (str cl (nil2zero (get jcl-counts cl))) m)]
-                   (recur (inc jx) (conj jout m-new) 
-                     (assoc jmunge arg m-new) (assoc jcl-counts cl (inc (nil2zero (get jcl-counts cl))))))))]
-      (recur (inc ix) (conj out (:outi x)) (:munge x) (:cl-counts x))))))
+;(defn debug-munge-java-changes [debug-java-changes munge-java?]
+;  "Represents the java changes in a terse format that does not generate infinite loops.
+;   (the java objects have references to root atom which references back to the objects)."
+;  (loop [ix 0 out [] munge {} cl-counts {}] ; outer loop through each change.
+;    (if (= ix (count debug-java-changes)) out
+;      (let [ch (nth debug-java-changes ix) ; single change, multible arguments.
+;            x (loop [jx 0 jout [] jmunge munge jcl-counts cl-counts] ; inner loop through each argument.
+;                  (if (= jx (count ch)) {:munge jmunge :outi jout :cl-counts jcl-counts}
+;                    (let [arg (nth ch jx)
+;                          cl (.replace (.replace (str (type arg)) "class " "") "clooj.java.widget.proxy$" "")
+;                          ;  Somethings don't need to be changed:
+;                          m (if (or (contains? #{"clojure.lang.Atom"} cl) ; we may add more to this hash-set. 
+;                                  (and munge-java? (or (.contains cl ".swing.") (.contains cl "JFrameClient")))) ; stuff to munge.
+;                                (get munge arg) arg)
+;                          nil2zero #(if (nil? %) 0 %)
+;                          m-new (if (nil? m) (str cl (nil2zero (get jcl-counts cl))) m)]
+;                   (recur (inc jx) (conj jout m-new) 
+;                     (assoc jmunge arg m-new) (assoc jcl-counts cl (inc (nil2zero (get jcl-counts cl))))))))]
+;      (recur (inc ix) (conj out (:outi x)) (:munge x) (:cl-counts x))))))

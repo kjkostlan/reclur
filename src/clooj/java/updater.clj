@@ -5,6 +5,7 @@
            ;[jcode EventRelay]
            )
   (:require [clooj.java.widget :as widget]
+            [clooj.java.detail :as detail]
             [clooj.java.thread :as thread]
             [clojure.set :as set]
             [clojure.repl]
@@ -13,6 +14,7 @@
             [clooj.coder.grammer :as grammer]
             [clooj.java.gfx :as gfx]
             [clooj.java.clojurize :as clojurize]
+            [clooj.coder.history :as history]
             [clooj.collections :as collections]))
 
 (def debug-total-num-events (atom 0)) ; debugging.
@@ -68,12 +70,12 @@
 (defn delete! [root-atom]
   "Deletes 'everything' by removing the top level GUI component and nilling the atom. The GC should handle the rest."
   (assert-edt)
-  (let [root-ob (:obj (:java @root-atom))] 
-      (try (clojurize/on-java-change (.removeAll (.getContentPane root-ob)) root-atom) (catch Exception e))
+  (let [root-ob (:obj (:java (history/atom-update @root-atom)))] 
+      (try (history/java-update (.removeAll (.getContentPane root-ob)) root-atom) (catch Exception e))
       (if (instance? JFrame root-ob) ; close the root if it is a JFrame.
-          (clojurize/on-java-change (.dispatchEvent root-ob (WindowEvent. root-ob WindowEvent/WINDOW_CLOSING)) root-atom))
+          (history/java-update (.dispatchEvent root-ob (WindowEvent. root-ob WindowEvent/WINDOW_CLOSING)) root-atom))
       (stop-anim!! root-atom)
-      (reset! root-atom nil)))
+      (reset! root-atom nil))) ; Delete everything, don't track history.
 
 (defn _daycare! [java path old-state new-state]
   "Some functions like .pack JFrame need all the child components first set, etc.
@@ -109,13 +111,14 @@
   (update-defaults-recursive nil substate))
 
 (defn _assert-valid-state [old-state new-state path]
-  ; Some common vaidity of states. Does not fix bad stuff sent to the java.
+  ; Catches common errors early to reduce debugging. Does not fix bad stuff sent to the java.
   ; old-state is there to only check the changes (performance).
   (let [old-sub (get-in old-state path) new-sub (get-in new-state path)]
     (cond (or (not new-sub) (= (count new-sub) 0)) {:path path :error "nil/empty state"}
           (not (map? new-sub)) {:path path :error "Not a map."}
           (nil? (:Type new-sub)) {:path path :error "Nil type."}
-          (nil? (get widget/make-ob-fns (keyword (:Type new-sub)))) {:path path :error (str "Unrecognized type: "  (:Type new-sub))}
+          ; remove DEV because the make-ob-fns are calculated from reflection not detail:
+          (nil? (get widget/make-ob-fns (keyword (detail/remove-DEV (:Type new-sub))))) {:path path :error (str "Unrecognized type: " (:Type new-sub))}
           :else (if (and (:Children new-sub) (not (vector? (:Children new-sub))) (not (map? (:Children new-sub))))
                   {:path path :error "Children are not a vector or map."}
                   (if (not= (:Children old-sub) (:Children new-sub))
@@ -145,11 +148,6 @@
         new-java (update-java-tree-structure (:java root-state) deltas old-state new-state root-atom)
         ch-removes (remove-childs (:java root-state) deltas old-state new-state)
         ch-adds (add-childs new-java deltas old-state new-state)
-
-        ;_ (if (> (count ch-removes) 0)
-        ;   (println "Deltas:" deltas "remove:" (mapv str (mapv second ch-removes))))
-        ;_ (if (> (count ch-adds) 0)
-        ;   (println "Deltas:" deltas "add:" (mapv str (mapv second ch-adds))))
         
         unwrapped-deltas (concat (:add deltas) (:change deltas) (:remove deltas))
         
@@ -217,7 +215,7 @@
                              ]
                          (collections/asoc-in state path new-substate)) state))
         old-sub (get-in root-state (concat [:state] path))
-        builtin-listenerfs (widget/upkeep-listener-fcns (keyword (:Type old-sub))); (get widget/all-widget-wrappers (keyword (:Type substate))))
+        builtin-listenerfs (widget/upkeep-listener-fcns (keyword (:Type old-sub)))
 
         ; The builtin shouldn't modify the java, except in a few corner cases that we don't need to worry about.
         mid-state (if (and updating-for-another-event? do-builtin?) (:state root-state) 
@@ -232,15 +230,14 @@
     (fn []
       ; TODO: gaurentee the order of the animation loop.
       (let [root-state @root-atom]
-        (if root-state
+        (if (and root-state (> (count (:anim-tracker root-state)) 0))
           (let [t0 (thread/get-time-ns)
-                ; Processing is always false since this is a seperate thing.
-                ; To avoid timing issues, all :every frame events hapen on thier states:
+                ; Run all :EveryFrame events on the corresponding substates.
                 new-state (reduce #(process-event (assoc root-state :state %1) %2 
                                                  {:nanos t0} :Every-frame false true true)
                              (:state root-state) (:anim-tracker root-state))
                 update-fns {:update! update! :process-event process-event}]
-        (reset! root-atom (update! root-state new-state true update-fns root-atom "every frame")))))))))
+        (history/atom-update (reset! root-atom (update! root-state new-state true update-fns root-atom "every frame"))))))))))
 
 (defn setup! [root-atom] 
   "Setups the state which is bound as :state to @root-atom.
@@ -248,8 +245,9 @@
   (assert-edt)
   (let [root-state @root-atom
         update-fns {:update! update! :process-event process-event}]
-    ;(println "resetting atom setup!:" (str root-atom)  (:state @root-atom) "->" init-state)
-    (reset! root-atom (update! {} (:state root-state) false update-fns root-atom "setup"))
+    ; Which keys of root-state need to be dissoced and why is still mysterious.
+    (reset! root-atom (update! (dissoc root-state :state :setting-up? :updating-java-components?) 
+                        (:state root-state) false update-fns root-atom "setup"))
     ; Does not directly read or write from the atom:
     (thread/pulse!! (anim-loop!! root-atom) frame-rate 
       (str "updater every frame:" root-atom))))

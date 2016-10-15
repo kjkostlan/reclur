@@ -277,6 +277,10 @@
     (if (= n 0) "" ; woops.
       (apply str (mapv #(aget ^chars cs %) (range (max lo 0) (min hi n)))))))
 
+(defn get-and-reset! [at newval]
+  "Resets atom to newval and returns the old value. Useful for dequeueing-like operations. Atomic"
+  (let [tmp (atom [])] (swap! at #(do (reset! tmp %) newval)) @tmp))
+
 ; These simple functions come up a lot, because of let statements, etc:
 (defn evens [coll] (take-nth 2 coll)) 
 (defn odds [coll] (take-nth 2 (rest coll)))

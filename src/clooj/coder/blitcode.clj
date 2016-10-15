@@ -1,7 +1,7 @@
 ; Reads a string into code that preserves the format.
 
 (ns clooj.coder.blitcode
- (:require [clojure.string :as string] [clooj.coder.grammer :as grammer] [clooj.coder.io :as cio]
+ (:require [clojure.string :as string] [clooj.coder.grammer :as grammer]
            [clooj.collections :as collections] [clojure.pprint :as pprint]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -577,6 +577,27 @@
 (defn blit-project [blit]
   "Keeps as much of the original string as possible but keeping the meaning that of the new code."
   (reads-string-blit (blit-to-str blit)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;; A function maybe superseded by the refactor magic ;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn extract-outer-islands [text-or-parsed]
+  "Extracts outer level islands from a text OR a text analysis. Using subs pulls the island out, inclusive to the edge ()'s."
+  (let [parsed (if (map? text-or-parsed) text-or-parsed (basic-parse text-or-parsed)) ; use already-parsed code to avoid having to parse it here.
+        levels (:inter-depth parsed) levels (if (vector? levels) levels (into [] levels)) n (count levels)
+        n0 (dec n)
+        changes
+          (loop [zero1 (if (= (first levels) 1) [0] []) one0 [] ix 0]
+            (if (= ix n0) {:zero1 zero1 :one0 one0}
+                (let [l0 (nth levels ix) l1 (nth levels (inc ix))
+                      ; only outer islands:
+                      up?   (and (= l0 0) (= l1 1))
+                      down? (and (= l0 1) (= l1 0))]
+                  (recur (if up? (conj zero1 (inc ix)) zero1) (if down? (conj one0 (inc ix)) one0) (inc ix)))))
+        
+        zero1 (mapv dec (:zero1 changes)) one0 (if (= (last levels) 1) (conj (:one0 changes) n) (:one0 changes))]
+      (mapv #(vector %1 %2) zero1 one0)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;; Pretty printing functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;

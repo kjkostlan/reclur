@@ -15,6 +15,3 @@ public class JFrameClient extends JFrame {
         return "JFrame";
     }
 }
-
-//(import (jcode Treej))
-//(import (jcode JFrameClient))

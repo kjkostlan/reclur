@@ -11,6 +11,7 @@
             [clojure.string :as string]
             [clooj.java.rawdoc :as rawdoc]
             [clooj.java.errcatch :as errcatch]
+            [clooj.coder.history :as history]
             [clooj.collections :as collections]))
 (def debug (atom nil))
 
@@ -133,11 +134,11 @@
   ; Makes a clojure-friendly map for our events and adds some information (i.e. new positions, etc).
   ; The object is not always the .getSource of the event, for i.e. JScrollPane it's the parent.
   (if e
-    (let [tyl (type e) tyo (.getClientProperty obj "type")]
-      (let [encoded-evt-types (keys (get-in detail/widgets [tyo :event-encode])) ; as class objects.
-            tyl-r (first (filterv #(instance? % e) encoded-evt-types)) ; it's ok if e is a subclass.
-            encoder (if tyl-r (get-in detail/widgets [tyo :event-encode tyl-r]))] ; manual encoding of events.
-        (if encoder (encoder e obj) (clojurize/get-single-level e true false))))))
+    (let [tyl (type e)]
+      (let [encdr (let [eec detail/event-encode x (get eec (type e))] ; Our event is encoded.
+                    (if x x (get eec (first (filter #(instance? % e) (keys eec))))))] ; or it is a subclass.
+        ;(if encdr (println "Encoded event found for type: " (type obj) (type e) "Value: " (encdr e obj)))
+        (if encdr (encdr e obj) (clojurize/get-single-level e true false)))))) ; Use the encoder or use a default one.
 
 (defn updating-for-event? [root-state path]
   "Are we in the midst of updating an event?
@@ -160,8 +161,8 @@
                               false)]
           (if (not client-block?)
             (let [root-atom (if obj (.getClientProperty obj "root")); an atom holding the root.
-                  root-state0 (if root-atom @root-atom)
-                  ty-kwd (.getClientProperty obj "type")
+                  root-state0 (if root-atom (history/atom-update @root-atom))
+                  ty-kwd (if root-atom (history/java-update (.getClientProperty obj "type") root-atom) (.getClientProperty obj "type"))
                   process-event (:process-event update-fns)
                   update! (:update! update-fns)]
                   
@@ -170,9 +171,10 @@
                   ;These, of course, only do anything if there is an appropiate function.
                   (if (and root-state0 (not (:setting-up? root-state0)) ; Check for setting up.
                        (or (not (:blocked? (ty-kwd detail/widgets))) (not ((:blocked? (ty-kwd detail/widgets)) obj e)))) ; check for blocked events.
-                     (let [path (.getClientProperty obj "path")
+                     (let [path (if root-atom (history/java-update (.getClientProperty obj "path") root-atom) (.getClientProperty obj "path"))
                            ec (assoc (event-clojureize e obj) :event-type listener-key); :event-type is not redundant if the user maps multible listeners to the same fn.
                            ec1 (assoc ec :destination-path path)
+                           
                            sub-state (get-in root-state0 (concat [:state] path)); updated state after this change.
     
                            processing? (updating-for-event? root-state0 path)
@@ -210,13 +212,13 @@
                      ; update! if the user has made changes (we do NOT update for builtin changes):   
                      (if (not= (:state mid-root) new-state) 
                        ; the update is from the mid-root, NOT the root-state0:
-                       (do (.putClientProperty obj "listener/listen-fn->updating-for-event" true)
+                       (do (history/java-update (.putClientProperty obj "listener/listen-fn->updating-for-event" true) root-atom)
                            (let [new-root (update! mid-root new-state true update-fns root-atom 
                                   (str "builtin + usr " listener-key " path=" path))]
-                             (reset! root-atom new-root)
-                             (.putClientProperty obj "listener/listen-fn->updating-for-event" false)))
+                             (history/atom-update (reset! root-atom new-root))
+                             (history/java-update (.putClientProperty obj "listener/listen-fn->updating-for-event" false) root-atom)))
                        ; No user events, simply reset the atom:
-                       (reset! root-atom mid-root)))))))))
+                       (history/atom-update (reset! root-atom mid-root))))))))))
 
 (defn listen-fn [listener-key update-fns]
   (errcatch/wrap (_listen-fn listener-key update-fns)))
@@ -303,10 +305,10 @@
   ; Applies a single delta: Us listening to various objects.
   ; Nots not include the other object listening to us.
   ; Removals must be done before adding because they can share a path.
-  ;(println "etdpad" event-tracker delta-path add?)
   (let [state (if add? new-state old-state); remove = out with the old, add = in with the new.
         delta-path (into [] delta-path)
-        our-ty (keyword (:Type (get-in state delta-path)))
+        ; remove-DEV because the get-listeners doesn't use detail.
+        our-ty (detail/remove-DEV (keyword (:Type (get-in state delta-path))))
         lfs (group-by-flavor (get-listeners (get-in state delta-path) true our-ty)) ; our listener functions.
         nil2set (fn [x] (if x x #{}))
         point (if add? ; point update for a single path and a single 
@@ -337,8 +339,6 @@
         changed-to-us (reduce (fn [et ix] (reduce #(point %1 delta-path (nth ancestors ix) %2 :below) et (nth down-to-us-listeners ix))) changed-above (range (count ancestors)))
         changed-from-us (reduce (fn [et ix] (reduce #(point %1 delta-path (nth descendents ix) %2 :below) et (nth up-to-us-listeners ix))) changed-to-us (range (count descendents)))
         ]
-    ;(println down-to-us-listeners)
-    ;(println "delta: " delta-path "change to us? " (not= changed-from-us changed-above))
     changed-from-us))
 
 (defn did-events-change? [path old-state new-state]

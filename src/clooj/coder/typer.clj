@@ -1,3 +1,4 @@
+; IN DEVELOPMENT.
 ; A roll-our-own type system. I wonder how this compares to core.typed?
 
 (ns coder.typer)

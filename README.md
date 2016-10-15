@@ -1,4 +1,4 @@
-DANGER: Pre-alpha, many features are broken, missing, or incomplete.
+DANGER: Pre-alpha, many features are broken, missing, or incomplete. We plan soon to add the core essential features before making a super-powerful tool.
 
 The Cloojzone IDE is built from the ground up to leverage the power of functional programming, the JVM, and lisp’s powerful macro system. 
 
