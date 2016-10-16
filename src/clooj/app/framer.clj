@@ -276,7 +276,7 @@
     {:Type 'JMenu :Text "repl"
      :Children
      [{:Type 'JMenuItem :Text "eval input (S + enter)" :callback code-to-repl!!}
-      {:Type 'JMenuItem :Text "Repl's text->var s (C + enter)" :callback bind-repl-text-as-s!!}
+      {:Type 'JMenuItem :Text "Quote as s (C + enter)" :callback bind-repl-text-as-s!!}
       {:Type 'JMenuItem :Text "clc done tasks" :callback #(do (repl/clear-done-cmds!!) %)}
       {:Type 'JMenuItem :Text "try 2 nicely stop tasks" :callback #(do (repl/clear-all-cmds!!) %)}
       {:Type 'JMenuItem :Text "force abort tasks" :callback #(do (repl/abort-all-cmds!!) %)}
