@@ -6,6 +6,8 @@ Making Widgets more functional: Java gives us native access swing’s widgets an
 
 Code analyzing code: IDE’s are full of code analysis. Clojure and other Lisp languages excel at analyzing their own code. There is no reason to limit the feature set to the standard fare of refactoring, etc. Although there is very little working code analysis for now, code analysis is planned to become a key strength in the future.
 
+Springboard: The functional-ness of the code makes it easy to build an indepenent new version using the old version as a springboard.
+
 This codebase started as arthuredelstein/clooj (all rights reserved), but the code is substantially modified if not completely overhauled in many places.
 
 DANGER: Pre-alpha, many features are broken, missing, or incomplete. Don’t use this yet! oakes/Nightcode is an active, stable IDE for clojure in clojure available now on github.

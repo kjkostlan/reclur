@@ -27,7 +27,7 @@
            (swap! _limited-memonize-atom dissoc %)))
     (keys @_limited-memonize-atom)))))
 
-(thread/pulse!! sweep-step!! sweep-interval-ms "clojurize/sweep-step!!")
+(thread/pulse!! sweep-step!! sweep-interval-ms "clooj.java.clojurize/sweep-step!!")
 
 (defn time-limited-memonize [f]
   (fn [& args]
@@ -200,9 +200,9 @@
             out (into {} (remove (comp nil? second) (zipmap (keys target-methods) results)))]
         out))))
 
-(def _salt {:asdfdghterwedfsdgbtredfgerw 23432.23112})
 
 (def last-set-single-level!-error (atom nil))
+(def _salt (assoc {:asdfdghterwedfsdgbtredfgerw 23432.23112} "foo" "bar"))
 (defn set-single-level!
    "Single level for setter methods, only sets changes if kvs-old is supplied.
      keys in kvs that are unrecognized are ignored.

@@ -1,7 +1,8 @@
+; Generic functions to work with clojure's collections.
 (ns clooj.collections
   (:require [clojure.set :as set]))
 
-; Generic functions to work with clojure's collections.
+
 (def ^:dynamic *err-on-long-list* false) ; Errors on O(n) operations lists exceding 21 elements (the max vlaid code).
 
 (def _lazies 
@@ -31,7 +32,7 @@
   "Does pr-str use ()? Things like lists, seqs, etc. Returns false for non-collections."
   (and (coll? x) (not (vector? x)) (not (map? x)) (not (set? x))))
 
-(defn _el [l] (if (and *err-on-long-list* (> (count (take 22 l)) 21)) (throw (Exception. "Assertion error on O(n) point-update operation for a list too long to be valid code (> 21 elements)."))) l)
+(defn _el [l] (if (and *err-on-long-list* (> (count (take 22 l)) 21)) (throw (Exception. "Performance Assertion error on O(n) point-update operation for a list too long to be valid code (> 21 elements)."))) l)
 
 (defn lassoc [l k v & kvs]
   "List assoc: treat lists like vectors. O(n+kvs) but not a big deal for most lists based on very short code datastructures.
@@ -83,7 +84,7 @@
    :else (throw (Exception. "Not a clojure collection."))))
 
 (defn cmap [map-option f code & args]
-  "like map but it (as best as possible) preserves the type of code.
+  "like map but it (except in esoteric situations) preserves the type of code AND preserves code's metadata.
    Duplicates in sets will collapse if mapped to the same thing.
    What we do in for a map? has three options:
       :entry => apply f to each entry of a map (as a 2-long vector) returns a 2-long vector or a 1-key map.
@@ -94,28 +95,30 @@
       :vals => apply f to only the vals (keys are unchanged). 
         1:1 aligned with each of cvals for each args.
   Code determines the type/laziness no matter what args is."
-  (cond (nil? code) nil
-     (lazy? code) (apply map f code args) ; lazy seqs map.
-     (or (list? code) (seq? code)) (apply list (apply map f code args))
-     (vector? code) (apply mapv f code args)
-     (set? code) (apply hash-set (apply map f code args)); set will remove duplicated.
-     (map? code) 
-        ; Flatten maps puts all the keys first and all the values next.
-        (cond (= map-option :entry)
-          (let [fx (apply map f code args) kf (map #(if (map? %) (first (keys %)) (first %)) fx)
-                vf (map #(if (map? %) (first (vals %)) (second %)) fx)] (zipmap kf vf))
-          (= map-option :flatten) 
-          (zipmap (apply map f (keys code) (mapv ckeys args)) (apply map f (vals code) (mapv cvals args)))
-          (= map-option :keys)
-          (zipmap (apply map f (keys code) (mapv ckeys args)) (cvals code))
-          (= map-option :vals)
-          (zipmap (keys code) (apply map f (vals code) (mapv cvals args)))
-          :else (throw (Exception. (str "Unrecognized map-option: " map-option))))
-     (.isArray (.getClass code)) (into-array (apply mapv f code args)) ; must be type-consistant. WARNING: not high-performance (can this be changed?).
-     (coll? code) 
-     (throw (Exception. (str "Coll-type not implemented: " (type code))))
-     :else 
-     (throw (Exception. (str "Code type is not a collection: " (str code))))))
+  (let [code-meta (meta code)] ; preserve metadata. f operates on elements so cannot change the overall metadata.
+    (with-meta 
+      (cond (nil? code) nil
+         (lazy? code) (apply map f code args) ; lazy seqs map.
+         (or (list? code) (seq? code)) (apply list (apply map f code args))
+         (vector? code) (apply mapv f code args)
+         (set? code) (apply hash-set (apply map f code args)); set will remove duplicated.
+         (map? code) 
+            ; Flatten maps puts all the keys first and all the values next.
+            (cond (= map-option :entry)
+              (let [fx (apply map f code args) kf (map #(if (map? %) (first (keys %)) (first %)) fx)
+                    vf (map #(if (map? %) (first (vals %)) (second %)) fx)] (zipmap kf vf))
+              (= map-option :flatten) 
+              (zipmap (apply map f (keys code) (mapv ckeys args)) (apply map f (vals code) (mapv cvals args)))
+              (= map-option :keys)
+              (zipmap (apply map f (keys code) (mapv ckeys args)) (cvals code))
+              (= map-option :vals)
+              (zipmap (keys code) (apply map f (vals code) (mapv cvals args)))
+              :else (throw (Exception. (str "Unrecognized map-option: " map-option))))
+         (.isArray (.getClass code)) (into-array (apply mapv f code args)) ; must be type-consistant. WARNING: not high-performance (can this be changed?).
+         (coll? code) 
+         (throw (Exception. (str "Coll-type not implemented: " (type code))))
+         :else 
+         (throw (Exception. (str "Code type is not a collection: " (str code))))) code-meta)))
 
 ; Makes a vector of even-odd pairs. [{:even 0 :odd 1} {:even 2 :odd 3} {:even 3 :odd 4} ...]
 ; Useful for let statements et al that use pairs arguments.
@@ -170,6 +173,15 @@
    Also works for lists."
   (if (> (count ks) 0) (apply _updayte-in m ks f args) (apply f m args)))
 
+(defn updates-in [m ks f & args]
+  "Applies f to multible elements of m with different paths. Not lazy.
+   m = the data structure. ks = vector of vector of keys.
+   f = function taking one argument per vector + any args.
+     f returns a vector of elements one of each elemnt goes to each thing."
+  (let [xs (mapv #(get-in m %) ks)
+        vs (into [] (apply f (concat xs args)))]
+    (reduce #(assoc-in %1 (nth ks %2) (nth vs %2)) m (range (count vs)))))
+
 (defn gett-in
   ([m ks]
      (reduce gett m ks))
@@ -201,6 +213,14 @@
             (let [mid (+ lo (long (/ (- hi lo) 2)))] 
               (if (f mid) (recur lo mid) (recur mid hi)))))))
 
+(defn sortt [coll]
+  "Like sort but doesn't throw a ClassCastException when the collections are different types.
+   It will prioritize sorting by the type before the concent, but all numbers are treated as one type.
+   Numbers are ordered up to 10^64 in increments of 10^-64."
+  (let [tg (keyword (str "coll-meta-key" "-for-dontblockothermetas"))
+        ns (fn [n] (format "%064.64f" (double n)))]
+    (seq (mapv #(get (meta %) tg) (sort (mapv #(with-meta [(if (number? %) "" (str (type %))) (if (number? %) (ns %) (str %))] {tg %}) coll))))))
+
 (defn which [pred coll]
   "returns the keys/indexes for which pred is true on a given item of coll. Like filter but keys instead of values."
   (if (map? coll)
@@ -212,6 +232,7 @@
   "Like get but works on all collections. Like get, returns nil if failure."
   (cond (not (coll? coll)) (throw (Exception. "Not a collection"))
         (or (map? coll) (set? coll) (vector? coll)) (get coll k)
+        (and *err-on-long-list* (listoid? coll) (number? k) (> k 20) (> (count (take 22 coll)) 21)) (_el coll) ; perofrmance assertion.
         :else (try (nth coll k) (catch IndexOutOfBoundsException e))))
 
 (defn map-pinvert [mp]

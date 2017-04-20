@@ -1,13 +1,19 @@
 ; A simplified abstraction interface for working with Files.
 ; Most functions work with strings here.
+; Functional files:
+   ; There is a *disk* variable which keeps track of the disk.
+   ;TODO
 
 (ns clooj.java.file
   (:require [clojure.java.io :as io]
             [clojure.string :as string])
   (:import (java.io File BufferedWriter OutputStreamWriter FileOutputStream)
            (javax.swing JOptionPane)
+           (org.apache.commons.io FileUtils)
            (java.nio.file Files Paths)
            (java.nio.charset StandardCharsets)))
+
+;;;;;;;;;;;;;;;;;;;;; Misc stuff
 
 (defn re-index [re s]
   "Returns the indexes of where the regular expression occurs in the string s."
@@ -21,22 +27,25 @@
       []
       (reduce #(conj %1 (+ (last %1) %2)) [(nth couts 0)] (rest cs)))))
 
+
+;;;;;;;;;;;;;;;;;;;;;; environment:
+
+(defn sep [] (File/separator))
+
+(defn absolute-project-folder []
+  "Gets the absolute project folder, the reclur folder's full path."
+  (System/getProperty "user.dir"))
+
+; gets the src directory (string) that should contain both our project and the editor's project:
+(defn src-directory [] "./src") ; we simply use locals for the old app.
+
+;;;;;;;;;;;;;;;;;;;;;; conversion functions:
+
 (defn str-to-regex
   "sometimes you don't need a fancy regular expression. This makes a regexp that is equivalent to a non-regexp match of str.
    http://stackoverflow.com/questions/28342570/how-to-split-a-string-in-clojure-not-in-regular-expression-mode"
   [c]
   (re-pattern (java.util.regex.Pattern/quote (str c))))
-
-; stupid OS difference:
-(defn sep [] (File/separator))
-
-(defn is-dir [^String file] ; No, type hints are not always evil, these are strings.
-  (.isDirectory (File. file)))
-
-(defn is-file [^String file]
-  (.isFile (File. file)))
-
-; conversion functions:
 
 (defn file2namespace [^String file]
   "./src/clooj/java/file.clj into clooj.java.file, etc"
@@ -53,6 +62,11 @@
       file ; no change.
       (subs file 0 match))))
 
+(defn full-to-leaf [^String file]
+  (last (string/split file (str-to-regex (sep)))))
+
+;;;;;;;;;;;;;;;;;;;; Saving and loading, etc:
+
 ; store files in memory that we can revert:
 (def _buffer-size 0)
 (def _max-buffer-size 50000000) ; maximum buffer size.
@@ -62,9 +76,6 @@
   (let [match (filter #(= (:name %) file) _buffers)]
     (if (= (count match) 0) nil (:contents (nth match 0)))))
 
-(defn exists? [^String file] 
-  "Make sure you check for existance before creating new files!"
-  (.exists (File. file)))
 
 ; Save and load, simplified with strings. Use ./src/foo/bar/etc to save your .clj files.
 ;http://stackoverflow.com/questions/326390/how-to-create-a-java-string-from-the-contents-of-a-file
@@ -81,6 +92,17 @@
     (println (.getMessage e))
     (JOptionPane/showMessageDialog nil (str "Unable to load file: " file) "Oops" JOptionPane/ERROR_MESSAGE))))
 
+(defn get-last-modified [^String file]
+  (.lastModified (let [^File f (File. file)] f)))
+
+(defn load-textfile-timestamp [^String file]
+  "Loads a textfile, returning {:text :last-modified}.
+   Keeps loading the file until the :last-modified date doesn't change before vs after.
+   I think this is concurrent safe, in that it can't give back an old version without an updated modification date."
+  (let [a (atom {})]
+    (while (let [d0 (get-last-modified file) txt (load-textfile file) d1 (get-last-modified file)]
+             (reset! a {:text txt :last-modified d1}) (not= d0 d1))) @a))
+
 (defn save-textfile!!! [^String file ^String contents] ; three ! means that the disk is mutated.
   (try (do
          ; check for folder: 
@@ -91,9 +113,34 @@
   (catch Exception e
     (JOptionPane/showMessageDialog nil (str "Unable to save file: " file) "Oops" JOptionPane/ERROR_MESSAGE))))
 
+(defn rename-timestamp!!! [^String file-old ^String file-new]
+  "Renames the file OR folder, returning the new date modified.
+   TODO: how to handle concurrency ???"
+  (let [^File f0 (File. file-old) ^File f1 (File. file-new)] (.renameTo f0 f1)
+    (.get-last-modified f1)))
+
+(defn save-textfile-timestamp!!! [^String file ^String contents]
+  "Keeps saving a file until it is up-to-date, and returns the modification timestamp.
+   Again, concurrancy-safe to make sure that if it can't have an up-to-date stamp without bieng the up-to-date file."
+  (let [a (atom 0)]
+    (while (let [_ (save-textfile!!! file contents)
+                 t0 (get-last-modified file) _ (reset! a t0)
+                 val (load-textfile file)] (not= val contents))) @a))
+
 (defn delete-file!!! [^String file]
   "Remember to always prompt the user fist."
   (.delete (File. file)))
+
+(defn delete-folder!!! [^String folder]
+  "Very powerful and dangerous since it will delete all contents."
+  (FileUtils/deleteDirectory (File. folder)))
+  
+(defn delete-filder!!! [^String filder]
+  "File or folder, all contents in folder (if it is a folder) are also deleted just like GUI delete."
+  (let [^File f (File. filder)]
+    (cond (.isDirectory? f) (FileUtils/deleteDirectory f)
+      (.isFile f) (.delete f)
+      :else (throw (Exception. "File isn't a file or folder.")))))
 
 ; reverts to a buffered version, if we have one. Also returns the reverted string.
 (defn revert-textfile!!! [^String file]
@@ -104,8 +151,7 @@
         "Oops" JOptionPane/ERROR_MESSAGE) "")
       (do (save-textfile!!! file old) old))))
 
-; gets the src directory (string) that should contain both our project and the editor's project:
-(defn src-directory [] "./src") ; we simply use locals.
+;;;;;;;;;;;;;;;;;;;;; Various types of files:
 
 ; is .clj file and is folder. Yes this could be abstracted to save a couple of lines.
 (defn _clj? [^File file] (and (not (.isDirectory file)) (.endsWith (.getName file) ".clj")))
@@ -118,34 +164,46 @@
 (defn java? [^String file] (_java? (File. file)))
 (defn texty? [^String file] (_texty? (File. file)))
 (defn dir? [^String file] (_dir? (File. file)))
+(defn file? [^String file] (.isFile (File. file)))
+(defn exists? [^String file] 
+  "Make sure you check for existance before creating new files!"
+  (.exists (File. file)))
 
-(defn visible-children
-  "Get a vector of a directory's children, if there are any.
-   Omits hidden and temporary files."
+;;;;;;;;;;;;;;;;;;;;; Trees:
+
+(defn _visible-children-file-obj1 ; an ugly fn that accepts a File obj and returns a vector of strings.
   [^File file]
   (->> (.listFiles file)
        (remove #(.startsWith (.getName %) "."))
        (remove #(.endsWith (.getName %) "~"))
        vec))
+(defn _visible-children-file-obj [^String file] ; also ugly in the same way as above.
+  (mapv #(let [^File f %] (.getName f)) (_visible-children-file-obj1 (File. file))))   
 
-(defn local-path [^File file]
+(defn visible-children [folder full-path?]
+  "Get a vector of a directory's children, if there are any.
+   Omits hidden and temporary files.
+   Works with both absolute and relative paths."
+  (mapv #(let [^File f (File. %)] (if full-path? (.getAbsolutePath f) (.getName f))) (_visible-children-file-obj folder)))
+
+(defn _local-path [^File file]
  "converts a file object into local-path string"
  (str "." (sep) (.getPath (.relativize (.toURI (File. ".")) (.toURI file)))))
 
 (defn _filetree [^File folder filt]
   "Makes a tree of folders/files starting from a folder, only including files with a filter function."
-  (let [ch (visible-children folder) ft (filter filt ch)] ; File objects.
+  (let [ch (_visible-children-file-obj1 folder) ft (filter filt ch)] ; File objects.
     { ; doall's so we leave java-object land asap.
-      :ch-local (mapv local-path ft)
+      :ch-local (mapv _local-path ft)
       :ch-absolute (mapv #(.getAbsolutePath %) ft)
       :ch-leaf (mapv #(.getName %) ft)
       :children (mapv #(_filetree % filt) (filter _dir? ch)) ; recursive.
       :full (.getAbsolutePath folder)
-      :local (local-path folder)
+      :local (_local-path folder)
       :leaf (.getName folder)}))
 
 ; TODO: this is not the most convienent format because of the leaf.
-(defn filetree [folder filt] (_filetree (File. folder) filt))
+(defn filetree [^String folder filt] (_filetree (File. folder) filt))
 
 ; sets up the tree of .clj files for the current project.
 ; Format: :clj (.clj files as strings), :children (more src-trees) :full full-path filename :leaf leaf-filename.

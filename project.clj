@@ -9,9 +9,9 @@
   :java-source-paths ["src/clooj" "src/client"]
   :jvm-opts ^:replace []
 ;-XX:-OmitStackTraceInFastThrow
-  :dependencies [[org.clojure/clojure "1.7.0"]
-                 [clj-inspector "0.0.12"]
-                 [slamhound "1.2.0"]
+  :dependencies [[org.clojure/clojure "1.7.0"] ; granular-dependencies.clj per-file.
+                 [clj-inspector "0.0.12"]      ; clojure spec website read rationale.
+                 [slamhound "1.2.0"]           ; spec-ulation rich hickey (recent note).
                  [com.cemerick/pomegranate "0.0.11"]
                  [com.fifesoft/rsyntaxtextarea "2.5.0"]
                  [org.clojure/tools.nrepl "0.2.3"]
@@ -20,6 +20,9 @@
                  ;[net.java.dev.jogl/jogl "1.1.1a"]
 		[incanter "1.5.6"]
 		[org.apache.commons/commons-math3 "3.0"]
+		; Another example of how to use clojars: [astro-algo/astro-algo "0.1.3"]
+		[commons-io/commons-io "2.5"] ; for FileUtils.
+		[org.bmillare/dj.project "0.3.3"] ; allows dynamic loading of dependencies.
         [org.craigandera/dynne "0.4.1"]
         [prismatic/hiphip "0.2.1"]]
    :resource-paths ["jogl/gluegen-rt-natives-macosx-universal.jar"

@@ -30,7 +30,7 @@
    ; we must make it brighter.
     (if (> b bmax) 
       ; scaling all colors up will not work. Blend with white (lux = brt = 1 for white).
-      ; APPRIXIMATE brightness as linear in blending.
+      ; APPROXIMATE brightness as linear in blending.
       ; Blend the max brightness scaled color with white, higher x menas more white.
       ; bmax*(1-x) + x = bout => x - bmax*x = bout - bmax => x = (bout-bmax)/(1-bmax)
       (let [x (/ (- bout b) (- 1.0 b)) xc (- 1 x)]
@@ -54,3 +54,10 @@
         b (if (= level 0) 1 (+ 0.87 (* 0.08 (mod level 2))))
         h (nth hvals (mod (dec level) (count hvals)))
         s (if (<= level (count hvals)) 1 0.5)] (make-color (hsl2rgb [h s b]))))
+
+(defn level2rgb [level]
+  ; a nice color scheme. Returns a clojure vector form 0 to 1.
+  (let [hvals (into [] (map #(/ % 360) [0 37 55 80 115 153 180 220 320]))
+        b (if (= level 0) 1 (+ 0.87 (* 0.08 (mod level 2))))
+        h (nth hvals (mod (dec level) (count hvals)))
+        s (if (<= level (count hvals)) 1 0.5)] (hsl2rgb [h s b])))

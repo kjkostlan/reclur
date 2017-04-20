@@ -125,7 +125,7 @@
    Does nothing if there is no :cur-file yet."
   (if (:cur-file s)
     (let [cur-file (:cur-file s)
-          is-file? (jfile/is-file cur-file)
+          is-file? (jfile/file? cur-file)
           ; clj files must match between namespaces and java.
           clj? (jfile/clj? cur-file)
           ns-conflict (if clj? (not= (get-wantsedit-file s) cur-file) false)
@@ -190,7 +190,7 @@
                                     (mapv fc (:children branch)) [])
                           files-and-folders (mapv #(hash-map :Type 'JTree :Text %2 :filepath %1)
                                   (:ch-local branch) (:ch-leaf branch))
-                          files (filterv #(jfile/is-file (:filepath %)) files-and-folders)
+                          files (filterv #(jfile/file? (:filepath %)) files-and-folders)
                           
                           filders-v (into [] (concat folders files))
                           filders-k (into [] (concat (mapv #(str "F" (:Text %)) folders) (mapv #(str "f" (:Text %)) files)))
@@ -247,14 +247,14 @@
        (fn [s] (let [choice (jpopup/user-input "type in a filename (i.e. ./src/foo/bar.clj)")
                      tpath (concat (:output (:id-paths s)) [:Text])]
          (if choice 
-           (if (jfile/is-file choice) (loadfile (assoc (save-file!!! s) :Title choice :cur-file choice))
+           (if (jfile/file? choice) (loadfile (assoc (save-file!!! s) :Title choice :cur-file choice))
              (assoc-in s tpath (str "Can't find file: " choice)))
            (assoc-in s tpath "No filename choosen."))))}
      {:Type 'JMenuItem :Text "new" :callback
        (fn [s] (let [choice (jpopup/user-input "type in a filename (i.e. ./src/foo/bar.clj)")
                      tpath (concat (:output (:id-paths s)) [:Text])]
          (if choice 
-           (if (jfile/is-file choice) (assoc-in s tpath (str "Already exists: " choice))
+           (if (jfile/file? choice) (assoc-in s tpath (str "Already exists: " choice))
                (save-file!!! (assoc s :cur-file choice)))
            (assoc-in s tpath "No filename choosen."))))}
      {:Type 'JMenuItem :Text "save (C+S)" :callback 
@@ -293,7 +293,7 @@
   :cur-file nil
   :windowClosing (fn [s e o] 
                    ; save on close:
-                   (if (and (:cur-file s) (jfile/is-file (:cur-file s))) (save-file!!! s))
+                   (if (and (:cur-file s) (jfile/file? (:cur-file s))) (save-file!!! s))
                    (System/exit 0))
   ; This event does a lot: saving and loading files as well as updating the textarea:
   :below-valueChanged
@@ -302,7 +302,7 @@
           text ((:get-src-text s) s)
           ;Check if we update the file by saving and loading:
           filename (str (get-filename-from-tree tree e))
-          is-leaf-file? (and filename (jfile/is-file filename))]
+          is-leaf-file? (and filename (jfile/file? filename))]
       (if (and is-leaf-file?)
         (loadfile (assoc (if (:cur-file s) (save-file!!! s) s) :Title filename :cur-file filename)) s)))
   ; Checking if the files change:

@@ -344,9 +344,9 @@ javax.swing.event.TreeExpansionEvent
         (cond (and expanded? (not want-expanded?)) (try (.collapsePath root-jtree tpath) (catch Exception e (println "JTREE ERROR: " e)))
               (and (not expanded?) want-expanded?) (try  (.expandPath root-jtree tpath) (catch Exception e (println "JTREE ERROR: " e))))
         (cond (and selected? (not want-selected?)) (try (.removeSelectionPath root-jtree tpath) (catch Exception e (println "JTREE ERROR: " e)))
-              (and (not selected?) want-selected?) (try (.addSelectionPath root-jtree tpath) (catch Exception e (println "JTREE ERROR: " e))))))))
+              (and (not selected?) want-selected?) (try (.addSelectionPath root-jtree tpath) (catch Exception e (println "JTREE ERROR: " e)))) true))))
 
-(defn tree-pulse!! [] ; always runs every 30 ms.
+(defn tree-pulse!! [] ; runs every frame.
   (swap! jtree-refresh-ix inc)
   (let [x (collections/get-and-reset! jtree-adjustement-queue #{})]
     (if (> (count x) 0) ; if there is stuff to do.
@@ -355,7 +355,7 @@ javax.swing.event.TreeExpansionEvent
                      deleted-stuff (set/difference x x1)]
                  (swap! jtree-adjustement-queue #(set/union % x1))))))))
 
-(defonce ___ (thread/pulse!! #(tree-pulse!!) 30 (str "clooj/lava/detail/" "tree/pulse")))
+(defonce ___ (thread/pulse!! #(tree-pulse!!) 30 (str "clooj.java.detail/" "tree-pulse")))
 
 (defn schedule-adjustment!! [jtree] 
   "Schedules a node adjustement or refresh. The node adjustement will only occur if it is needed and 

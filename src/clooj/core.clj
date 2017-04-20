@@ -1,6 +1,8 @@
 (ns clooj.core
     (:require [clooj.java.gui :as gui]
-              [clooj.app.framer :as framer])
+              [clooj.app.framer :as framer]
+              [clooj.coder.repl :as repl]
+              [clooj.repl_start :as repl_start])
     (:gen-class
      :methods [^{:static true} [show [] void]]))
 
@@ -11,4 +13,5 @@
 
 ;;  startup
 (defn -main [& args]
-  (gui/setup (framer/window))) 
+  (gui/setup (framer/window))
+  (repl/add-to-repl!! repl_start/code))

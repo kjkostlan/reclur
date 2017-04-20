@@ -60,7 +60,7 @@
    Any other threads with lookup-id will be stopped.
    ms-time can be a number or a function of one value (the iteration #, starting at 0).
    include-fn-time? = include the time spent on each function call as time before the next.
-     True: If the function takes longer we will slow down as the wait interval is constant. 
+     False: If the function takes longer we will slow down as the wait interval is constant. 
    Note: using atom-check? allows for both internal and external stoppage."
   ([f!! ms-time lookup-id] (pulse!! f!! ms-time lookup-id (atom true) true))
   ([f!! ms-time lookup-id atom-check?] (pulse!! f!! ms-time lookup-id atom-check? true))

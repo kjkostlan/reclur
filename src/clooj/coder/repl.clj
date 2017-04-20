@@ -130,8 +130,7 @@
             (= nr 1) (first results)
             :else (apply list (concat ["Multible commands:    "] (interpose "    " results)))))))
 
-;;;;;;;;;; Simple debugging functions ;;;;;;;;;;
-; How to use machine lerarning to not have to fish and slow down version 4.
+; How to use machine learning to not have to fish and slow down version 4.
 (defmacro pr-err [code]
   "Use when debugging macros. This will try to run code, printing the stack trace if code fails.
    The stack trace from errors generated in macros gets swalllowed by a compiler error.
@@ -274,7 +273,6 @@ To prevent aborting of tasks due to lag, (set! *abort-lag-ms* 3e10).")
   "EZ function generating printouts."
   (let [out (indent/indent (brevity (try (read-string code) (catch Exception e code)) *ns*))]
     (if (not (second hint-dont-print)) (println (str (first hint-dont-print)) out) out)))
-
 
 ; Use the core and this ns so we have access to the functions.
 ; This must be in a future because we have to wait untill this ns is loaded.

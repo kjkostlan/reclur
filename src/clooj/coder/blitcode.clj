@@ -1,11 +1,14 @@
-; Reads a string into code that preserves the format.
+; Tools to read a string into blitted code that preserves the format, modify
+; the code, and go back to a string,
+; The whole point is to allow refactoring without wiping the original format.
+; DOES NOT SUPPORT the new 1.9 Map namespace syntax (TODO). As of April 8 2017 1.9 is still alpha.
 
 (ns clooj.coder.blitcode
  (:require [clojure.string :as string] [clooj.coder.grammer :as grammer]
            [clooj.collections :as collections] [clojure.pprint :as pprint]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;; Jumper functions that get the cursor past a given thingy.
+;;;;; Jumper functions that return the cursor index after the jump is complete.
 ;;;;; Each function takes (^chars cs ^int ix0 ^int n), where ix0 is the start of the whatever and n is the len of cs.
 ;;;;; The function returns the index one after the last index of said token.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -62,7 +65,7 @@
     ))))
 ; nil, booleans, keywords: uses the symbol jumper at the top.
 
-(defn open-jump [^chars cs ix0 n] (inc ix0)) ; lists vectors and maps.
+(defn open-jump [^chars cs ix0 n] (inc ix0)) ; lists, vectors, and maps use simple brackets.
 (defn close-jump [^chars cs ix0 n] (inc ix0))
 
 (defn comment-jump [^chars cs ix0 n]
@@ -72,12 +75,13 @@
         (if (= c \newline) (inc ix) ; include the newline in the comment token (self-contained). Multi-line comments are seperate tokens.
           (recur (inc ix)))))))
 
-(defn rmacro-jump [^chars cs ix0 n] ; Reader macros including stuff that we won't turn into a reader macro and metadata.
-  ; (not= (read-string "#{1 2}")  (read-string "(hash-set 1 2)")), even if it technically isn't a reader macro.
+(defn rmacro-jump [^chars cs ix0 n] ; Reader macros.
+  ; A few reader macro dispatches (i.e. the use of the #) aren't converted, most notably hash-sets:
+       ; (= (pr-str (read-string "#{1 2}")) "#{1 2}") but (not= (read-string "#{1 2}") (read-string "(hash-set 1 2)"))
   ; This function lumps multible reader macros together.
-  ; The reader macro CAN contain comments.
-  ; Does NOT include character literals.
-  ; Includes reader conditionals and read-eval but doesn't calculate them.
+  ; Some reader macros, like quotes, CAN contain comments.
+  ; Character literals are NOT considered reader macros.
+  ; Includes reader conditionals and read-eval but doesn't actually evaluate them.
   (loop [ix (int ix0)]
     (if (>= ix (int n)) ix
       (let [c (aget ^chars cs ix)]
@@ -89,7 +93,7 @@
               (recur (inc ix)))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;; The tokenizer which generates arrays that determine the syntax
+;;;;;;;;;;;; The tokenizer which generates arrays from the syntax
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ; Token id list:
@@ -97,11 +101,11 @@
 ; 6 = open ([{, 7 = close }]), 8 = comments, 9 = reader macros.
 
 (defn tokenize [^String s]
-  "Tokenizes the string s. Does not yet evaluate the token's value.
-   :token-type = what is each token's value.
+  "Tokenizes the string s, giving back arrays 1:1 with s. Does not yet evaluate the token's value.
+   ^ints :token-type = what is each token's value.
      Includes regexp and hash-sets as reader macros for now, they get changed later.
-   :token-index = counts upward, incementing at each new token.
-   :chars = (.toCharArray s) convenience field.
+   ^ints :token-index = counts upward, incementing at each new token.
+   ^chars :chars = (.toCharArray s) convenience field.
    25 ns/char for ~5kb strings."
   (let [^chars cs (.toCharArray s) n (int (count cs))
         ^ints token-type (make-array Integer/TYPE n) ; What tokens we belong to.
@@ -132,7 +136,7 @@
            (recur nx (inc tix)))))))
 
 (defn basic-parse [s]
-  "Tokenizes + adds an :inter-depth and :inter-depth-no-rmacro field.
+  "Tokenizes + adds ^ints :inter-depth and ^ints :inter-depth-no-rmacro field.
    inter-depth is interstitial: it has one more element than (count s)
      and the i'th element is the depth of a cursor between the i-1'th and i'th char.
    The depth includes any macro characters in as part of the () they are attached to.
@@ -164,17 +168,18 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;; The vectorizer which takes parse-arrays and makes a recursive, vector form.
+;;;;;;;;;;;; Reader-macros are stored as part of the :head and aren't expanded.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn depth-bracket [^ints depth ix0 dir]
-  "Finds the ending ix that matches the depth of ix0. dir = -1 or +1"
+  "Finds the locally-first or last ix that matches the depth of ix0. dir = -1 or +1 for left or right."
   (let [n (alength ^ints depth) d0 (aget ^ints depth ix0)] 
     (loop [ix (int ix0)]
       (if (or (>= ix n) (< ix 0) (< (aget ^ints depth ix) d0)) (- ix dir)
         (recur (+ ix dir))))))
 
 (defn token-end [^ints tix ix0 dir]
-  "The last index of the token, inclusive"
+  "The last index of the token, inclusive, given a token index."
   (let [n (alength ^ints tix) t0 (aget ^ints tix ix0)]
     (loop [ix (int ix0)]
       (if (or (>= ix n) (< ix 0) (not= (aget ^ints tix ix) t0)) (- ix dir) (recur (+ ix dir))))))
@@ -195,14 +200,15 @@
 
         ^String body (collections/asus cs start-ix1
                        (inc (min end-ix (token-end tix start-ix1 1))))]
-    (cond (and (< ty1 6) (> ty1 0)) ; leaf objects. Read-str would be easier but lets take a tiny loss and play fair implimenting it all ourselves.
+    ; A big switchyard depending on the type of the token (number, string, etc).
+    (cond (and (< ty1 6) (> ty1 0)) ; leaf objects. Read-str would be easier but it was easy enough to write the implementation it all ourselves just for fun.
          {:head rmac :tail body :obj (cond (= ty1 1) (symbol body) (= ty1 2) (keyword (collections/sus body 1)) (= ty1 3) body
                                        (= ty1 4) (let [zp #(str (if (= (first %) \0) "" "0") %)
                                                        body (zp body) ; initial pad to avoid empty exceptions.
                                                        bulast (apply str (butlast body)) lst (if (last body) (last body) \a)
                                                        split-dash (let [x (string/split body (re-pattern "/"))] (mapv zp x))
-                                                       nums-only #(.replaceAll % "[^0-9]" "")
-                                                       nums-edot (fn [s] (let [s1 (.replaceAll s "[^0-9e\\.]" "") n (count s1)]
+                                                       nums-only #(.replaceAll ^String % "[^0-9]" "")
+                                                       nums-edot (fn [s] (let [s1 (.replaceAll ^String s "[^0-9e\\.]" "") n (count s1)]
                                                                            (loop [acc [] ix (int 0) dot? false e? false]
                                                                              (if (= ix n) (apply str acc)
                                                                                (let [ci (nth s1 ix)]
@@ -266,11 +272,12 @@
 (defn reads-string-vcode [s] (parse-to-vcode (basic-parse (str "[" s "\n]"))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;; The blitter which takes the vectorized code, applis macros, packs meta, and changes the map type. 
+;;;;;;;;;;;; The blitter which takes the vectorized code, applis macros, packs meta, and changes the map type.
+;;;;;;;;;;;; The reader macros are still stored in the :head but they are  
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ; Some reader macro functions must be stored as symbols, but they cannot be called:
-(defn _x [] (throw "Reader macros symbols be called directly as functions.")) 
+(defn _x [] (throw (Exception. "Reader macros symbols be called directly as functions."))) 
 (def syntax-quote _x) (def meta-tag _x) 
 (def anon-fn _x) (def read-eval _x) (def condition _x) (def ignore _x) (def map-ns _x) ; anon-fns are later expanded.
 (def condition-splicing _x) (def hash-literal _x) (def regex-literal _x) ; literals are later expanded.
@@ -364,7 +371,10 @@
      It is stored in the outer level. :head still contains the macro strings.
    :order, holds the order for objects inside sets and maps."
   (_vcode-to-blit (_meta-pack (_rmacro-extract vcode))))
-(defn reads-string-blit [s] (vcode-to-blit (parse-to-vcode (basic-parse (str "[" s "\n]")))))
+(defn reads-string-blit [s] 
+  "Read-string but wrapping s into a vector format.
+   The initial [ and ending newline will have to be removed as the final step."
+(vcode-to-blit (parse-to-vcode (basic-parse (str "[" s "\n]")))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -526,7 +536,7 @@
             :else (recur (dec ix))))))))
 (defn _vcode-prevent-smash [vcode]
   "Ensures that the pieces of vcode do not intefere with eachother. Acts recursivly.
-   The two main sources of inteference is not having a space when it is nessessary and "
+   The two main sources of inteference is not having a space when it is nessessary and TODO what else?"
   (let [v? (vector? (:obj vcode))] 
     (if v?
       (let [o (mapv _vcode-prevent-smash (:obj vcode))
@@ -564,14 +574,15 @@
 (defn _vcode-to-str [vcode]
   "Converts to a string. Beware: the leaf objects should already have been projected (but it projects away squashed tokens and collisions)."
   (let [vcode1 (_vcode-prevent-smash vcode) out (_naive-str vcode1)
-        nt (if (or (= (last out) \newline) (= (last (butlast out)) \newline)) 2 1)]
-    (collections/sus out 1 (- (count out) nt)))) ; remove the head and tail.
+        nh (count (:head vcode1)) nt (count (:tail vcode1)); remove the outer [] wrapper.
+        out1 (collections/sus out nh (- (count out) nt))]
+    (if (= (last out1) \newline) (collections/sus out1 0 (dec (count out1))) out1))) ; remove the trailing \n if present, as we added that as part of the wrapper.
 
 (defn blit-to-str [blit]
   "Converts the blitcode to a string. Extracts metadata and reader macros.
    Projects the result so that it resembles the string demarcated by :head and :tail but
    also produces code equal to the value of :obj. For any VALID .clj source string,
-   (blit-to-str (str-to-blit s)) = s (unless there are bugs!)."
+   (blit-to-str (reads-string-blit s)) = s (unless there are bugs!)."
   (_vcode-to-str (blit-to-vcode blit)))
 
 (defn blit-project [blit]
