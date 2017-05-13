@@ -1,5 +1,6 @@
 ; Abstractions of clojures syntax. In any non-lisp language this file would be at least 10 times more.
 ; Also, these functions are useful for non-code (homoiconicity).
+; TODO: get rid of this file, putting functions into clooj.coder.lang.clojure and clooj.coder.lang.java
 (ns clooj.coder.grammer (:require [clooj.collections :as collections] 
                                   [clojure.string :as string] [clojure.walk :as walk]
                                   [clojure.set :as set])

@@ -8,6 +8,8 @@
  (require '[clooj.app.claytree :as claytree] '[clooj.guinew.jui :as jui] '[clooj.app.claytreetree :as clatre] '[clooj.app.claytreewalk :as clwalk])
  (require '[clooj.guinew.gtest :as gtest])
  (require '[clooj.coder.blitcode :as blitcode])
+ (require '[clooj.coder.rcode :as rcode])
  (require '[clooj.coder.refactor :as refactor])
+ (require '[clooj.collections :as collections])
  (intern 'clojure.core 'debug (atom []))
 ))

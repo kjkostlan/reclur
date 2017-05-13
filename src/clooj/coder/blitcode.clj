@@ -480,7 +480,7 @@
         ovm (mapv :meta ov)
         n (count ov) ov-extracts (mapv _macro-extract ov)
         thier-rmacros (mapv #(mash-tokens-of-ty (if (coll? (:obj %)) (str (:head %)) (str (:head %) (:tail %))) 9) ov)
-        thier-meta-rmacros (mapv #(if (:meta %) (mash-tokens-of-ty (:head (:meta %)) 9) "") ov) ; Includes the ending ^
+        thier-meta-rmacros (mapv #(if (:meta %) (mash-tokens-of-ty (if-let [_x (:head (:meta %))] _x "") 9) "") ov) ; Includes the ending ^
         ; Reader macros attached to the metadata will fall onto whatever the metadata is attached to.
         ; We have to split them back up but only if they actually do agree with the actual object.
         rmacro-symbols (mapv :symbols ov-extracts) ; The ground-truth what reader macros we have.
