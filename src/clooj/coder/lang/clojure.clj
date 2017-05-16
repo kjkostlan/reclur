@@ -1,8 +1,15 @@
 ; Clojure parser tools that can be plugged into rcode.
-; Eventually (LONG way down the road) other languages will go here.
+; Eventually (LONG way down the road) other languages will go in our folder.
 
 (ns clooj.coder.lang.clojure
  (:require [clojure.string :as string] [clooj.collections :as collections] [clojure.pprint :as pprint]))
+
+
+(def token-matches 
+  "Map from match to number."
+TODO)
+
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;; Helper functions that support the coding API.
