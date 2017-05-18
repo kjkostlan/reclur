@@ -131,10 +131,10 @@
   (type-of-group [this x])
   (meta-parse [this x])
   (readermacro-apply [this x])
-  (readermacro-unapply [this x])
-  (meta-unparse [this x])
-  (coll-project [this x])
-  (leaf-project [this x]))
+  (readermacro-unapply [this x r])
+  (meta-unparse [this x r])
+  (coll-project [this x r])
+  (leaf-project [this x r]))
 
 ;;;;;;;; metadata machina
 
@@ -142,7 +142,9 @@
 (def usermetaK (keyword "usermetaK"))
 (def usermeta-preparsedK (keyword "usermeta-preparsedK")) 
 (def children-nonuser-metaK (keyword "children-nonuser-metaK"))
-(def prereaderK (keyword "prereaderK")) 
+(def prereaderK (keyword "prereaderK"))
+(def orderK (keyword "orderK")) 
+(def mapwrapK (keyword "mapwrapK"))
 
 (defn user-meta [x] (dissoc (meta x) usermetaK tokenK usermeta-preparsedK prereaderK)) ; helper functions.
 (defn rcode-meta [x] (reduce #(let [v (get (meta x) %2)] (if (not (nil? v)) (assoc %1 %2 v) %1)) {} [orderK usermetaK usermeta-preparsedK prereaderK]))
@@ -182,10 +184,10 @@
               in-game?s1 (apply hash-set (filterv #(_match-head-body? (nth head-bodies %) tx c) in-game?s))
               in-gamef?s1 (apply hash-set (filterv #(_match-head-body? (let [x (nth head-fns %)] (vector (first x) (second x) "")) tx c) in-gamef?s))
               mature-fn-ixs (filterv identity (mapv #(if (= tx (count (get (nth head-fns %) 1))) in-gamef?s1))) ; functions at head-length match.
-              fn-returns (mapv ((nth (nth head-fns %) 2) cs (+ ix tx) n) mature-fn-ixs) ; apply funs that matured.
+              fn-returns (mapv #((nth (nth head-fns %) 2) cs (+ ix tx) n) mature-fn-ixs) ; apply funs that matured.
               max-tymax (reduce #(if (and (first %2) (> (first %2) (first %1))) %2 %1) [-1 -1] 
                                    (mapv vector fn-returns (mapv #(first (nth head-fns %)) mature-fn-ixs)))]
-          (if (and (= (first max-tymax) -1) (= (count in-game?s1) 0) (throw (Exception. (str "Can't find a unique parse match for: " (subs s ix0 (inc ix)))))))
+          (if (and (= (first max-tymax) -1) (= (count in-game?s1) 0)) (throw (Exception. (str "Can't find a unique parse match for: " (subs s ix0 (inc ix))))))
           (cond (> (first max-tymax) -1) ; function matches take priority once the head gets fully matched. ix1 is just after the end of the token.
             (let [ix1 (first max-tymax)] (recur (conj types (second max-tymax)) (conj strs (subs s ix0 ix1)) ix1 ix1 all-in all-fin))
             (or (= ix (dec n)) (and (= (count in-game?s1) 1)  (not _match-head-body? (nth head-bodies (first in-game?s1)) (inc tx) (aget ^chars cs (inc ix))))) ; one unique match or end of array.
@@ -194,7 +196,7 @@
 
 (defn even-odd-enforce [tokens] ; step 2 and helper to step 4. Not recursive.
   (let [f? #(or (vector? %) (not= (:type %) 0))
-        tokens (reduce (fn [acc t] (if (and (> (count acc 0)) (not (f? (last acc))) (not (f? t)))
+        tokens (reduce (fn [acc t] (if (and (> (count acc) 0) (not (f? (last acc))) (not (f? t)))
                                      (update-in acc [(dec (count acc)) :strings 0] #(str % (first (:strings t))))
                                      (conj acc t))) [] tokens) ; preprocessing of lumping consecutive space tokens.
         n (count tokens) sp {:type 0 :strings [""]} ph {:type 7 :strings [""]}]
@@ -203,7 +205,7 @@
       (loop [acc [] ix 0]
         (if (= ix n) acc
           (let [t (nth acc ix) need-f? (even? (count acc)) ; vector? for step 4 only.
-                acc1 (cond (= (f? t) need-f) (conj acc t) (not (f? t)) (conj acc sp t) :else (conj acc ph t))] ; the enforcement.
+                acc1 (cond (= (f? t) need-f?) (conj acc t) (not (f? t)) (conj acc sp t) :else (conj acc ph t))] ; the enforcement.
             (recur acc1 (inc ix)))))))) 
 
 ;(defn fill-value [x lang] ; helper to step 3
@@ -218,7 +220,7 @@
   (let [n (count tys)]
     (loop [acc [] clevel 0 ix 0]
       (if (= ix n) acc
-        (let [tyi (nth ty ix) tsi (nth ts ix) ix1 (inc ix)]
+        (let [tyi (nth tys ix) ix1 (inc ix)]
           (cond (= tyi 6) (recur (conj acc (inc clevel)) (inc clevel) ix1) ; open
             (= tyi 7) (recur (conj acc clevel) (dec clevel) ix1) ; close.
             :else (recur (conj acc clevel) clevel ix1))))))) ; neither open nor close.
@@ -236,14 +238,14 @@
         m-not-sorted (assoc (zipmap (vals close-to-open) (keys close-to-open)) 0 (dec (count ty)))]
      (into (sorted-map) m-not-sorted)))
 
-(defn _braket-group [x ixs pairs] ; helper to step 3.
+(defn _bracket-group [x ixs pairs] ; helper to step 3.
   (let [n (count ixs)
         xv-ixsv
         (loop [xv [] ixsv [] jx 0]
           (if (>= jx n) [xv ixsv]
             (let [kx (nth ixs jx) cl (get pairs kx)]
               ; ignore jx = 0 as that's the opening bracket for the entire collection.
-              (if (and (> jx 0) cl) (recur (conj xv (subvec x jx (inc cl))) (conj ixsv (subvec x jx (inc cl)))) (inc cl)
+              (if (and (> jx 0) cl) (recur (conj xv (subvec x jx (inc cl))) (conj ixsv (subvec x jx (inc cl))) (inc cl))
                 (recur (conj xv (nth x jx)) (conj ixsv (nth ixs jx)) (inc jx))))))]
     (mapv #(if (vector? %1) (_bracket-group %1 %2 pairs) %1) ; recursive on nested collections. 
       (first xv-ixsv) (second xv-ixsv))))
@@ -262,7 +264,7 @@
 
 (defn meta-local-assign [x lang] ; step 5.
   (if (vector? x)
-    (let [assignments (meta-assign lang (mapv #(meta-group x %) x))]
+    (let [assignments (meta-assign lang (mapv #(meta-local-assign x %) x))]
       (mapv #(if (and %2 (> %2 -1)) (assoc %1 :meta-of %2) %1) x assignments)) x))
 
 (defn coll-parse [x lang]; step 6 is a biggie.
@@ -275,14 +277,14 @@
           pack-to (fn [m ix-from ix-to] ; even-odd and neck packing.
                     (let [fr (get m ix-from) t (get m ix-to) vify #(if (vector? %) % [%]) vcat #(into [] (concat %1 %2))]
                       (if (or (not fr) (not t)) (throw (Exception. "Trying to parity-pack into a map stuff that was already packed. Coding error in this function?"))) 
-                      (dissoc (assoc m ix-to (if (< ix-from ix-to) (update t :strings #(vcat (vify (:strings f)) (vify %)))
-                                               (update t :strings #(vcat (vify %) (vify (:strings f)))))) ix-from)))
-          xmap-pack (-> (reduce #(cond (odd? %2) (pack-to %1 %2 (dec %2)) %1) xmap (range 3 n)) ; pack up the meta and space tokens.
+                      (dissoc (assoc m ix-to (if (< ix-from ix-to) (update t :strings #(vcat (vify (:strings fr)) (vify %)))
+                                               (update t :strings #(vcat (vify %) (vify (:strings fr)))))) ix-from)))
+          xmap-pack (-> (reduce #(if (odd? %2) (pack-to %1 %2 (dec %2)) %1) xmap (range 3 n)) ; pack up the meta and space tokens.
                       (pack-to 1 0) (pack-to (dec n) 0)) ; head and tail.
           xmap-pack-m (reduce #(if-let [to-ix (:meta-of (get %1 %2))] (pack-as-meta %1 %2 to-ix) %1) xmap-pack (keys xmap))
     
           ; Now the conversion away from tokens. Recursive on both the metadata and the standard collections.
-          xvec1 (mapv (fn [xi] (coll-parse (vary-meta xi (fn [mxi] (update mxi usermetaK (fn [v] (mapv (coll-parse % lang) v))))) lang)) (vals xmap-pack)))
+          xvec1 (mapv (fn [xi] (coll-parse (vary-meta xi (fn [mxi] (update mxi usermetaK (fn [v] (mapv #(coll-parse % lang) v))))) lang)) (vals xmap-pack))
           ; Assign order to the tokenK:
           xvec2 (mapv (fn [xi ix] (vary-meta xi #(assoc-in % [tokenK :order] ix))) xvec1 (range))]
       (cond (= ty :vector) xvec2
@@ -290,7 +292,7 @@
         (= ty :list) (apply list xvec2)
         (= ty :set) (apply hash-set xvec2)
         :else (throw (Exception. (str "Unrecognized collection type: " ty " (should be :list, :map, :vector, or :set).")))))
-      (with-meta (mwrap (if (:value x) (:value x) (first (:strings x)))) (assoc (meta x) tokensK (dissoc x :value))))) ; leaf level parse and map-wrap.
+      (with-meta (mwrap (if (:value x) (:value x) (first (:strings x)))) (assoc (meta x) tokenK (dissoc x :value))))) ; leaf level parse and map-wrap.
 
 (defn parse-metas [x lang] ; step 7.
   (let [um (usermetaK (meta x)) par-met #(parse-metas % lang)
@@ -305,14 +307,14 @@
     (if (sequential? x2) ; only sequentials have reader macros. Example: the :{foo bar} is (: {foo bar}) b4 processing.
       (let [t0 (first x2)] ; detect reader macros.
         (if (= (:type (tokenK (meta x2))) 6) ; reader macro detection.
-          (vary-meta (readermacro-apply lang x2) #(assoc % prereaderK (with-meta k2 nil))))) x2))) ; store the prereaderK and then apply the reader.
+          (vary-meta (readermacro-apply lang x2) #(assoc % prereaderK (with-meta x2 nil))))) x2))) ; store the prereaderK and then apply the reader.
 
 (defn un-map-wraps [x] ; step 9.
   (if (coll? x)
     (vary-meta (collections/cmap :flatten #(un-map-wraps x) x) 
       (fn [m] (assoc m children-nonuser-metaK
                 (let [vsw (filterv mwrapped? (if (map? x) (concat (keys x) (vals x)) (collections/cvals x)))] ; only the wrapped ones.
-                  (zipmap (mapv unwrap vsw) (mapv meta vsw))))))
+                  (zipmap (mapv munwrap vsw) (mapv meta vsw))))))
     (munwrap x)))
 
 ;;; The main reverse pipeline. Most reverse-recursive act in reverse order: we applied the reader macros inside out but the inverse readermacros outside in.
@@ -321,9 +323,9 @@
   (if (coll? x)
     (let [ch-m (children-nonuser-metaK (meta x))
           x1 (collections/cmap :flatten 
-               #(let [cm (get ch-m %) xw (mapwrap x)] 
+               #(let [cm (get ch-m %) xw (map-wraps x)] 
                   (if (and (not (meta x)) cm) (with-meta xw cm) xw)))]
-      (collections/cmap :flatten map-wraps (vary-user-meta x map-wraps))) x)) ; recursive part.
+      (collections/cmap :flatten mwrap (vary-user-meta x map-wraps))) x)) ; recursive part.
 
 (defn un-readermacro [x lang] ; step inv8
   (let [x1 (if-let [y (prereaderK (meta x))] (vary-meta (readermacro-unapply lang x y) #(dissoc % prereaderK)) x)
@@ -333,10 +335,10 @@
 (defn un-metaparse [x lang] ; step inv7.
   (let [x1 (if-let [y (usermeta-preparsedK (meta x))]
              (vary-meta (vary-meta x #(assoc % usermetaK (meta-unparse lang (user-meta x) y)))
-               #(dissoc % usermeta-preparsedK)) x1)
+               #(dissoc % usermeta-preparsedK)) x)
         x2 (if-let [um (usermetaK (meta x1))] 
              (vary-meta x #(assoc % usermetaK (un-metaparse um lang))) x1)] ; recursive on meta.
-    (if (coll? (munwrap x2)) #(collections/cmap :flatten #(un-metaparse %) x2 lang) x2)))
+    (if (coll? (munwrap x2)) (collections/cmap :flatten #(un-metaparse %) x2 lang) x2)))
 
 (defn un-collparse [x lang] ; step inv6-5 feels much easier.
   (let [vs (into [] ; order equivalent to how most languages describe it. The lang fns can always change it.
@@ -344,7 +346,7 @@
                (set? x) (let [n (count x)
                               y (reduce #(let [o (orderK (meta %2))] 
                                            (if (and o (not (get %1 o))) (assoc %1 o %2)
-                                             (assoc %1 (+ n (count %1)) %2) {} x)))]
+                                             (assoc %1 (+ n (count %1)) %2)) {} x))]
                           (mapv #(get y %) (sort (vals y))))
                 :else (into [] (collections/cvals x))))
         ensure-len (fn [v n] (into [] (subvec (concat (mapv str v) (repeat n "")) 0 n))) ; to make reversal slightly easier.
