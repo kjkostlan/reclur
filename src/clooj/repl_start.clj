@@ -11,5 +11,7 @@
  (require '[clooj.coder.rcode :as rcode])
  (require '[clooj.coder.refactor :as refactor])
  (require '[clooj.collections :as collections])
+ (require '[clooj.collections :as collections])
+ (defn rl [] (require '[clooj.coder.lang.clojure :as clojurelang] :reload))
  (intern 'clojure.core 'debug (atom []))
 ))

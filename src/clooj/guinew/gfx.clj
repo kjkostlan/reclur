@@ -1,3 +1,4 @@
+; TODO: examples are out of date slightly in thier format.
 
 ; The default graphics updating that is made to be more functional.
 ; Performance is favored over a super flexible API, as performace for graphics was found to be the bottleneck.
@@ -8,8 +9,8 @@
 (ns clooj.guinew.gfx)
 
 ; Each object can have :Graphics which is a vector of commands:
-; [:drawOval, [10 10 20 20]], [:fillRect, [10 10 20 20]] .... ]. Most commands must take clojure structures.
-; [:drawOval, [10 10 20 20] ; uses defaults for everything, including color, etc.
+; [:drawOval, [10 10 20 20]]. Most commands must take clojure structures.
+; [:fillRect, [10 10 20 20] ; when no third argument is supplied, uses defaults for everything, including color, etc.
 ; [:drawOval, [10 10 20 20], {:Color [0 1 0], :Stroke [...]}] ; overrides the defaults, ONLY for this one call. 
 ; [:java (fn [^java.awt.Graphics2D g] ...)] ; Puncture the abstraction and call java commands directly on the graphics object. 
      ; If this changes graphis's settings it will affect downstream calls until any changes get overriden.
@@ -189,7 +190,7 @@
       (loop [acc [] non-defaults {} ix 0]
         (if (= ix (count cmds)) acc
           (let [cmd (nth cmds ix)
-                specs (if-let [x (get cmd 2)] x []) ; The second argument is stuff like color, etc that mutates the java class.
+                specs (if-let [x (get cmd 2)] x {}) ; The second argument is stuff like color, etc that mutates the java class.
                 ; Works for both java and non-java objects:
                 changes (reduce #(let [sp (get specs %2) old (get non-defaults %2)]
                                    (cond (or (identical? sp old) (= sp old)) ; identical? used as well to avoid reflection when we have java objects (assuming references are reused).
@@ -233,7 +234,8 @@
                          (catch Exception e (report-e (str "Error (when resetting to defaults) for command: " (k bank) " given: " (get defaults (sg-map k)) " on: " (g-code k)))))
                        :else
                        (try ((k bank) g arg)
-                         (catch Exception e (report-e (str "Error for command: " (k bank) " given: " arg " on: " (g-code k)))))))))))
+                         (catch Exception e (report-e (str "Error for command: " (k bank) " given: " arg " on: " (g-code k)) e)))))
+                   (throw (Exception. (str "Unrecognized draw command: " k)))))))
       body)))
 
 (defn defaultPaintComponent! [g this-obj]
