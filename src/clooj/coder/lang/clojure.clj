@@ -31,7 +31,7 @@
 ; TODO: Many of these functions are useful for a wider scope than just clojure. Refactor them out. 
 (def controls (apply str (mapv char (range 32))))
 (defn s2s [x] (apply str x))
-(defn escape-str [^chars cs ix-start n] 
+(defn escape-str [^chars cs ^chars cs0 ix-start n] 
   (loop [escape? false ix (int ix-start)]
     (if (>= ix n) n
       (let [c (aget ^chars cs ix)]
@@ -76,7 +76,7 @@
 
 (declare jump-after-form) ; jump-after-form <-> token-matchers circular dependency.
 (def tok-matchers 
-  [[3 "eeeee"] [3 "eeee"] [3 "eee"] ; false true nil.
+  [^:picky [3 "false"] ^:picky [3 "true"] ^:picky [3 "nil"] ; vary few symbol-like literals.
    [0 " " " \n"] [0 ";" ".0e@#$%^()[]{}\\'`~?/+_"] [0 "\n"] ; spaces and comments (and the newline that ends all comments).
    [0 "#_" jump-after-form] ; This isn't really a reader macro since #_foo doesn't become [] it is just empty space.
    [3 "\\\\"] [3 "\\ "] [3 "\\\n"] [3 "\\("] [3 "\\)"] ; char literals as-is + unicode.
@@ -90,17 +90,17 @@
    [2 ":" "e:'0._+?#'/"] [1 "e" "e:0._'+/?#'"] [1 "0" "e:0._'+/?#'"] [1 "." "e:0._'+/?#'"] [1 "_" "e:0._'+/?#'"] 
    [1 "+" "e:0._'+/?#'"] [1 "?" "e:0._'+/?#'"]]) ;kwds + syms, syms lowest priority
 
-(defn jump-after-form [^chars cs ix-start n] ; jumps after the upcomming form, a single form bieng i.e. everything within ().
+(defn jump-after-form [^chars cs ^chars cs0 ix-start n] ; jumps after the upcomming form, a single form bieng i.e. everything within ().
   (loop [ix ix-start level 0]
     (if (>= ix n) n
-      (let [tok (rcode/next-token cs ix tok-matchers) ty (first tok) ix1 (second tok) ; ix is the end of the token.
+      (let [tok (rcode/next-token cs cs0 ix tok-matchers) ty (first tok) ix1 (second tok) ; ix is the end of the token.
             meta? (= (aget cs ix) \^)]
         (cond (and (= level 0) (not= ty 0) (not= ty 4) (not= ty 6) (not meta?)) ix1 ; standard stop.
           (and (= level 1) (= ty 5)) ix1 ; ending bracket.
           (or (= ty 0) (= ty 4) (> level 0)) (recur ix1 (+ level (cond (= ty 4) 1 (= ty 5) -1 :else 0))) ; nested OR didn't hit land yet.
-          meta? (let [after-meta (jump-after-form cs ix1 n)] ; after all the metadata is done.
-                  (jump-after-form cs after-meta n)) ; jump after the target of the metadata.
-          (= ty 6) (jump-after-form cs ix1 n) ; reader macros jump to the next form.
+          meta? (let [after-meta (jump-after-form cs cs0 ix1 n)] ; after all the metadata is done.
+                  (jump-after-form cs cs0 after-meta n)) ; jump after the target of the metadata.
+          (= ty 6) (jump-after-form cs cs0 ix1 n) ; reader macros jump to the next form.
           :else (throw (Exception. "Can this happen?")))))))
 
 ; This matches a very small superset of valid clojure syntax.
@@ -108,7 +108,7 @@
     (character-tokenize-groups [this]
       "Do the token breaks matter whether a char is an a,b, and c?
        Here we define groups of characters that behave the same syntactically.
-       The token matchers then determines the."
+       The token matchers will see this simplified version unless they have the metadata ^:picky."
       [["0123456789" "0"] ["abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ*!|<>&%=" "e"]
        [",\t\b" " "] ["\r\n" "\n"] ["-+" "+"]])
 
@@ -119,7 +119,7 @@
        There are three different formats supported, the ty bieng the type of token (space, symbol, literal, bracket, etc):
          [ty head] = the token must match the head literally.
          [ty head body] = head (can be empty) + a body that is the set of characters that allows us to continue a match.
-         [ty head fn] = head (can be empty) + (fn [^chars cs ix-start n]) that returns the token's ending index (exclusive). -1 or nil = not a match."
+         [ty head fn] = head (can be empty) + (fn [^chars cs ^chars cs0 ix-start n]) that returns the token's ending index (exclusive). -1 or nil = not a match."
        tok-matchers)
 
     (non-bracket-group [this x]

@@ -211,53 +211,54 @@
         x (if (= (get-in x [0 :type]) 4) x (into [] (concat [op sp] x)))
         x (if (= (get-in x [(- (count x) 2) :type]) 5) x (into [] (concat x [cl sp])))] x))
 
-(defn _next-token [ix m n ^chars cs heads types ^ints head-counts ^ints is-fn?s matchers bodies] ; like next-token but requiring more precomputed stuff.
+(defn _next-token [ix m n ^chars cs ^chars cs0 heads types ^ints head-counts ^ints is-fn?s ^ints pickie?s matchers bodies] ; like next-token but requiring more precomputed stuff.
   (loop [jx 0]
     (if (= jx m) (throw (Exception. (str "No token matches for: ix=" ix " n=" n " cs="  (apply str cs))))
       (let [^chars head (nth heads jx) 
             last-head (+ ix (aget head-counts jx)) ; index after the end of the head.
+            picky? (= (aget pickie?s jx) 1)
             hm? (loop [kx (int ix)] ; head match? (some heads are empty so they will always head-match).
                   (if (= kx last-head) true
                     (if (= kx n) false
-                      (if (= (aget head (- kx ix)) (aget cs kx)) 
+                      (if (= (aget head (- kx ix)) (if picky? (aget cs0 kx) (aget cs kx))) 
                         (recur (inc kx)) false))))]
-        (if hm? (let [mx1 (if (= (aget is-fn?s jx) 1) (if-let [y ((nth (nth matchers jx) 2) cs last-head n)] y -1) ; run the function.
+        (if hm? (let [mx1 (if (= (aget is-fn?s jx) 1) (if-let [y ((nth (nth matchers jx) 2) cs cs0 last-head n)] y -1) ; run the function.
                              (let [^ints body (nth bodies jx)] ; 1 = allowed chars.
                                (loop [kx (int last-head)]
                                  (if (= kx n) kx
-                                   (if (= (aget body (int (aget cs kx))) 1) ; char is in the body.
+                                   (if (= (aget body (int (if picky? (aget cs0 kx) (aget cs kx)))) 1) ; char is in the body.
                                      (recur (inc kx)) kx)))))]
                   (if (> mx1 ix) [jx mx1] (recur (inc jx)))) (recur (inc jx))))))) ; take the first match.
-
-
 (defn _parser-precomputed [tok-matchers]
   (let [matchers (into [] tok-matchers) ^ints is-fn?s (into-array Integer/TYPE (mapv #(if (fn? (get % 2)) 1 0) matchers))
         body-to-array (fn [s] (let [^ints x (make-array Integer/TYPE 255)]
                                 (mapv #(aset x (int %) 1) s) x))
-        heads (mapv #(.toCharArray ^String (second %)) matchers)]
+        heads (mapv #(.toCharArray ^String (second %)) matchers)
+        pickie?s (into-array Integer/TYPE (mapv #(if (:picky (meta %)) 1 0) matchers))]
    {:matchers matchers :heads heads
     :types (mapv first matchers) :is-fn?s is-fn?s :m (count matchers)
     :head-counts (into-array Integer/TYPE (mapv count heads))
+    :pickie?s pickie?s
     :bodies (mapv #(body-to-array (if (or (= %2 1) (= (count %1) 2)) "" (nth %1 2))) matchers is-fn?s)}))
-(defn next-token [^chars cs ix tok-matchers] 
+
+(defn next-token [^chars cs ^chars cs0 ix tok-matchers] 
   "gets the next token (in [type ix-end] form) from a string parsed with lang. Useful for recursive functions in the lang itself."
   (let [prec (_parser-precomputed tok-matchers)
-        match (_next-token ix (:m prec) (count cs) cs (:heads prec) (:types prec) (:head-counts prec) (:is-fn?s prec) (:matchers prec) (:bodies prec))]
+        match (_next-token ix (:m prec) (count cs) cs cs0 (:heads prec) (:types prec) (:head-counts prec) (:is-fn?s prec) (:pickie?s prec) (:matchers prec) (:bodies prec))]
     [(nth (:types prec) (first match)) (second match)]))
 
-
-(defn parse-string [^String s lang] ; step 1.
+(defn parse-string [^String s0 lang] ; step 1.
   ; extra funky char at end that will match nothing.
-  (let [s0 s s (collapse-chars s (character-tokenize-groups lang))
-        ^chars cs (.toCharArray s) n (count s)
+  (let [^String s (collapse-chars s0 (character-tokenize-groups lang))
+        ^chars cs (.toCharArray s) ^chars cs0 (.toCharArray s0) n (count s)
         prec (_parser-precomputed (token-matchers lang))
         n (count s0)
         matchers (:matchers prec) ^ints head-counts (:head-counts prec)
-        heads (:heads prec) types (:types prec) m (:m prec)
+        heads (:heads prec) types (:types prec) m (:m prec) pickie?s (:pickie?s prec)
         ^ints is-fn?s (:is-fn?s prec) bodies (:bodies prec)] 
     (loop [tys [] strs [] ix 0]
       (if (>= ix n) (if (= n 1) [] (_end-cap (mapv #(hash-map :strings [%1] :type %2) strs tys))) ; end of array.
-        (let [match (_next-token ix m n ^chars cs heads types ^ints head-counts ^ints is-fn?s matchers bodies)] 
+        (let [match (_next-token ix m n cs cs0 heads types head-counts is-fn?s pickie?s matchers bodies)] 
            (recur (conj tys (nth types (first match))) 
              (conj strs (subs s0 ix (second match))) (second match)))))))
 
@@ -472,9 +473,9 @@
 ;;; The main reverse pipeline. Most reverse-recursive act in reverse order: we applied the reader macros inside out but the inverse readermacros outside in.
 
 (defn un-map-unwraps [x] ; step inv10.
-  (throw (Exception. "Possible Infinite loop here or soon after."))
-  (let [x (if (meta x) (vary-user-meta x un-map-unwraps) x)] ; recursive on the meta.
-    (let [ch-tok-meta (children-tokenK (meta x))] ; the meta in each tokenK, in map form.
+  (let [x (vary-user-meta x #(if (> (count %) 0) (un-map-unwraps %) %))] ; recursive on the meta.
+    (let [ch-tok-meta (children-tokenK (meta x)) ; the meta in each tokenK, in map form.
+          x (vary-meta x #(dissoc % children-tokenK))]
       (collections/cmap :flatten ; the core step of putting the metadata into each child.
         (fn [xi] 
           (let [xi (if (coll? xi) (un-map-unwraps xi) xi) ; recursive (on collections only).
