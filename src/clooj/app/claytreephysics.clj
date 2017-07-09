@@ -1,6 +1,6 @@
 ; Physics simulation. A simple mass-spring model.
 (ns clooj.app.claytreephysics
-  (require
+  (:require
     [clooj.app.claytreewalk :as clwalk]
     [clooj.app.claytreetext :as cltext]))
 

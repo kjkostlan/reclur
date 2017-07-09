@@ -9,7 +9,7 @@
   :java-source-paths ["src/clooj" "src/client"]
   :jvm-opts ^:replace []
 ;-XX:-OmitStackTraceInFastThrow
-  :dependencies [[org.clojure/clojure "1.7.0"] ; granular-dependencies.clj per-file.
+  :dependencies [[org.clojure/clojure "1.9.0-alpha17"] ; granular-dependencies.clj per-file.
                  [clj-inspector "0.0.12"]      ; clojure spec website read rationale.
                  [slamhound "1.2.0"]           ; spec-ulation rich hickey (recent note).
                  [com.cemerick/pomegranate "0.0.11"]

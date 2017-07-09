@@ -1,6 +1,6 @@
 ; Handling files and tree-navigation-stuff.
 (ns clooj.app.claytreetree
-  (require [clooj.java.file :as jfile]
+  (:require [clooj.java.file :as jfile]
     [clooj.app.claytreephysics :as claphy]
     [clooj.coder.blitcode :as blitcode]
     [clooj.app.claytreewalk :as clwalk]

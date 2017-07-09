@@ -2,7 +2,7 @@
 ; All children save a namespace. The namespace can be a user or a core.
 
 (ns clooj.app.claytreerepl
-  (require [clooj.app.claytreetext :as cltext]
+  (:require [clooj.app.claytreetext :as cltext]
     [clooj.app.claytreetree :as clatre]
     [clooj.app.claytreephysics :as claphy]
     [clooj.coder.funs :as funs]))

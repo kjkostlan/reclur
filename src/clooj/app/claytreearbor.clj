@@ -1,7 +1,7 @@
 ; Implements JTree-like file systems with a much easier API than the horrid JTree's.
 
 (ns clooj.app.claytreearbor
-  (require [clooj.app.claytreetext :as cltext]
+  (:require [clooj.app.claytreetext :as cltext]
     [clooj.app.claytreephysics :as claphy]
     [clojure.set :as set]
     [clooj.app.claytreetree :as clatre]

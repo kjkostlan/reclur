@@ -3,7 +3,7 @@
 ; TODO: make clooj.java.file have more complete features because we have to use file objects from time to time.
   ; Components can be passed text-editing commands like "press this key", etc.
 (ns clooj.app.claytree
-  (require [clooj.java.clipboard :as clipboard]
+  (:require [clooj.java.clipboard :as clipboard]
    [clooj.app.claytreephysics :as claphy]
    [clooj.app.claytreegraphics :as clagfx]
    [clooj.app.claytreeevt :as clevt]

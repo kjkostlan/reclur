@@ -1,6 +1,6 @@
 ; Text editing.
 (ns clooj.app.claytreetext
-  (require [clooj.java.clipboard :as clipboard]
+  (:require [clooj.java.clipboard :as clipboard]
     [clooj.app.claytreeevt :as clevt]
     [clojure.string :as string]))
 
