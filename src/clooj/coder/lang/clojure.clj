@@ -90,7 +90,7 @@
    [2 ":" "e:'0._+?#'/"] [1 "e" "e:0._'+/?#'"] [1 "0" "e:0._'+/?#'"] [1 "." "e:0._'+/?#'"] [1 "_" "e:0._'+/?#'"] 
    [1 "+" "e:0._'+/?#'"] [1 "?" "e:0._'+/?#'"]]) ;kwds + syms, syms lowest priority
 
-(defn jump-after-form [^chars cs ^chars cs0 ix-start n] ; jumps after the upcomming form, a single form bieng i.e. everything within ().
+(defn jump-after-form [^chars cs ^chars cs0 ix-start n] ; jumps after the upcoming form, a single form bieng i.e. everything within ().
   (loop [ix ix-start level 0]
     (if (>= ix n) n
       (let [tok (rcode/next-token cs cs0 ix tok-matchers) ty (first tok) ix1 (second tok) ; ix is the end of the token.
@@ -102,6 +102,19 @@
                   (jump-after-form cs cs0 after-meta n)) ; jump after the target of the metadata.
           (= ty 6) (jump-after-form cs cs0 ix1 n) ; reader macros jump to the next form.
           :else (throw (Exception. "Can this happen?")))))))
+
+(defn readl-str [s]
+  "Read leaf, nil if not leaf or invalid. Never throws an error."
+  (try (let [v (read-string (str "[" s "\n]"))]
+         (if (= (count v) 1) (first v))) (catch Exception e nil)))
+
+(defn ensure-sep [s need-space?]
+  "Projects s onto a string that is a valid spacer.
+   need-space? means that s must contain non-zero whitespace."
+  (cond (and (= (count s) 0) need-space?) " "
+    (= (count (reduce #(.replace ^String %1 ^String (str %2) "") s " ,\n\t\r\n")) 0) s ; just blanck space.
+    (= (count (try (read-string (str "[" s "]")) (catch Exception e [[][]]))) 0) s
+    :else (apply str (mapv #(if (= % \ ) \ \,) s)))) ; basically complete failure, this is not a robust projection.
 
 ; This matches a very small superset of valid clojure syntax.
 (deftype ClojureLang [] rcode/TwoWayParser
@@ -216,22 +229,48 @@
       "The inverse of fnfirst-order."
       (range (count x)))
 
-    (readermacro-unapply [this x pre-h pre-t] (throw (Exception. "TODO")))
+    (readermacro-unapply [this x pre-h pre-t]
+     ;(syntax-unresolve (throw (Exception. "TODO")))
+      (throw (Exception. "TODO")))
 
     (meta-unparse [this x r]
       "Projects the unparsed metadata r onto the parsed (and possibly processed) metadata x.
        The result read-strings into x but resembles r as closely as possible."
  (throw (Exception. "TODO")))
 
-    (coll-project [this x r] (throw (Exception. "TODO")))
-
     (non-bracket-ungroup [this x]
       "Reverse of non-bracket group for java et al. Everything with the same :unique-non-bracket-group in it's tokenK
        should ideally become regrouped."
       x)
 
-    (leaf-project [this x r] (syntax-unresolve (throw (Exception. "TODO"))))
-)
+    (leaf-project [this x r] 
+      "Projects r onto x. x is the leaf value that we must take on.
+       r has two elements, the first is the string that represents the token, the second is the space after said string.
+       The output should have two elements; typically we don't project the space element here, instead using coll-project"
+      (let [s0 (first r)]
+        [(if (and (number? x) (= (readl-str s0) x)) s0 (pr-str x)) (second r)]))
+
+    (coll-project [this x0 x0-tstrs x outer-strs meta?s ty outer-level?]
+      "Collection projection (ensuring the right kind of spacers between tokens).
+       We already un extra-grouped the collections.
+       x0, x0-tstrs, x, and meta?s are 1:1 arrays.
+       x0 is the pre-unparsed value with meta-data depacked. It contains symbols, etc.
+       x0-tstrs are the token strings cooresponding to each element of x0. Either 2 or 4 elements.
+       x has all of it's children un coll-parsed, and we need to modify x and add the outer-strs so that x is correct.
+          (we only need to worry about this level or maybe one level below for array literals in java since this function is called at all levels).
+       meta?s is true for elements that come from user metadata at the top level of x0.
+       ty = :vector, :map, or :list.
+       outer-level? is true iff we we have no parent, telling us to omit the brackets.
+       We simply return the strings bundled into vectors (the modified x)."
+      ;(println "coll project thingies:" (pr-str x0) (pr-str x0-tstrs) (pr-str x) (pr-str outer-strs) (pr-str meta?s) ty outer-level?)
+     (let [need-sp? #(not (or (coll? %1) (string? %1) (coll? %2) (string? %2))) ; do we need a space in between these two elements?
+           x (mapv (fn [xi x0i x0i-next] (update xi (dec (count xi)) #(ensure-sep % (need-sp? x0i x0i-next)))) 
+               x x0 (concat (rest x0) [""])) ; adjust spacers (the last element of each x), the closing ] doesn't need a space so is equivalent to a string.
+           outer-strs (assoc outer-strs 0 (cond outer-level? "" (= ty :vector) "[" (= ty :map) "{" (= ty :set) "#{" :else "(")) ; opening bracket.
+           outer-strs (assoc outer-strs 2 (cond outer-level? "" (= ty :vector) "]" (= ty :map) "}" (= ty :set) "}" :else ")")) ; closing bracket.
+           outer-strs (update outer-strs 1 #(ensure-sep % false)) ; space between us and first element.
+           outer-strs (update outer-strs 3 #(ensure-sep % false))] ; space after end. Parent collections may later force this to be a spacer.
+       (into [] (concat [(first outer-strs) (second outer-strs) x (nth outer-strs 2) (nth outer-strs 3)])))))
 
 
 ;;;;;;;;;;; Testing the parser below ;;;;;;;;;;;;

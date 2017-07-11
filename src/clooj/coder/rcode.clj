@@ -141,7 +141,7 @@
   (readermacro-unapply [this x pre-h pre-t])
   (meta-unparse [this x r])
   (non-bracket-ungroup [this x])
-  (coll-project [this x r])
+  (coll-project [this x0 x0-tstrs x outer-strs meta?s ty outer-level?])
   (leaf-project [this x r]))
 
 ;;;;;;;; collection clarity
@@ -491,40 +491,57 @@
         rm-prereader (fn [m] (update m tokenK #(dissoc % :prereader-head :prereader-body)))
         x1 (if (and ph pb) (vary-meta (readermacro-unapply lang x ph pb) rm-prereader) x)
         x2 (if (meta x1) (vary-user-meta x1 #(un-readermacro % lang)) x1)] ; recursive on the meta.
-    (if (coll? x2) (collections/cmap :flatten x2 #(un-readermacro % lang)) x2))) ; recursive.
+    (if (coll? x2) (collections/cmap :flatten #(un-readermacro % lang) x2) x2))) ; recursive.
 
 (defn un-metaparse [x lang] ; step inv7.
   (let [x1 (if-let [y (:preparsed-umeta (tokenK (meta x)))]
-             (vary-meta (vary-meta x #(assoc % usermetaK (meta-unparse lang (user-meta x) y)))
+             (vary-meta (vary-meta x #(assoc % usermetaK (if (> (count (user-meta x)) 0) (meta-unparse lang (user-meta x) y) []))) ; the core.
                (fn [m] (update m tokenK #(dissoc % :preparsed-umeta)))) x)
-        x2 (if-let [um (usermetaK (meta x1))] 
-             (vary-meta x #(assoc % usermetaK (un-metaparse um lang))) x1)] ; recursive on meta.
-    (if (coll? (munwrap x2)) (collections/cmap :flatten #(un-metaparse %) x2 lang) x2)))
+        um (usermetaK (meta x1))
+        x2 (assoc-in-meta x1 [usermetaK] (if (> (count um) 0) (un-metaparse um lang) []))] ; recursive on meta.
+    (if (coll? (munwrap x2)) (collections/cmap :flatten #(un-metaparse % lang) x2) x2)))
 
-(defn un-collparse [x lang] ; step inv6-5 feels much easier.
-  (let [x (with-meta (non-bracket-ungroup lang x) (meta x)) ; undo our non-bracket grouping (most outside first, reverse of the grouping).
-        vs (into [] ; order equivalent to how most languages describe it. The lang fns can always change it.
-             (if (or (map? x) (set? x))
-               (let [n (count x) ks (if (map? x) (keys x) x) ; keys sorted by the order field (with a default if said field is missing).
+(defn un-collparse [x0 lang & not-outer-level] ; step inv6-5 feels much easier.
+  (let [ensure-len (fn [v n] (into [] (subvec (into [] (concat (mapv str (if v v [])) (repeat n ""))) 0 n))) ; to make reversal slightly easier.
+        get-tstrs (fn [y n] (ensure-len (if-let [z (:strings (tokenK (meta y)))] z []) n)) ; get the token strs of length n, empty string fill in nil or too short vectors.
+        outer-strs (get-tstrs x0 4) ; the outer head and body.
+
+        ty (cond (vector? x0) :vector (set? x0) :set (map? x0) :map :else :list) ; which collection type.
+
+        x0 (non-bracket-ungroup lang x0) ; undo our non-bracket grouping (most outside first, reverse of the grouping).
+
+        ; re-order the values for maps and sets as a vector:
+        x0 (into [] ; order the values as per how we stored them.
+             (if (or (map? x0) (set? x0))
+               (let [n (count x0) ks (if (map? x0) (keys x0) x0) ; keys sorted by the order field (with a default if said field is missing).
                      y (reduce #(let [o (:order (tokenK (meta %2)))] 
                                   (if (and o (not (get %1 o))) (assoc %1 o %2)
-                                    (assoc %1 (+ n (count %1)) %2)) {} ks))
-                     ks-sort (mapv #(get y %) (sort (vals y)))]
-                  (if (map? x) (interleave ks-sort #(mapv (get x %) ks-sort)) ks-sort))
-                (collections/cvals x)))
-        ensure-len (fn [v n] (into [] (subvec (concat (mapv str v) (repeat n "")) 0 n))) ; to make reversal slightly easier.
-        tstrs (fn [x] (ensure-len (if-let [y (:strings (tokenK (meta x)))] y []) 
-                        (if (coll? x) 4 2))) ; get the token strs.
-        ; no need to pull out space tokens.
-        vs-unpackmeta (apply concat #(if-let [x (usermetaK (meta %))] [x %] %) vs) ; put metadata before each element.
-        vs-tokens (coll-project lang (mapv #(if (coll? %) % (leaf-project lang % (tstrs %)))) vs-unpackmeta)] ; leaf-project should give back a string.
-    ; There is no inside out on the forward but we still do outside in on the reverse, running the lang's projection b4 recursive.
-    (mapv #(if (coll? %) (un-collparse %) %) vs-tokens)))
+                                    (assoc %1 (+ n (count %1)) %2))) {} ks)
+                     ks-sort (mapv #(get y %) (sort (keys y)))]
+                  (if (map? x0) (interleave ks-sort (mapv #(get x0 %) ks-sort)) ks-sort))
+                (collections/cvals x0)))
+
+        ; Pull out the user metadata, putting it before each element:
+        x0 (into [] (apply concat (mapv #(let [um (usermetaK (meta %))] ; um is a vector.
+                                           (if (and um (> (count um) 0)) (concat (mapv (fn [umi] (assoc-in-meta umi [tokenK :meta?] true)) um) [%]) [%])) x0)))
+        meta?s (mapv #(boolean (tokenK (:meta? (meta %)))) x0)
+
+        ; Extract the token strings and remove metadata/munwrap. We don't need metadata after we extract it.
+        rm-meta-munwrap #(munwrap (if (meta %) (with-meta % nil) %))
+
+        x0-tstrs (mapv #(let [c? (coll? (munwrap %))]
+                          (get-tstrs % (if c? 4 2))) x0) ; strings attached to each element.
+
+        ; Recursivly run on the elements of x0, including leaf-projection. We do not need to recursivly run on mx0's usermetadata
+        ; since the outer level has no useremetadata and the inner levels are processed after the unwrapping the meta.
+        x (mapv #(rm-meta-munwrap (if (coll? (munwrap %)) (un-collparse % lang true) (leaf-project lang (rm-meta-munwrap %) (get-tstrs % 2)))) x0)] ; recursive and leaf processing.
+    ; The core coll-project step:
+    (coll-project lang (collections/cmap :flatten rm-meta-munwrap x0) x0-tstrs x outer-strs meta?s ty (not (first not-outer-level)))))
 
 (defn un-group [x] ; step inv 4-3-2 is even easier.
   (into [] (apply concat (mapv #(if (vector? %) (un-group %) [%]) x))))
 
-(defn un-tokenize [x] (apply concat x)) ; step inv 1 has a longer definition than body.
+(defn un-tokenize [x] (apply str x)) ; step inv 1 has a longer definition than body.
 
 ; TODO: a simple round-trip function.
 
