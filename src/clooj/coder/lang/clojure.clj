@@ -14,7 +14,7 @@
      ; head function, fixed head and function is (fn [char-array ix-body-start length-of-array]) and returns the ix right after the end.
      ; For non-functions the longest match is used, the only thing that makes sense.
        ; functions with matching heads take priority, the longest matching head that is.
-; TODO: we may be able to speedify if we lump like characters toghether, i.e. 0-9
+; It is useful to resolve 
 
 ; Useful repl functions:
 ;(clc)
@@ -39,6 +39,7 @@
           (recur (if (= c \\) (not escape?) false) (inc ix)))))))
 
 (def ^:dynamic *resolve-in-ns* nil) ; the namespace to use for syntax quotes.
+;(def ^:dynamic *error-on-horrible-code?* false) ; TODO: strict 1:1 reading that may throw errors in vary-badly written code (i.e. metadata duplicate keys) that would otherwise not be perfectly reversable. Mainly used for testing.
 
 ; Resolving a syntax quote given a namespace:
 (defn syntax-resolve [x nms]
@@ -56,7 +57,14 @@
   "Undoes the effect of syntax-resolve using the :resolved? metadata.
    Resolving is only undone if the pre-resolved symbol is a match.
    This doesn't care if we are still inside a syntax quote (caring or not caring only matters if the ` is changed, which is rare)."
-  (throw (Exception. "TODO: implement clojure/syntax-unresolve")))
+  (if nms
+    (cond (and (coll? x) (let [x0 (first x)] (and (not= (rcode/munwrap x0) (keyword "~")) (not= (rcode/munwrap x0) (keyword "~@")) (not= (rcode/munwrap x0) (keyword "~?@")) (not= x0 `unquote) (not= x0 `unquote-splicing) (not= x0 'clojure.core/unquote-conditional) (not= x0 'clojure.core/unquote-conditional-splicing)))) 
+      (collections/cmap :flatten #(syntax-unresolve % nms) x)
+      (and (symbol? x) (.contains ^String (str x) "/")) 
+      (if-let [s (:pre-ns-resolve (rcode/tokenK (meta x)))] 
+        (with-meta (symbol (string/replace (str x) #"[^\/]*\/" ""))
+          (update (meta x) rcode/tokenK #(dissoc % :pre-ns-resolve))) x)
+      :else x) x))
 
 (def simple-reader-expands ; simple reader macros that are converted with just a substitution.
   (let [expv (mapv #(vector (keyword (first %)) (second %)) ; reader macros are tokenized as keywords.
@@ -73,6 +81,10 @@
     :else 0))
 (defn replace%-%1 [x] ; replaces all % with %1, sotring the old symbol so we can retrieve it on the way back.
   (cond (= x '%) (rcode/tmet x '%1 :%0 '%) (coll? x) (collections/cmap :flatten replace%-%1 x) :else x))
+(defn un-replace%-%1 [x] ; replaces all %1 with % if it was the original symbol.
+  (cond (and (= x '%1) (= (:%0 (rcode/tokenK (meta x))) '%)) 
+    (with-meta '% (update (meta x) rcode/tokenK #(dissoc % :%0))) 
+    (coll? x) (collections/cmap :flatten un-replace%-%1 x) :else x))
 
 (declare jump-after-form) ; jump-after-form <-> token-matchers circular dependency.
 (def tok-matchers 
@@ -156,7 +168,7 @@
                                 (nth m?s (+ ix-caret 2)) (jump-after-meta (+ ix-caret 2)) ; multible metadata = our jump is thier jump.
                                 :else (+ ix-caret 2))) ; just plain old metadata.
             meta-jumps (reduce #(if (nth m?s %2) (assoc %1 %2 (jump-after-meta %2)) %1) {} (range n))
-            set-chunk (fn [v lo hi x] (println "setting chunk: " lo hi) (reduce #(assoc %1 %2 x) v (range lo hi)))] ; slice notation.
+            set-chunk (fn [v lo hi x] (reduce #(assoc %1 %2 x) v (range lo hi)))] ; slice notation.
         ; This will set the outer meta layers first so inner layers won't be overwritten:
         (reduce #(set-chunk %1 (first %2) (second %2) (second %2))
           (into [] (repeat n false)) (into (sorted-map) meta-jumps))))
@@ -194,7 +206,7 @@
                 (+ ix 2)))))))
 
     (readermacro-apply [this x]
-      "Takes in two-element lists such as ({:mapwrapK :'} {:mapwrapK :bar})
+      "Takes in two-element lists such as ({:mapwrapK :'} bar), note the keyword on the reader macro.
        and applies the reader macros.
       It must work with mwrapped code (see rcode/mwrap, rcode/rmunwrap, rcode/mwrapped?).
       The only non-simple reader macros are currently  #:***  #  `    "
@@ -209,15 +221,21 @@
                           (if (= maxp 0) []
                             (mapv #(symbol (str "%" (inc %))) (range (max% body))))) body))
             (= (subs (str rm "   ") 0 3) ":#:") ; 1.9 clojure feature still in alpha as of July 6 2017. Currently we don't support #::
-            (let [need-qual? #(if (or (symbol? %) (keyword? %)) ; qualification (use after rcode/munwrap).
+            (let [need-qual? #(if (or (symbol? %) (keyword? %)) ; qualification (use after rcode/munwrap) including erasuer of the _/.
                                 (let [^String s (str %)] (or (not (.contains s "/")) (.contains s "_/"))) false)
-                  head (keyword (subs (str rm) 3)) no_ #(.replace ^String (.replace ^String % "_/" "") "/" "")
-                  ks (mapv #(if (not (need-qual? %)) %
-                              (if (keyword? %) (keyword (str (subs (str head) 1) "/" (subs (no_ (str %)) 1))) 
-                                (symbol (str head "/" (no_ (str %))))))  
-                       (mapv rcode/munwrap (keys body)))]
-               (with-meta (zipmap (mapv #(with-meta (rcode/mwrap %1) (meta %2)) ks (keys body)) (vals body))
-                 (meta (second body)))) ; the second element of the body (i.e. the map) should have enough metadata.
+                  head (subs (str rm) 3) 
+                  ks (mapv #(if (not (need-qual? (rcode/munwrap %))) %
+                              (with-meta 
+                                (let [ku (rcode/munwrap %)
+                                      ^String s (if (keyword? ku) (subs (str ku) 1) (str ku))
+                                      pieces (string/split s #"\/")
+                                      s1 (cond (not (.contains s "/")) (str head "/" s)
+                                           (= (first pieces) "_") (subs s 2) :else s)]
+                                  (if (keyword? ku) (rcode/mwrap (keyword s1)) (symbol s1)))
+                                (assoc-in (meta %) [rcode/tokenK :map-ns-pre-rmacro] (rcode/munwrap %))))  
+                       (keys body))]
+               (with-meta (zipmap ks (vals body))
+                 (meta body))) ; the second element of the body (i.e. the map) should have enough metadata.
             :else (throw (Exception. (str "This reader macro wasn't included: " (subs (str rm) 1))))))))
 
     (fnfirst-order [this x]
@@ -230,61 +248,128 @@
       (range (count x)))
 
     (readermacro-unapply [this x pre-h pre-t]
-     ;(syntax-unresolve (throw (Exception. "TODO")))
-      (throw (Exception. "TODO")))
+      "Un-applies the reader-macros, but doesn't splice the lists just yet. 
+       It must work with mwrapped code (see rcode/mwrap, rcode/rmunwrap, rcode/mwrapped?).
+       x is the expanded reader macro, pre-h is the readermacro itself before applying the macro, pre-t is the stuff the reader macro acts on."
+      ;(println "read macro unapply: " x pre-h pre-t) 
+      (let [;simple-reader-expands, simple-reader-unexpands.
+            a (rcode/munwrap pre-h) b (rcode/munwrap (first x)) ; before and after reader macro values, kind of.
+            a->b (get simple-reader-expands a) b->a (get simple-reader-unexpands b)]
+          (cond (and a->b b->a) ; both are simple reader macros, may or may not be the same reader macro.
+            (with-meta (collections/lassoc x 0 (rcode/with-rcode-meta (rcode/mwrap b->a) (meta pre-h))) (meta x)) ; pre-h's idioms with b->a as the new value.
+            (and (or (= (first x) `fn) (= (first x) 'fn)) (= a (keyword "#")) ; sign of an expanded #()
+              (= (count x) 3) (vector? (second x)) (list? (nth x 2)) ; valid 3 element list vector list strucure
+              (= (second x) (mapv #(symbol (str "%" (inc %))) (range (count (second x))))) ; valid function args.
+              (not (.contains ^String (binding [*print-meta* true] (pr-str (nth x 2))) (pr-str (rcode/mwrap (keyword "#")))))) ; no internal nested #().
+            (with-meta (list pre-h (un-replace%-%1 (nth x 2))) (meta x))
+            (and (= (first x) 'clojure.core/syntax-quote) (= a (keyword "`")))
+            (with-meta (apply list pre-h (syntax-unresolve (rest x) *resolve-in-ns*)) (meta x))
+            (and (map? x) (.contains ^String (str a) "#:") (> (count (str a)) 3))
+            (with-meta 
+              (list pre-h
+                (with-meta ; idiomatic formatting ONLY at the inside level (user metadata attached to us must be reattached to the pre-rmacro list, read-string will error if the ^ is between the reader macro and map).
+                  (zipmap (mapv #(if-let [y (:map-ns-pre-rmacro (rcode/tokenK (meta %)))]
+                                   (let [^String s (str (rcode/munwrap %)) pieces (string/split s #"\/")
+                                         h (first pieces) h (if (= (first h) \:) (subs h 1) h)
+                                         h0 (subs (str a) 3) t (apply str (interpose "/" (rest pieces)))
+                                         s1 (cond (< (count pieces) 2) (str "_/" s) (= h h0) t :else s)]
+                                     (with-meta (if (symbol? %) (symbol s1) (rcode/mwrap (keyword s1))) (meta %))) %) (keys x)) (vals x)) 
+                  {rcode/tokenK {:strings (if-let [y (:strings (rcode/tokenK (meta x)))] y [""""""""])}})) (meta x))
+            :else x))) ; do nothing b/c a change rendered the reader-macro irreversable.
 
     (meta-unparse [this x r]
       "Projects the unparsed metadata r onto the parsed (and possibly processed) metadata x.
-       The result read-strings into x but resembles r as closely as possible."
- (throw (Exception. "TODO")))
+       The result must be a vector that meta-parses to x (including user metadata of x) but resembles r as closely as possible.
+       x,r, and our modified x are mwrapped code (see rcode/mwrap, rcode/rmunwrap, rcode/mwrapped?)."
+      (let [m-hat (rcode/mwrap (keyword "^"))
+            r-hss (mapv #(if (map? %) (apply hash-set (keys %))) r) ; special hash-set version.
+            kys (into [] (keys x))
+            ; convert elements of r to position, including within maps within r. 
+            irm (reduce #(let [ri (nth r %2)]
+                           (if (map? (rcode/munwrap ri)) (merge %1 (zipmap (keys ri) (repeat %2))) ; map within r.
+                             (assoc %1 ri %2))) {} (range (dec (count r)) 0 -1)) ; In conflicts (i.e. due to sloppy coding) earlier elements supercede earlier ones.
+            hat?s (mapv #(= % m-hat) r)
+            map?s (mapv #(map? (rcode/munwrap %)) r)
+
+            ; ix&simp?s = for pairs of r, [the matching position for each element in x (nil fails), whether we are a simplification].
+            ; A match doesn't always mean that the key nor value is identical (this must be checked seperatly). It DOES mean the cooresponding meta tag can be used.
+            ix&simpl?s (mapv #(if (and (= (rcode/munwrap %1) :tag) (not (map? (rcode/munwrap %2)))) ; :tag's are special, they don't put the key into r when in simplified mode (but they can't be maps in simplified mode).
+                               (if-let [ix (get irm %2)] [ix true] [nil nil]) ; simplify tag case.
+                               (if-let [ix (get irm %1)] 
+                                 [ix (and (= (rcode/munwrap %2) true) (keyword? (rcode/munwrap %1)) (keyword? (rcode/munwrap (get r ix))))] [nil nil])) (keys x) (vals x))
+            x-want-destinations (mapv first ix&simpl?s) simplified?s (mapv #(boolean (second %)) ix&simpl?s) ; destinations bieng one after a ^.
+            max-ix0 (apply max 0 (filterv identity x-want-destinations))
+
+            map-ix (if-let [y (first (filterv #(nth map?s %) (range (count map?s))))] (if (<= y max-ix0) y (inc max-ix0)) (inc max-ix0)) ; non-simplified keys go here, unlimited capacity.
+
+            x-destinations (mapv #(if % % map-ix) x-want-destinations) ; where x actually goes.
+            max-ix (apply max x-destinations) 
+
+            ; Put the metadatas back in the loop, putting mis-fits in the first map or making a map if one doesn't exist.
+            ; Use the elements of r as much as possible for the idiomatic metadata but keep x's user-meta.
+            destinations (apply hash-set x-destinations)
+            vm (zipmap destinations ; start with the m-hat (with metadata maybe) for each destination
+                 (mapv #(vector (rcode/with-rcode-meta m-hat (meta (if (get hat?s (dec %)) (nth r (dec %)) {})))) destinations)) ; the hat is always one index earlier than the x's elements, keep it's idiomatic data.
+            v1m (reduce ; indexes are locations where each x goes.
+                  (fn [acc ix] 
+                    (let [rix (nth x-destinations ix) simp? (nth simplified?s ix) ; simp? only t
+                          xk (nth kys ix) xv (get x xk)
+                          mp? (not simp?) ; maps mean dig deeper to get the idiomatic metadata.
+                          ; idiomatic meta source for the key and value.
+                          idiok (if mp? (get (get r-hss rix) xk) (get r rix)) ; get from a hash-set!? it's the metadata we want.
+                          idiov (if mp? (get (get r rix) xk) (get r rix)) 
+                          ; k and val are concatinated toghether onto the end of rix or map-ix on the v1m.
+                          tag? (= (rcode/munwrap xk) :tag)
+                          k (if (and simp? tag?) [] ; special case of no key (empty vec if we are a tag AND simplified
+                              [(rcode/with-rcode-meta xk (if-let [m (meta idiok)] m {}))]) ;the [key]
+                          v (if (and simp? (not tag?)) []
+                              [(rcode/with-rcode-meta xv (if-let [m (meta idiov)] m {}))])] ;the [val]
+                    (update acc rix #(apply conj % (concat k v)))))
+                  vm (range (count x)))
+             v1m (into (sorted-map) v1m)
+             v2 (mapv #(if (= (count %2) 2) %2 ; package maps in non-simplified cases, again using the idiomadic metadata 
+                         (rcode/with-rcode-meta (vector (first %2) (apply hash-map (rest %2))) (meta (if-let [y (get r %1)] y [])))) 
+                  (keys v1m) (vals v1m)) 
+             v3 (into [] (apply concat v2))] v3))
 
     (non-bracket-ungroup [this x]
       "Reverse of non-bracket group for java et al. Everything with the same :unique-non-bracket-group in it's tokenK
        should ideally become regrouped."
       x)
 
-    (leaf-project [this x r] 
+    (leaf-project [this x r rmacro?] 
       "Projects r onto x. x is the leaf value that we must take on.
        r has two elements, the first is the string that represents the token, the second is the space after said string.
-       The output should have two elements; typically we don't project the space element here, instead using coll-project"
+       The output should have two string elements; typically we don't project the space element here, instead using coll-project."
       (let [s0 (first r)]
-        [(if (and (number? x) (= (readl-str s0) x)) s0 (pr-str x)) (second r)]))
+        [(cond (= x (keyword "^")) "^" ; metatags are keywords.
+           rmacro? (subs (str x) 1) ; rmacro?s are held as keywords, remove the leading :
+           (and (number? x) (= (readl-str s0) x)) s0 
+           :else (pr-str x)) (second r)]))
 
     (coll-project [this x0 x0-tstrs x outer-strs meta?s ty outer-level?]
       "Collection projection (ensuring the right kind of spacers between tokens).
        We already un extra-grouped the collections.
        x0, x0-tstrs, x, and meta?s are 1:1 arrays.
-       x0 is the pre-unparsed value with meta-data depacked. It contains symbols, etc.
+       x0 is the pre-un-collparsed version of x with meta-data depacked. It contains symbols, mapwrapped stuff, etc. rather than strings.
        x0-tstrs are the token strings cooresponding to each element of x0. Either 2 or 4 elements.
-       x has all of it's children un coll-parsed, and we need to modify x and add the outer-strs so that x is correct.
+       x has all of it's children un coll-parsed and is leaf-parsed. We need to modify x and add the outer-strs so that x has correct brackets (or lack therof) and spaces between each token.
           (we only need to worry about this level or maybe one level below for array literals in java since this function is called at all levels).
        meta?s is true for elements that come from user metadata at the top level of x0.
-       ty = :vector, :map, or :list.
+       ty = type of collection x represents :vector, :map, or :list.
        outer-level? is true iff we we have no parent, telling us to omit the brackets.
        We simply return the strings bundled into vectors (the modified x)."
       ;(println "coll project thingies:" (pr-str x0) (pr-str x0-tstrs) (pr-str x) (pr-str outer-strs) (pr-str meta?s) ty outer-level?)
-     (let [need-sp? #(not (or (coll? %1) (string? %1) (coll? %2) (string? %2))) ; do we need a space in between these two elements?
-           x (mapv (fn [xi x0i x0i-next] (update xi (dec (count xi)) #(ensure-sep % (need-sp? x0i x0i-next)))) 
-               x x0 (concat (rest x0) [""])) ; adjust spacers (the last element of each x), the closing ] doesn't need a space so is equivalent to a string.
+     (let [rmacros #{"'" "~" "`" "#" "@" "#'" "#=" "#?" "#?@" "~@"} ; not including the #:foo format, but that always preceeds a collection so it will not need a space.
+           rmacro-intefere-pairs #{["~" "@"] ["#?" "@"] ["#" "'"]} ; must put a space between these. The #' inteference isn't really needed as it doesn't make valid code...
+           rmacro-compat? #(and (or (get rmacros %1) (get rmacros %2)) (not (get rmacro-intefere-pairs [%1 %2]))) ; we can tell rmacroness from the first element of each x (which is a string).
+           need-sp? #(not (or (coll? %1) (string? %1) (coll? %2) (string? %2) (= %3 "^") (= %4 "^") (rmacro-compat? %3 %4))) ; do we need a space in between these two elements?
+           x (mapv (fn [xi x0i xi-next x0i-next] (update xi (dec (count xi)) #(ensure-sep % (need-sp? x0i x0i-next (first xi) (first xi-next))))) ; update the last string.
+               x x0 (concat (rest x) [""]) (concat (rest x0) [""])) ; adjust spacers (the last element of each x), the closing ] doesn't need a space so is equivalent to a string.
            outer-strs (assoc outer-strs 0 (cond outer-level? "" (= ty :vector) "[" (= ty :map) "{" (= ty :set) "#{" :else "(")) ; opening bracket.
            outer-strs (assoc outer-strs 2 (cond outer-level? "" (= ty :vector) "]" (= ty :map) "}" (= ty :set) "}" :else ")")) ; closing bracket.
            outer-strs (update outer-strs 1 #(ensure-sep % false)) ; space between us and first element.
            outer-strs (update outer-strs 3 #(ensure-sep % false))] ; space after end. Parent collections may later force this to be a spacer.
        (into [] (concat [(first outer-strs) (second outer-strs) x (nth outer-strs 2) (nth outer-strs 3)])))))
 
-
-;;;;;;;;;;; Testing the parser below ;;;;;;;;;;;;
-
 (defn clang [] (ClojureLang.))
-
-
-;(require '[clooj.coder.repl :as repl]) (repl/clc)
-
-
-;(prn 
-
-;(rcode/intermediate-states "foo bar baz" clang #(conj % 1))
-
-;)
-
-

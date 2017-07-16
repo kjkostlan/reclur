@@ -142,7 +142,7 @@
   (meta-unparse [this x r])
   (non-bracket-ungroup [this x])
   (coll-project [this x0 x0-tstrs x outer-strs meta?s ty outer-level?])
-  (leaf-project [this x r]))
+  (leaf-project [this x r rmacro?]))
 
 ;;;;;;;; collection clarity
 
@@ -157,9 +157,9 @@
 (def mapwrapK (keyword "mapwrapK")) ; wraps 1223 as {mapwrapK 123} so it can store metadata.
 
 (defn mmeta [x] (if-let [y (meta x)] y {})) ; {} instead of nil for meta. They pr-str to the same result. 
-(defn user-meta [x] (dissoc (mmeta x) usermetaK tokenK children-tokenK)) ; helper functions.
+(defn user-meta [x] (dissoc (mmeta x) usermetaK tokenK children-tokenK)) ; user metadata when NOT stored in usermetaK.
 (defn rcode-meta [x] (reduce #(let [v (get (mmeta x) %2)] (if (not (nil? v)) (assoc %1 %2 v) %1)) {} 
-                       [tokenK children-tokenK usermetaK]))
+                       [tokenK children-tokenK usermetaK])) ; rcode metadata.
 (defn vary-user-meta [x f] ; helper functions.
   "Applies f to the meta of x without our keys.
    If no metadata is specified the metadata is nil not the empty map, preventing most infinite meta recursions."
@@ -170,6 +170,9 @@
   (vary-meta x (fn [m] (apply update-in (if m m {}) ks f args))))
 (defn assoc-in-meta [x ks v] ; avoids one nested level of functions. TODO: refactor to use this when it would help.
   (vary-meta x (fn [m] (assoc-in m ks v))))
+(defn with-rcode-meta [x m]
+  "Takes the rcode meta of m and puts it into the meta of x."
+  (with-meta x (merge (user-meta x) (rcode-meta (with-meta [] m)))))
 
 (defn mwrap [x] "Map-wraps x if it can't hold metadata. mwrap^2 = mwrap"
   (if (metable? x) x {mapwrapK x}))
@@ -380,15 +383,26 @@
           ; this is b/c we need to put the vector's () strings somewhere after removing the explicit () tokens.
           ; for vectors this somewhere must be metadata, and we do that to leaves as well for consistancy.
 
+        ; put all :strings in the metadata. Vectors already have :strings in thier metadata, and we only have vectors or maps.
         x00 (mapv #(if (map? %) (assoc-in-meta (dissoc % :strings) [tokenK :strings] (:strings %)) %) x00)
-
-        body (subvec x00 2 (- (count x00) 2)) ; fill,space,fill,space.
-        svcat (fn [& args] (mapv #(apply str %) args)) getstrs #(get-in (meta %) [tokenK :strings])
-        x0 (mapv (fn [fi sp] (update-in-meta (nth body fi) [tokenK :strings] #(svcat %1 (getstrs (nth body sp))))) (range 0 (count body) 2) (range 1 (count body) 2)) ; even-odd packing.
-        strs (apply svcat (mapv #(getstrs (nth x00 %)) [0 1 (- (count x00) 2) (- (count x00) 1)])) ; the 4 strings for the brackets.
-
-        x0 (mapv #(if (vector? %) (package % lang) %) x0) ; recursive. Metadata on x at this point doesn't incude user metadata => no need to meta-recursive.
         
+        svcat (fn [& args] (mapv #(apply str %) args)) getstrs #(get-in (meta %) [tokenK :strings])
+        edge-strs (apply svcat (mapv #(getstrs (nth x00 %)) [0 1 (- (count x00) 2) (- (count x00) 1)])) ; the 4 strings for the brackets.
+
+        body (subvec x00 2 (- (count x00) 2)) ; body is fill,space,fill,space.
+
+        body1 (mapv #(if (vector? %) (package % lang) %) body) ; recursive. Metadata at this point doesn't incude user metadata => no need to meta-recursive.
+        
+        ; even-odd packing. The tokenK's string are, for collections [open spaceb4 closing spaceafr] and for non-collections [token spaceafr]
+        x0 (mapv (fn [fi sp] 
+                   (let [xi (nth body1 fi) sxi (getstrs xi) ssp (apply str (getstrs (nth body1 sp)))
+                         _ (if (not (vector? sxi)) (throw (Exception. "Rcode error: the :strings was set to not a vector.")))
+                         strs (cond (= (count sxi) 1) (conj sxi ssp) (= (count sxi) 4) (update sxi 3 #(str % ssp))
+                               :else (throw (Exception. "Rcode error: string count isn't working.")))]
+                     (assoc-in-meta xi [tokenK :strings] strs))) (range 0 (count body1) 2) (range 1 (count body1) 2))
+        ;x0 (mapv (fn [fi sp] (update-in-meta (nth body fi) [tokenK :strings] #(svcat %1 (getstrs (nth body sp))))) (range 0 (count body) 2) (range 1 (count body) 2)) ; even-odd packing.
+
+
         ; Pack readermacros as two-element vectors (later will be a list) and metadata:
         meta-to (meta-assign lang (mapv #(first (:strings (tokenK (meta %)))) x0) 
                   (mapv #(if (vector? %) 4.5 (:type %)) x0))
@@ -406,8 +420,8 @@
 
         x (mapv (fn [xi ix] (assoc-in-meta xi [tokenK :order] ix)) x (range)) ; store the order (for maps and sets).
         sy (gensym "toJavaAndBeyond") x (mapv #(assoc-in-meta % [tokenK :unique-non-bracket-group] sy) x) ; for reversing the non-bracket group sub step.
-        x (with-meta (non-bracket-group lang x) (meta x))] ; non-bracket group sub step (depth first order). TODO: consider moving this our.
-   (assoc-in-meta x [tokenK :strings] strs)))
+        x (with-meta (non-bracket-group lang x) (meta x))] ; non-bracket group sub step (depth first order). TODO: consider moving this out to it's own function.
+   (assoc-in-meta x [tokenK :strings] edge-strs)))
 
 (defn valueify [x lang] ; big helper to step 6.
   (let [mmwrap (fn [x x1] (with-meta (mwrap x1) (meta x)))
@@ -486,10 +500,11 @@
 (defn un-fnfirst [x lang]
   (reorder x #(fnfirst-unorder lang %))) ; step inv9
 
-(defn un-readermacro [x lang] ; step inv8
+(defn un-readermacro [x lang] ; step inv8.
   (let [ph (:prereader-head (tokenK (meta x))) pb (:prereader-body (tokenK (meta x))) ; stored before step 8.
         rm-prereader (fn [m] (update m tokenK #(dissoc % :prereader-head :prereader-body)))
-        x1 (if (and ph pb) (vary-meta (readermacro-unapply lang x ph pb) rm-prereader) x)
+        xu (if (and ph pb) (readermacro-unapply lang x ph pb)) ; compare xu to x to see if we contracted the reader macro.
+        x1 (if (and ph pb) (assoc-in-meta (vary-meta xu rm-prereader) [tokenK :contracted-rmacro?] (not= x xu)) x)
         x2 (if (meta x1) (vary-user-meta x1 #(un-readermacro % lang)) x1)] ; recursive on the meta.
     (if (coll? x2) (collections/cmap :flatten #(un-readermacro % lang) x2) x2))) ; recursive.
 
@@ -521,20 +536,35 @@
                   (if (map? x0) (interleave ks-sort (mapv #(get x0 %) ks-sort)) ks-sort))
                 (collections/cvals x0)))
 
-        ; Pull out the user metadata, putting it before each element:
-        x0 (into [] (apply concat (mapv #(let [um (usermetaK (meta %))] ; um is a vector.
-                                           (if (and um (> (count um) 0)) (concat (mapv (fn [umi] (assoc-in-meta umi [tokenK :meta?] true)) um) [%]) [%])) x0)))
+        ; Unpack readers and metadata over and over untill nothing further can be unpacked.
+        ; For reader macros: The last of the 4 tokens goes into the reader macro.
+        _unr (fn [xi crmacro?] ; single reader macro unpack step. No tstrs from xi are used, but tstrs from it's elements ARE used.
+               (cond (not crmacro?) [xi] ; Do nothing (package to cancel the unpacking with apply concat).
+                 (and (sequential? xi) (= (count xi) 2)) ; most reader-macros.
+                 (let [tstrs (get-tstrs (second xi) (if (coll? (munwrap (second xi))) 4 2))]
+                   [(assoc-in-meta (first xi) [tokenK :rmacro-kwd?] true) (assoc-in-meta (second xi) [tokenK :strings] tstrs)])
+               :else (throw (Exception. "Undon reader macros must turn into two-element lists."))))
+        _unp #(let [um (usermetaK (meta %))] ; puts the user-meta vector before the element itself.
+                (if (and um (> (count um) 0)) 
+                  (concat (mapv (fn [umi] (assoc-in-meta umi [tokenK :meta?] true)) um) 
+                    [(assoc-in-meta % [usermetaK] [])]) [%]))
+
+        x0 (loop [x0i x0] ; loop to remove nested reader macros.
+             (let [rmacro?s0 (mapv #(boolean (:contracted-rmacro? (tokenK (meta %)))) x0i)
+                   x0i1 (into [] (apply concat (mapv _unr x0i rmacro?s0))) ; I don't think the _unr first or _unp first order matters.
+                   x0i2 (into [] (apply concat (mapv _unp x0i1)))]
+               (if (> (count x0i2) (count x0i)) (recur x0i2) x0i2))) ; go untill the count stops increasing.
+
+        ; Extract various things from x0 for the coll-project 
         meta?s (mapv #(boolean (tokenK (:meta? (meta %)))) x0)
-
-        ; Extract the token strings and remove metadata/munwrap. We don't need metadata after we extract it.
-        rm-meta-munwrap #(munwrap (if (meta %) (with-meta % nil) %))
-
         x0-tstrs (mapv #(let [c? (coll? (munwrap %))]
                           (get-tstrs % (if c? 4 2))) x0) ; strings attached to each element.
+        
+        rm-meta-munwrap #(munwrap (if (meta %) (with-meta % nil) %)) ; We extracted every thing we need and expanded user metadata => no more metadata.
 
         ; Recursivly run on the elements of x0, including leaf-projection. We do not need to recursivly run on mx0's usermetadata
         ; since the outer level has no useremetadata and the inner levels are processed after the unwrapping the meta.
-        x (mapv #(rm-meta-munwrap (if (coll? (munwrap %)) (un-collparse % lang true) (leaf-project lang (rm-meta-munwrap %) (get-tstrs % 2)))) x0)] ; recursive and leaf processing.
+        x (mapv #(rm-meta-munwrap (if (coll? (munwrap %)) (un-collparse % lang true) (leaf-project lang (rm-meta-munwrap %) (get-tstrs % 2) (boolean (:rmacro-kwd? (tokenK (meta %))))))) x0)]
     ; The core coll-project step:
     (coll-project lang (collections/cmap :flatten rm-meta-munwrap x0) x0-tstrs x outer-strs meta?s ty (not (first not-outer-level)))))
 
