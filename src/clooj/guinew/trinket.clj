@@ -96,7 +96,7 @@
 
 (defn translate-event-override [java-e java-ob evt-type]
   "Overides the default transalation (which itself can be overrided by overriding the translation).
-   evt-type is i.e. :mouseEvent"
+   evt-type is i.e. :MouseEvent"
   (if-let [x (get _e-converts-grid [evt-type (.getClientProperty java-ob "type")])]
     (x java-e java-ob) ; the grid overrides if it has been specified.
     (if-let [y (get _e-converts evt-type)] (y java-e))))

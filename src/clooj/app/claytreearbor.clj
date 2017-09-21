@@ -13,22 +13,48 @@
 (def idt (str \u037A)) ; a small symbol that is mostly empty space.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;; Initialization functions
+;;;;;;;;;;;;;;;;; Initilization ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn new-arbor-node []
-  "Sets up an empty node. The node has it's vanilla :children as well as an internal :arbor.
-   The :arbor has similar structure to the vanilla :children.
-   :children starts out empty and is only populated when the user vanilla-expands the node.
-   The user can also arbor-expand the node to get JTree-like behavior where no new node is added.
-   Subfields of :arbor:
-     :name = folder or filename (leaf, not full path).
-     :contents = filedata in string form.
-     :name0, :contents0 = state at file open or last file save.
-     :timestamp = when the file was read, see jfile's atomistic file reading. Files only, not folders.
-     :vanilla? = Do we correspond to a vanilla child. The vanilla?=true elements, when the arbor is unwrapped and sorted, are 1:1 with the node's :children.
-     :children = further arbor children. Mutually exclusive with :vanilla."
-  (assoc (clatre/make-node :arbor "") :arbor {:name "" :name0 "" :contents "" :contents0 "" :timestamp -1 :vanilla? false :children []}))
+  "Sets up an empty node. We need to load from files.
+   The node has the :arbor key, which is a vector of file lines.
+   The :arbor is a vector of:
+     :text = how the text looks (includes leading space).
+     :key (the key to the node for expanded nodes, will not have other keys).
+     :level = indent level (starts at 0).
+     :name = the file name (leaf only).
+     :contents = the file contents.
+     :name0, :contents0, :timestamp = for detecting changes (see JFile's atomistic file read)."
+   (assoc (clatre/make-node :arbor "") :arbor {:name "" :name0 "" :contents "" :contents0 "" :timestamp -1 :children #{}}))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;; Tree handling functions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn _assign-paths [tree path vis-only?]
+  (apply concat [(dissoc (assoc tree :path path) :children)]
+    (if (or (not vis-only?) (:children-visible? tree))
+      (mapv #(_assign-paths %1 (conj path :children %2) vis-only?) (:children tree) (range)) [])))
+
+(defn vis-tree-unwrap [tree]
+  "unwraps the visible elements in the tree as a vector, including ourselves.
+   Used for the physics simulation. Adds a :path to each element and removes :children"
+  (into [] (_assign-paths tree [] true)))
+
+(defn assign-paths [tree vis-only?] ; assigns paths, breadth first.
+  (into [] (_assign-paths tree [] vis-only?)))
+
+(defn tree-wrap [treeu]
+  "Uses the :path of each node (i.e. from vis-tree-unwrap) to build a tree.
+   Leaf-nodes of treeu are allowed to have :children."
+  (throw (Exception. "clwalk useless."))
+  (let [f-add (fn [x nu] (cond (and (:children x) (:children nu))  ; ths fn adds nu to the growing tree.
+                           (throw (Exception. "Non-leaf-node has extra :children, there is a conflict."))
+                           (:children x) (assoc nu :children (:children x)) ; don't wipe-out deeper levels.
+                           :else nu))]
+    (reduce (fn [acc nu] (let [p (:path nu)] (if (= p []) (f-add acc []) (update-in acc p #(f-add % nu))))) 
+      {} treeu)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;; Conversion functions
@@ -46,18 +72,17 @@
   "Converts the arbor into an indented using idt vector of lines.
    Only visible lines are shown.
    Children use the spacers (cltext/tr-ch)."
-  (let [au (clwalk/assign-paths arbor true) sp (apply str (repeat (:segment-space cltext/*text-params*) cltext/tr-ch))
-        names (mapv :name au) paths (mapv :path au) chs (mapv :vanilla? au)]
-    (mapv #(str (apply str (repeat (count %1) idt)) (if %3 sp %2)) paths names chs)))
+  (let [au (assign-paths arbor true) sp (apply str (repeat (:segment-space cltext/*text-params*) cltext/tr-ch))
+        names (mapv :name au) paths (mapv :path au) pulled-out?s (mapv :vanilla? au)]
+    (mapv #(str (apply str (repeat (count %1) idt)) (if %3 sp %2)) paths names pulled-out?s)))
 
 (defn deep-line-count [arbor]
   "How many lines are contained in the arbor. Only visible children"
-  (inc (if (and (:children-visible? arbor) (:children arbor)) 
-         (apply + (mapv deep-line-count (:children arbor))) 0)))
+  (inc (if (:children-visible? arbor) (apply + (mapv #(if (coll? %) (deep-line-count %) 1) (:children arbor))) 0)))
 
 (defn assign-lines [arbor ix0]
   "Assigns line numbers to us and visible descendents recursively in the correct order.
-   ix0 = index of the first line. Use 0 uasually. Does not expand vanilla children.
+   ix0 = index of the first line. Use 0 uasually.
    The spacers must be converted to array breaks in the :children of :tbox."
   (let [a1 (assoc arbor :tmp-line-num ix0)]
     (if (not (:children-visible? a1)) a1
@@ -68,7 +93,7 @@
   "Sorts (in the order that it appears) and unwraps an arbor. Visible only, of course.
    add-invis-children? allows us to add-back invisible children within the arbor.
    Does not expand vanilla children or invisible children."
-  (let [au (clwalk/vis-tree-unwrap (assign-lines arbor 0))
+  (let [au (vis-tree-unwrap (assign-lines arbor 0))
         au-map (reduce #(assoc %1 (:tmp-line-num %2) %2) {} au) ; map from line-num to val.
         au-sort (mapv #(get au-map %) (range (count (vals au-map)))) ; vector.
         au-sort (if add-invis-children?
@@ -95,13 +120,14 @@
   "Converts any vanilla :children (if they are :arbor) into the node's :arbor, returning the fulled :arbor.
    Acts recursivly. Used to ensure we copy the vanilla children when we ctrl+C.
    Lines must be 1:1 with arbor."
+  (throw (Exception. "Don't yet understand how to convert arbor/tuck-in-children"))
   (let [child-ix (child-ix-of-lines lines)
         au-sort (sort-unwrap arbor)
         ; Only uses node-children when there are lines that are placeholders:
         vanilla-to-arbor (fn [nd] (tuck-in-children (node-to-lines nd) (:arbor nd) (:children nd)))
         au-sort-ch (mapv #(if (> %2 -1) (assoc %1 :children (vanilla-to-arbor (nth children %2))) %1) 
                      au-sort child-ix)]
-      (clwalk/tree-wrap au-sort-ch)))
+      (tree-wrap au-sort-ch)))
 
 (defn sub-arbor [arbor all-lines line-indexes & vanilla-children]
   "Creates a sub-arbor from arbor, the indexes of visible lines, and the text of each line.
@@ -148,24 +174,34 @@
 ;;;;;;;;;;;;;;;;; File IO functions
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn _load-from-disk [foldername-full]
+(defn _load-from-disk [foldername-full level]
   (let [filders (sort (jfile/visible-children foldername-full false)) nf (count filders)
-        arbor {:name (jfile/full-to-leaf foldername-full) :children-visible? false :vanilla? false}] ; children start off invisible.
+        arbor {:name (jfile/full-to-leaf foldername-full) :arbor-children-visible? false}] ; children start off invisible.
     (assoc arbor :children
       (mapv #(let [ffull (str foldername-full (jfile/sep) %)] ; this filder converted to a full-path.
                (if (jfile/dir? ffull) (_load-from-disk ffull)
                  (let [x (jfile/load-textfile-timestamp ffull)] ; we know the file was modified iff the date-modified > :file-mode-time
-                   {:name % :name0 % :contents (:text x) :contents0 (:text x) :timestamp (:last-modified x) :vanilla -1}))) filders))))
+                   {:name % :name0 % :contents (:text x) :contents0 (:text x) :timestamp (:last-modified x)}))) filders))))
+(defn _load-from-disk [ffull level]
+  (let [leaf (jfile/full-to-leaf ffull) n2text #(str (apply str (repeat level " ") %))
+        arbor {:children-visible? false}] ; children start off invisible.
+    (if (jfile/dir? ffull)
+      (let [arbor (assoc arbor :children (mapv #(_load-from-disk (str ffull (jfile/sep) %) (inc level))
+                                           (sort (jfile/visible-children ffull false))))] ; recursive.
+        (assoc arbor :text (n2text leaf)))
+      (let [x (jfile/load-textfile-timestamp ffull)] ; we know the file was modified iff the date-modified > :file-mode-time.   
+        (assoc arbor :text (n2text leaf) :name (:name x) :name0 (:name x) :contents (:text x) :contents0 (:text x) :timestamp (:last-modified x))))))
+
 (defn load-from-disk []
   "Creates a fully-collapsed :arbor node from the files on the disk.
    No :vanilla children. TODO: not load everything at once."
-  (let [a (_load-from-disk (jfile/absolute-project-folder))]
+  (let [a (_load-from-disk (jfile/absolute-project-folder) 0)]
     (cltext/on-text-change 
       (set-text-to-arbor (assoc (new-arbor-node) :arbor a))))) ; only one level is visible.
 
 (defn _mt? [x] (or (not x) (= (count x) 0)))
 (defn _file-node? [nd]
-  (or (= (:type nd) :text) (and (= (:type nd) :arbor) (_mt? (:children nd)) (_mt? (:children (:arbor nd))))))
+  (or (= (:type nd) :text) (and (= (:type nd) :arbor) (_mt? (:arbor-children (:arbor nd))))))
 (defn _save-to-disk-file!!! [text-or-leafarbor-node filename-full]
   ; Does not undo external changes. See update-from-disk.
   (if (and (= (:name0 text-or-leafarbor-node) (:name0 text-or-leafarbor-node))
@@ -179,13 +215,14 @@
         full-list-to-keep (apply hash-set (mapv #(str full-folder-path (jfile/sep) %) leaf-list-to-keep))
         byby (set/difference ch full-list-to-keep)]
     (mapv jfile/delete-filder!!! byby)))
-(defn _save-to-disk-folder!!! [arbor-node full-folder-path]
+(defn _save-to-disk-folder!!! [arbor-node full-folder-path all-nodes]
   (let [lines (node-to-lines arbor-node) arb (:arbor arbor-node)
         paths (mapv :path (sort-unwrap arb false))
         vanilla-ix (child-ix-of-lines lines)
         rines (mapv #(hash-map :line %1 :path %2 :ix %3) lines paths vanilla-ix)
         vanilla-ch (:children arbor-node)
         one-lev-filders (mapv #(:name (get-in arb %)) (filter #(= (count %) 2) paths))]
+    (throw (Exception. "TODO: _save-to-disk-folder!!! needs to use all nodes"))
     (_delete-other-filders!!! (apply hash-set one-lev-filders) full-folder-path)
     (reduce #(let [folder-levels (mapv (fn [p] (:name (get-in arb p))) (take-nth 2 (:path %2))) ; don't take the :children parts of the path.
                    disk-path (apply str full-folder-path (interpose (jfile/sep) folder-levels))]
@@ -194,12 +231,12 @@
                    (assoc-in %1 [:children (:ix %2)]
                      ((if (_file-node? ch) _save-to-disk-file!!! _save-to-disk-folder!!!) ch disk-path)))) 
                   arbor-node rines))))
-(defn save-to-disk!!! [root-arbor-node]
+(defn save-to-disk!!! [root-arbor-node all-nodes]
   "Saves any text edits to the disk, reloading (TODO implement this) the repl files.
    Returns the node with up-to-date timestamps, etc.
    Removes files that aren't in root-arbor-node."
-  (throw (Exception. "saving disabled for safety reasons"))
-  (_save-to-disk-folder!!! root-arbor-node (jfile/absolute-project-folder)))
+  (throw (Exception. "saving disabled for safety reasons")) ; can pretend to save files and make a list.
+  (_save-to-disk-folder!!! root-arbor-node (jfile/absolute-project-folder) all-nodes))
 
 (defn update-from-disk [root-arbor-node]
   "Responds to disk changes.
@@ -211,7 +248,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn copy-to-clipboard!! [node]
-  "Copies the node's arbor to the clipboard as a pr-str arbor, converting any vanilla :children into the arbor."
+  "Copies the node's arbor to the clipboard as a pr-str arbor."
+  (throw (Exception. "TODO: update claytreearbor/copy-to-clipboard!!"))
   (let [sel-start (:selection-start (:tbox node)) sel-end (:selection-end (:tbox node))]
     (if (and sel-start sel-end (>= sel-end sel-start)) ; non-empty selection.
       (let [lines (node-to-lines node)
@@ -230,6 +268,7 @@
 (defn insert-at [node insert-ix xs]
   "Inserts a string or an arbor object encoded as a string in the node at index insert-ix.
    Returns the modified node. Sets the cursor ix to the end of the inserted stuff."
+  (throw (Exception. "TODO: update claytreearbor/insert-ix!!, should make it much simplier with cltext2"))
   (let [xs (str xs) x (try (read-string xs) (catch Exception e false)) ; strings or a specific data-structure.
         lines (node-to-lines node)
         s0 (cltext/selection-of-chunks lines 0 insert-ix 1) ; 1 = extra newline at end of each line.
@@ -257,6 +296,7 @@
 (defn remove-sel [node ix0 ix1]
   "Removes between ix0 and ix1, inclusive on the rendered string.
    Does not remove children (TODO: this is a limitation in the current editing code flow, it can be changed)."
+  (throw (Exception. "TODO: update claytreearbor/insert-ix!!, should make it much simplier with cltext2"))
   (let [lines (node-to-lines node) ch (child-ix-of-lines lines)
         sel (cltext/selection-of-chunks lines ix0 ix1 1) ; 1 = extra newline at end of each line.
         lix0 (:ix0 sel) lix1 (:ix1 sel) line1 (unindent-line (:end-stub sel))
@@ -292,25 +332,21 @@
   (let [l0 (claphy/parent-child-l0 node child-node)]
     (clatre/position-relative-to node child-node l0 0.0 :parent true)))
 
-; Refactor out these & fix bug: 45 work-min, started 11:30.
-
 (defn _vanilla-expand [panel node line-ix child-ixs nv-folder? au path au-path]
   (let [insert-ix (inc (nth (reductions max child-ixs) line-ix))
         child (pos-child node 
                 (if nv-folder? (set-text-to-arbor (assoc (clatre/make-node :arbor "") :arbor (nth au line-ix)))
                   (let [x (get-in panel au-path)]
                     (assoc (clatre/make-node :text (:contents x)) :name0 (:name0 x) :contents0 (:contents0 x)))))] ; two types of children.
-    (-> panel (assoc-in (concat au-path [:vanilla?]) true) 
-      (assoc-in (concat path [:children-visible?]) true) ; make sure children are visible (we do NOT ever set this to false upon contraction, the children are removed).
+    (-> panel (assoc-in (concat path [:children-visible?]) true) ; make sure children are visible (we do NOT ever set this to false upon contraction, the children are removed).
       (update-in au-path #(if nv-folder? (assoc % :children []) ; arbor child pop-out.
                             (dissoc % :name0 :contents0 :contents :timestamp))) ; arbor wipe contents.
       (update-in (concat path [:children]) ; insert the child.
         #(into [] (concat (subvec % 0 insert-ix) [child] (subvec % insert-ix)))))))
 
-
 (defn _vanilla-contract [panel node ci path au-path]
   (let [a 1]
-    (-> panel (assoc-in (concat au-path [:vanilla?]) false)
+    (-> panel
       (update-in au-path #(let [ch (get-in panel (concat path [:children ci]))]
                             (if (= (:type ch) :arbor) (:arbor ch) ; back into the arbor
                               (assoc % :name0 (:name0 ch) :contents0 (:contents0 ch) :contents (cltext/real-string ch) :timestamp (:timestamp ch))))) ; put back the arbor contents.
@@ -334,16 +370,16 @@
           (if (> cixi -1)
             (recur (_vanilla-contract panel1 node1 cixi path au-pathi)
               (inc ix) (mapv #(cond (< % cixi) % (= % cixi) -1 (> % cixi) (dec %)) which-vanilla-contract1)) ; index shift on vanilla children.
-            (recur (assoc-in panel1 (concat au-pathi [:children-visible?]) false) (inc ix) which-vanilla-contract1)))))))
+            (recur panel1 (inc ix) which-vanilla-contract1)))))))
 
-;TODO ; vanilla children don't disappear with grandparent collapse of the node.
-; Empty node is allowed, it shouldn't be.
 (defn override-inflate-toggle [panel world-pt]
   "Opening and closing the arbor without adding child nodes to the physics.
    For now: First half of line will toggle like Jtrees do, second half of line will use vanilla children.
    This is not ideal but a simple way to make it compatable with our current editing paradigm."
-  (let [path (first (get-in panel [:edit-state :selected-paths]))
-        node (get-in panel path)
+  (throw (Exception. "arbor/override-inflate-toggle must pull stuff out and into :children now as it becomes visible."))
+  (let [path0 (first (get-in panel [:edit-state :selected-paths]))
+        path (throw (Exception. "TODO"))
+        node (get-in panel path0) ; we have selected this node for expansion.
         cix (:cursor-ix (:tbox node)) ; the cursor was updated by the last click.
         lines (node-to-lines node)
         s0 (cltext/selection-of-chunks lines 0 cix 1)
@@ -351,7 +387,7 @@
         within-line-ix (count (:end-stub s0)) ; 0 = cursor at begining of line.
         first-half? (<= within-line-ix (/ len 2.0))
         au (sort-unwrap (:arbor node) true)
-        nv-folder? (boolean (first (:children (nth au lix)))) ; are our line a folder (excluding vanilla folders expansion)?
+        nv-folder? (boolean (first (:arbor-children (nth au lix)))) ; is our line a folder (excluding vanilla folders expansion)?
         au-path (into [] (concat path [:arbor] (:path (nth au lix))))
         ch-ixs (child-ix-of-lines lines)
         chvis-path (concat au-path [:children-visible?])]
@@ -361,8 +397,9 @@
           (_deep-contract panel node lix ch-ixs path au au-path)
           (assoc-in panel chvis-path true))
         ; Children toggling.
-        (let [ci (nth ch-ixs lix)]
-          (if (= ci -1)
-            (_vanilla-expand panel node lix ch-ixs nv-folder? au path au-path)
-            (_vanilla-contract panel node ci path au-path))))
+        (if (= lix 0) panel ; do nothing if it's the top one as that has all the children and would make an empty node.
+          (let [ci (nth ch-ixs lix)]
+            (if (= ci -1)
+              (_vanilla-expand panel node lix ch-ixs nv-folder? au path au-path)
+              (_vanilla-contract panel node ci path au-path)))))
       path set-text-to-arbor)))

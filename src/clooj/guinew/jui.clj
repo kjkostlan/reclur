@@ -1,5 +1,5 @@
 ; Applies high level java mutations to an atom, using uirelate as an engine.
-; This is the gate-keeper to make sure the functions are ran ont he event dispatch thread.
+; This is the gate-keeper to make sure the functions are ran on the event dispatch thread.
 
 ; The atom:
   ; :clj -> the state that uirelate uses.
@@ -127,7 +127,7 @@
     (let [ob (if-let [o (trinket/constructor-override clj)] o (ob-from-kwd (:Type clj)))]
       ;(try (.setFocusable ob true) (catch Exception e)) ; focus doesn't seem to work well.
       (.putClientProperty ob "type" (:Type clj)) (.putClientProperty ob "key" ob-key) 
-      (.putClientProperty ob "guiAtom" gui-atom) ; we don't open or modify the atom.
+      (.putClientProperty ob "guiAtom" gui-atom) ; we don't open or modify the atom here.
       (.putClientProperty ob "listeners" {})
       (.putClientProperty ob "listenerFns" {})
       (update-ob! ob {} clj) ob)))

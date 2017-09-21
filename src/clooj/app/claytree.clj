@@ -13,14 +13,23 @@
    [clooj.app.claytreewalk :as clwalk]
    [clooj.app.claytreetool :as cltool]))
 
-; Node datastructure:
+; THE PANEL:
+;  :edit-state = information about the selection box, etc.
+;  :nodes = gui stuff.
+;  :camera = camera position, etc.
+
+; THE NODES:
+; The nodes (gui stuff) are stored as a map with unique keys.
+; Each node has: 
+; :key = the key in the map to look us up.
 ; :physics stores the physical properties above.
+; :children = hash-set of keys that represent the children of the node.
+; :parent = keyof parent node.
 ; :type = :folder, :file, or :text (of code).
-  ; :file nodes have one child: the code.
+  ; :file nodes have one child: the key to the code.
   ; :text only nests when the user drags something out. At that point, the () levels are used.
 ; :tbox = stuff related to the textbox.
 
-; :children = vector of child nodes. A folder has sub files/folders as children, etc.
 ; :children-visible? = are the children are visible or not. All children are either visible or not.
 
 ; Editing modes are more persistant than edit-states.
@@ -35,13 +44,14 @@
 (defn initial-state []
   "Initial state of panel. Needs to be a function since there is disk interaction."
   (let [p0 {:edit-state {:selected-paths [] :last-mouse-down-evt {:X 0 :Y 0}}
-            :tree (let [l #(assoc %1 :children-visible? true :physics (assoc (:physics %) :lock-x %2 :lock-y %3 :locked? true))
-                        s #(assoc-in %1 [:tbox :pieces] [%2])
-                        nd #(l (clatre/make-node %1 (str %1)) %2 %3) ; :type x y
-                        root (nd :root 0 -70) fileroot-node (l (clarbor/load-from-disk) -100 -50)
-                        ns-node (l (clrepl/new-ns-node) 100 -50)
-                        repl-node (l (clrepl/new-repl-node ns-node) 100 50)]
-                   (assoc root :children [(assoc ns-node :children [repl-node]) fileroot-node]))
+            :nodes (let [l #(assoc %1 :children-visible? true :physics (assoc (:physics %1) :lock-x %2 :lock-y %3 :locked? true :key %4))
+                         s #(assoc-in %1 [:tbox :pieces] [%2])
+                         nd #(assoc (l (clatre/make-node %1 (str %1)) %2 %3 %4) :key %4) ; :type x y
+                         root (nd :root 0 -70 :root) fileroot-node (l (clarbor/load-from-disk) -100 -50 :fileroot)
+                         ns-node (l (clrepl/new-ns-node) 100 -50 :ns)
+                         repl-node (l (clrepl/new-repl-node ns-node) 100 50 :repl)]
+                   {:root (assoc root :children #{:ns :fileroot}) :ns (assoc :ns :children #{:repl} :parent :root)
+                     :repl (assoc repl-node :parent :ns) :fileroot (assoc fileroot-node :parent :root)})
             :edit-mode \1
             :camera clagfx/default-camera}]
     (assoc-in p0 [:edit-state :panel-at-mouse-down] (dissoc p0 :edit-state))))

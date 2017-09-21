@@ -5,13 +5,13 @@
 
 (def code '(do
 
- (require '[clooj.app.claytree :as claytree] '[clooj.guinew.jui :as jui] '[clooj.app.claytreetree :as clatre] '[clooj.app.claytreewalk :as clwalk])
+ ;(require '[clooj.app.claytree :as claytree] '[clooj.guinew.jui :as jui] '[clooj.app.claytreetree :as clatre] '[clooj.app.claytreewalk :as clwalk])
  (require '[clooj.guinew.gtest :as gtest])
  (require '[clooj.coder.blitcode :as blitcode])
  (require '[clooj.coder.rcode :as rcode])
- (require '[clooj.coder.refactor :as refactor])
- (require '[clooj.collections :as collections])
+ ;(require '[clooj.coder.refactor :as refactor])
  (require '[clooj.collections :as collections])
  (defn rl [] (require '[clooj.coder.lang.clojure :as clojurelang] :reload))
+ (require '[clooj.app.gauitest.ctest :as ctest])
  (intern 'clojure.core 'debug (atom []))
 ))

@@ -5,7 +5,7 @@
     [clojure.string :as string]))
 
 ; Text fields:
-; :pieces = an array of strings.
+; :pieces = an array of strings with other stuff. Only the :text within pieces matters.
   ; If there are n children "pulled out" there are n+1 elements.
 ; :cursor-ix is the current cursor index, counting the space between the pieces.
 ; :font-size0 is the font size. The actual font size can be smaller because of physics-induced compression.
@@ -20,7 +20,7 @@
   {:margin 2 ; Padding when there is no scroll.
    :font-linespace-to-size 0.85 ; Not quite as high as advertized.
    :font-width-to-size 0.46; could also be gotten from the font metrics.
-   :segment-space 4 ; space between the head and tail to show a gap.
+   :segment-space 0 ; space between the head and tail to show a gap. We normally put this into pieces.
    :max-autofit-size-chars 30 ; automatically fit small text.
    :font-xshift-to-size -0.1 ; Don't know where this comes from.
    :font-yshift-to-size -0.08 ; center the text vertically.
@@ -78,7 +78,7 @@
   "Gets the string that is rendered (as opposed to the string that is actually in the node)."
   (let [v? (:visible-spacers? (:tbox node))
         spc #(if v? % (string/replace % tr-ch " "))]
-    (spc (apply str (interpose (apply str (repeat (:segment-space *text-params*) tr-ch)) (:pieces (:tbox node)))))))
+    (spc (apply str (interpose (apply str (repeat (:segment-space *text-params*) tr-ch)) (:text (:pieces (:tbox node))))))))
 
 (defn string-digest [s-or-node]
   "Gets several properties that are useful."
@@ -111,7 +111,7 @@
 (defn spacer-to-cursor-ix [node child-ix]
   "Returns the cursor ix of the beginning of the spacer for a given child."
   (let [pieces (:pieces (:tbox node)) ssp (:segment-space *text-params*)]
-    (apply + (mapv #(+ % ssp) (subvec pieces 0 child-ix)))))
+    (apply + (mapv #(+ (count (:text %)) ssp) (subvec pieces 0 child-ix)))))
 
 (defn selection-of-chunks [chunks ix0 ix1 pad-at-end]
    "Which chunks are selected. ix0 and ix1 are on the original rendered string.
@@ -136,8 +136,9 @@
    Children have to be fully selected to be included."
   ([node] (real-string node 0 1e100))
   ([node ix0 ix1] ;ix = cursor-indexes on the rendered-string.
+    (throw (Exception. "cltext/real-string needs to include children."))
     (let [pieces (:pieces (:tbox node)) n-sp (:segment-space *text-params*)
-          sel (selection-of-chunks pieces ix0 ix1 (:segment-space *text-params*))
+          sel (selection-of-chunks (mapv :text pieces) ix0 ix1 (:segment-space *text-params*))
           bodies (subvec pieces (:ix0 sel) (inc (:ix1 sel)))
           ch-strs (mapv #(if-let [x (nth (:children node) %)] (real-string x) "") (range (:ix0 sel) (:ix1 sel)))]
       (apply str (interleave bodies (conj ch-strs ""))))))
@@ -226,7 +227,7 @@
    Piece-ix is which piece we are. Loc-on-piece is the location on the piece, 0 = left edge of piece.
    in-space? is whether we are inside (not at the edge of) the spacers. We are assigned to the piece before the spacer if we are in the spacer."
   (let [ix (:cursor-ix (:tbox node)) ix (if (< ix 0) 0 ix)
-        pieces (:pieces (:tbox node)) sp (:segment-space *text-params*)
+        pieces (mapv :text (:pieces (:tbox node))) sp (:segment-space *text-params*)
         counts (mapv #(+ (count %) sp) pieces) nc (count counts)
         each-start (into [] (reductions + 0 counts)) each-end (mapv + each-start counts) ; inclusive cursor ranges.
         piece-ix (first (filterv #(and (>= ix (nth each-start %)) (<= ix (nth each-end %))) (range (count pieces))))
@@ -236,7 +237,7 @@
 
 (defn cursor-child-ix-to-ix [node child-ix]
   "Where the child is (cursor ix is at the center of the spacer)."
-  (let [pieces (:pieces (:tbox node))
+  (let [pieces (mapv :text (:pieces (:tbox node)))
         nsp (:segment-space *text-params*)]
     (apply + (int (/ nsp 2)) (- nsp) (mapv #(+ (count %) nsp) (subvec pieces 0 (inc child-ix))))))
 
@@ -269,7 +270,7 @@
    All indexes are on the string with :pieces unwrapped and spaced.
    This editing does not changes the number of :pieces even if :pieces are emptied out."
   (let [str-insert (.replace str-insert "\t" "    ")
-        pc (:pieces (:tbox node)) nsp (:segment-space *text-params*)
+        pc (mapv :text (:pieces (:tbox node))) nsp (:segment-space *text-params*)
         each-string-start (into [] (reductions + 0 (mapv #(+ % nsp) (mapv count pc)))) ; Starting char of each piece, including one for when the piece after the last would start.
         ; Remove the selection (this may affect multiple segments).
         ; Even if we empty pieces out we don't remove them from the vector:
@@ -286,7 +287,7 @@
         cur-find (cond cur-find cur-find (< ix0 0) [0 0] :else [(dec (count pc)) (count (last pc-removed))]) ; out of bounds cases.
         ca (first cur-find) cb (second cur-find) ; location: which string and where in the string the cursor is.
         tbox1 (assoc (:tbox node) :cursor-ix (+ (nth each-string-start ca) cb (count str-insert)) ; the length changing doesn't affect stuff before ix0.
-               :pieces (ro-enforce (update pc-removed ca #(str (subs % 0 cb) str-insert (subs % cb)))))]
+               :pieces (mapv #(assoc %1 :text %2) (:pieces (:tbox node)) (ro-enforce (update pc-removed ca #(str (subs % 0 cb) str-insert (subs % cb))))))]
    (on-text-change (assoc node :tbox tbox1))))
 
 ;;;;;;;;;; Scrolling

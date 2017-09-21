@@ -39,6 +39,7 @@
 
 (defn toggle-children [node]
   "Shows or hides children."
+  (throw (Exception. "need the root node for claytreetree/toggle-children"))
   (if (> (count (:children node)) 0) 
     (let [chvis? (:children-visible? node)
           pcl (:parent-child-spring-length claphy/*phy-params*)

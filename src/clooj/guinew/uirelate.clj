@@ -32,7 +32,7 @@
 
 ; Listener commands:
 ; [:listener :tree :treeSelected :my-id [(fn [e tree editbox editbox-scroll] ...) :tree :editbox :editbox-scroll]]
-; The first two arguments determine what to listen to and what listener to use.
+; The first two arguments (not including the :listener) determine what to listen to and what listener to use.
 ; The third is an extra id that allows multible listners.
 ; The internal [] contains the function optionally followed by any widgets or other queries that we need.
 ; Changing a listener completly deletes the old listener.
@@ -175,10 +175,12 @@
       :else (th (str "Unrecognized command type: " ty)))))
 (defn assert-valid-commands [cmds]
   "Some error checking to look for bad commands."
- (mapv _assert-valid-command cmds))
+  (if (not (sequential? cmds)) (throw (Exception. "Cmds must be a list or vector of cmds.")))
+  (if (and (coll? cmds) (not (coll? (first cmds)))) (throw (Exception. "Cmds must be a list/vector, not a single cmd. Package it in a 1-element vector if need be.")))
+  (mapv _assert-valid-command cmds))
 
 (defn add-commands [state cmds new-ob-builtin-listen-fns-fn]
-  "Adds commands to a given state."
+  "Adds a vector of commands to a given state."
   (let [changed-state (reduce (fn [s cmd] (apply-changes s (get-changes s cmd new-ob-builtin-listen-fns-fn))) state cmds)]
     (if (:store-history state) 
       (assoc changed-state :command-hist (reduce conj (:command-hist state) cmds)) changed-state)))
