@@ -1,13 +1,13 @@
 DANGER: Pre-alpha, many features are broken, missing, or incomplete. We plan soon to add the core essential features before making a super-powerful tool.
 
-The Cloojzone IDE is built from the ground up to leverage the power of functional programming, the JVM, and lisp’s powerful macro system. 
+Reclur is built from the ground up to leverage the power of persistent data structures, the JVM, and clojure's powerful lisp-based macro system. A long time ago, arthuredelstein/clooj was used as a springboard (all rights reserved). But it is hard to find any remaining clooj code at this point.
 
-Making Widgets more functional: Java gives us native access swing’s widgets and functionality, but these are riddled with side effects. We encodes the GUI state as a nested clojure data structure, and bundle the whole thing into an atom. Events are bound to functions (both builtin upkeep and user-defined) that take the state and return a new state (no mutation necessary, but they also have access to the java object if they really need it). The state usually will also include user-defined properties. In addition, this interface is highly simplified: adding and removing children and listeners and changing java objects is automatic. Clojure’s copy-on-modify makes checking equality, etc much cheaper than a naive defensive system, allowing automatically adding updates to be feasible.
+Persistent Data Structures: With a few possible technical exceptions (such as a java array that is only locally modified in place), the app state is persistent. This makes debugging and adding features easier.
 
-Code analyzing code: IDE’s are full of code analysis. Clojure and other Lisp languages excel at analyzing their own code. There is no reason to limit the feature set to the standard fare of refactoring, etc. Although there is very little working code analysis for now, code analysis is planned to become a key strength in the future.
+JVM: The JVM is a natural hook for dipping down into high performance array code or interfacing with other languages, which we can more easily use other features with. We use swing but only minimally, so aren't significantly platform-bound.
 
-Springboard: The functional-ness of the code makes it easy to build an indepenent new version using the old version as a springboard.
+Macros: Lisp-like languages being homoiconic have a powerful macro system, for which we plan to leverage.
 
-This codebase started as arthuredelstein/clooj (all rights reserved), but the code is substantially modified if not completely overhauled in many places.
+Near term roadmap: Optimize performance (mainly graphics), add core features (find replace, undo).
 
 DANGER: Pre-alpha, many features are broken, missing, or incomplete. Don’t use this yet! oakes/Nightcode is an active, stable IDE for clojure in clojure available now on github.
