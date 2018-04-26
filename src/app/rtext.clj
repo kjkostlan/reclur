@@ -49,7 +49,7 @@
 (def ^{:dynamic true} *text-params* 
   {:margin 2 ; Padding when there is no scrollbar.
    :font-linespace-to-size 0.85 ; Not quite as high as advertized.
-   :font-width-to-size 0.54; could also be gotten from the font metrics.
+   :font-width-to-size 0.6; could also be gotten from the font metrics.
    :max-autofit-size-chars 30 ; automatically fit small text (this appers deprecated).
    :font-xshift-to-size 0 ; Don't know where this comes from.
    :font-yshift-to-size 0.25 ; center the text vertically.

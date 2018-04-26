@@ -1,11 +1,12 @@
-; transforms are [x y scale] with scale applied first.
+; transforms are [x y scalex scaley] with scale applied first.
+; WARNING: the java interop is very incomplete.
 
 (ns app.xform)
 
-;;;;;;;;;;;;;;;;; x,y, scalex, scaley transforms ;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;; Transform multiplication ;;;;;;;;;;;;;;;;;;
 
 (defn xv [xform x y]
-  "xforms scale first then move"
+  "xforms scale first then move the vector x y"
   [(+ (* x (nth xform 2)) (first xform)) (+ (* y (nth xform 3)) (second xform))])
 
 (defn xx [xform-2 xform-1] ; apply 1 and then apply 2, like matrixes applied to vectors.
@@ -65,13 +66,48 @@
        (+ (* (nth old-loc 2) sx) x) (+ (* (nth old-loc 3) sy) y)]
       (or (= name-kwd :drawPolygon) (= name-kwd :drawPolyline))
       (throw (Exception. "TODO: support polygons and polylines"))
+      (or (= name-kwd :drawRect) (= name-kwd :fillRect) (= name-kwd :drawOval) (= name-kwd :fillOval))
+      [(+ (* (first old-loc) sx) x) (+ (* (second old-loc) sy) y)
+       (* (nth old-loc 2) sx) (* (nth old-loc 3) sy)] ; x y w h
       (= name-kwd :drawString)
       [(first old-loc) (+ (* (second old-loc) sx) x) (+ (* (nth old-loc 2) sy) y)]
       :else ; guessing, this list isn't complete.
       (mapv #(cond (not (number? %1)) %1 
-              (= %2 0) (+ (* %1 sx) x)
-              (= %2 1) (+ (* %1 sy) y)
-              :else (* %1 (* 0.5 (+ sx sy)))) old-loc (range)))))
+              (even? %2) (+ (* %1 sx) x)
+              :else (+ (* %1 sy) y)) old-loc (range)))))
+
+(defn xy-keypoints [g-cmd]
+  "Keypoints that enclose everything. Sometimes a guess. [[x0 x1 x2] [y0 y1 y2]] format."
+  (let [name-kwd (first g-cmd) args (second g-cmd) na (count args)]
+    (cond
+      (or (= name-kwd :drawBytes) (= name-kwd :drawChars) (= name-kwd :drawString)) ; guess size these. Newlines dont wrap
+      (let [sz (if-let [sz (:FontSize (get g-cmd 2))] sz 11) s? (= name-kwd :drawString)
+            szx (* sz 0.75) szy sz x0 (nth args (if s? 1 3)) y0 (nth args (if s? 2 4))
+            nc (if s? (count (first args)) (nth args 2))]
+        [[x0 (+ x0 (* szx nc))] [y0 (+ y0 szy)]])
+      (= name-kwd :drawImage)
+      (if (> na 8) [[(nth args 1) (nth args 3)] [(nth args 2) (nth args 4)]] ; rectangle specified.
+        (let [^java.awt.Image im (first args) ^java.awt.image.ImageObserver nil-obs nil
+              x0 (nth args 1) y0 (nth args 2) wh? (number? (get args 3))
+              w (if wh? (nth args 3) (.getWidth im)) h (if wh? (nth args 4) (.getHeight im))]
+          [[x0 (+ x0 w)] [(y0 (+ y0 h))]]))
+      (= name-kwd :drawLine)
+      [[(nth args 0) (nth args 2)] [(nth args 1) (nth args 3)]]
+      (or (= name-kwd :drawPolygon) (= name-kwd :drawPolyline))
+      (throw (Exception. "TODO: support polygons and polylines"))
+      (or (= name-kwd :drawRect) (= name-kwd :fillRect) (= name-kwd :drawOval) (= name-kwd :fillOval))
+      [[(first args) (+ (first args) (nth args 2))] [(second args) (+ (second args) (nth args 3))]]
+      :else ; guessing, this list isn't complete.
+      (let [x?s (mapv #(and (number? %1) (even? %2)) args (range))
+            y?s (mapv #(and (number? %1) (odd? %2)) args (range))]
+        [(mapv #(nth args %) (filterv #(nth x?s %) (range na))) 
+         (mapv #(nth args %) (filterv #(nth y?s %) (range na)))]))))
+
+(defn xxyy-gfx-bound [g-cmds]
+  "Computes bounds of the graphics, xxyy format"
+  (let [kpts (mapv xy-keypoints g-cmds) kpx (conj (into [] (apply concat (mapv first kpts))) 0)
+        kpy (conj (into [] (apply concat (mapv second kpts))) 0)]
+    [(apply min kpx) (apply max kpx) (apply min kpy) (apply max kpy)]))
 
 (defn xgfx [xform g-cmd keep-width?]
   "Transforms a single graphics command.

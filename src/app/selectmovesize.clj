@@ -84,7 +84,10 @@
     :else [bx0 bx1 by0 by1]))
 
 (defn _apply-xform [comp xform]
-  (update (update comp :size #(vector (max 1e-6 (* (first %) (nth xform 2))) (max 1e-6 (* (second %) (nth xform 3))))) :position #(apply xform/xv xform %)))
+  (let [not1? #(or (< % 0.99999) (> % 1.00001)) ; don't let rounding errors force re-draws.
+        resize? (or (not1? (nth xform 2)) (not1? (nth xform 3)))
+        comp1 (if resize? (update comp :size #(vector (max 1e-6 (* (first %) (nth xform 2))) (max 1e-6 (* (second %) (nth xform 3))))) comp)]
+    (update comp1 :position #(apply xform/xv xform %))))
 (defn apply-xform [comps keys xform]
   (reduce (fn [acc k] (update acc k #(_apply-xform % xform))) comps keys))
 

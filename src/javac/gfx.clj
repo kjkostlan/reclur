@@ -1,12 +1,13 @@
-; TODO: examples are out of date slightly in thier format.
-
 ; The default graphics updating that is made to be more functional.
 ; Performance is favored over a super flexible API, as performace for graphics was found to be the bottleneck.
 ; As a rule of thumb, light classes like Color are represented by vectors of numbers 1:1 with the constructor.
 ; Heavy classes such as arrays are represented by the java object themselves (the user must pass in a Java object).
-; TODO: handle affine transforms (partially implemented, need to handle the rotate scale etc cases).
-; TODO: have a compiler for maximum performance that creates code for a :java command.
+; maybe TODO: handle affine transforms (partially implemented, need to handle the rotate scale etc cases).
+; Long term TODO: have a compiler for maximum performance that creates code for a :java command.
 
+; We receive a map from kys to values, where each value is in turn a vector of vectors.
+; :camera = camera (a single xform vector)
+; :gfx = the gfx ignoring the camera, a vector:
 ; Each object element of the graphics vector is a vector of commands:
 ; [:drawOval, [10 10 20 20]]. Most commands must take clojure structures.
 ; [:fillRect, [10 10 20 20] ; when no third argument is supplied, uses defaults for everything, including color, etc.
@@ -21,8 +22,12 @@
 ; TODO: eventually write compiler macros for the gfx commands for even faster results.
 (ns javac.gfx
   (:import [java.awt.image BufferedImage]
-    [java.awt Graphics2D] [javax.swing SwingUtilities])
+    [java.awt Graphics2D Font Transparency Color GraphicsEnvironment GraphicsDevice GraphicsConfiguration RenderingHints BasicStroke] 
+    [javax.swing SwingUtilities]
+    [java.awt.image BufferedImage]
+    [java.awt.geom AffineTransform])
   (:require [clojure.set :as set]
+    [app.xform :as xform]
     [clojure.string :as string]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -34,7 +39,7 @@
 
 (def simple-constructors
   "Map from keywords to constructor functions."
-  {:Color '(java.awt.Color. (float (first x)) (float (second x)) (float (nth x 2)) (float (nth x 3)))
+  {:Color '(java.awt.Color. (float (first x)) (float (second x)) (float (nth x 2)) (float (nth x 3))) ;colors are floats from 0-1.
    :Point '(java.awt.Point. (int (first x)) (int (second x)))
    :Rectangle '(java.awt.Rectangle. (int (first x)) (int (second x)) (int (nth x 2)) (int (nth x 3)))
    :AffineTransform '(java.awt.geom.AffineTransform. (double (first x)) (double (second x)) (double (nth x 2)) (double (nth x 3)) (double (nth x 4)) (double (nth x 5)))
@@ -65,9 +70,10 @@
   {:FontSize (fn [^java.awt.Graphics2D g sz] (.setFont g (.deriveFont (.getFont g) (float sz))))
    :getFontSize (fn [^java.awt.Graphics2D g] (.getSize2D (.getFont g)))})
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;; Code generation (TODO: compile time w/type hints).
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;; Code generation command bank ;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 
 (defn cl2str [^Class cl]
   "Class to string. unify? true unifies all numbers to a generic number class.
@@ -166,9 +172,31 @@
   (zipmap (concat (keys _cmd-bank) (keys custom-cmds)) 
           (concat (mapv eval (vals _cmd-bank)) (vals custom-cmds))))
 
+;(require '[clojure.pprint]) (binding [*print-meta* true] (println (clojure.pprint/pprint _cmd-bank)))
+; Cmd bank is of the format (with the fns evaled and type cast/hints)
+; {:drawString (fn [g x] (let [ar (count x)] (cond (if (= ar 3) (.drawString ...) :else (throw ...))))) ...}
+
+
 (def set-get-map ; map from :Color to :getColor, etc.
   (let [vs (filterv #(.startsWith (str %) ":get") (keys cmd-bank))]
     (zipmap (mapv #(keyword (subs (str %) 4)) vs) vs)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;; Gfx parameters to set ;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn fixed-width-font! [^Graphics2D g]
+  (let [^Font font (Font. "Monospaced" (int Font/PLAIN) (int 11))]
+    (.setFont g font)))  
+    
+(defn interpolate-img! [^Graphics2D g]
+  "Bilinear seems OK to almost as fast, but bicubic is very slow."
+  (let [^RenderingHints rh (RenderingHints. ^java.awt.RenderingHints.Key (RenderingHints/KEY_INTERPOLATION) ^java.awt.RenderingHints.Key (RenderingHints/VALUE_INTERPOLATION_BILINEAR))]
+    (.setRenderingHints g rh)))
+
+(defn healthy-stroke! [^Graphics2D g] 
+  "More than 1 is enough so that downscaled images don't look so horrible, at least with bilinear interp."
+  (.setStroke g ^BasicStroke (BasicStroke. (float 2.0))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;; Rendering runtime.
@@ -198,9 +226,9 @@
               specs (inc ix)))))})) ; at each step the non-defaults going in are the specs from the last step.
 
 (defn update-graphics! [java-ob old-clj-gfx new-clj-gfx & force-repaint]
-  "Updates the graphics, calling a .repaint if needed."
+  "Updates the graphics, calling a .repaint if needed. See doc at top of this file for the format of clj-gfx."
   ; using invoke-later seems to break things.
-  (if (or (not= old-clj-gfx new-clj-gfx) (first force-repaint)) ; update detected. 
+  (if (or (not= old-clj-gfx new-clj-gfx) (first force-repaint)) ; change detected or forced. 
     (SwingUtilities/invokeLater
       (fn [& args] (do (.putClientProperty java-ob "repaintCmds" new-clj-gfx)
                      (.revalidate java-ob) (.repaint java-ob))))))
@@ -212,38 +240,114 @@
 ;(do (require '[clooj.coder.repl :as repl]) (repl/clc))
 ;(println (nth (:post @dbat) 500))
 
-(defn paint! [^Graphics2D g cmds0]
-  (if (nil? cmds0) (throw (Exception. "Nil gfx cmds given.")))
-  (if (not (sequential? cmds0)) (throw (Exception. "gfx cmds arent a vector, list, etc.")))
-  (let [cmds (convert-commands cmds0)
+(defn draw1! [^Graphics2D g cmd defaults]
+   (let [k (first cmd) bank cmd-bank sg-map set-get-map ; kc (k bank)
+         g-code (fn [k] (binding [*print-meta* true] (pr-str (k _cmd-bank)))) ; for error reporting.
+         ]
+     ; sg-map is Setting keywords -> getting keywords.
+     (if (not (keyword? k)) (throw (Exception. (str "Gfx option keyword not a keyword:" k))))
+     (if (= k :java)
+       (try ((second cmd) g) (catch Exception e (report-e "Custom user graphics call error: " e)))
+       (let [kc (k bank)]
+         (if kc 
+           (let [arg (second cmd) f (k bank)]
+             (cond (nil? arg) (throw (RuntimeException. (str "Nil value for draw command: " k)))
+               (nil? f) (throw (RuntimeException. (str "Unrecognized draw command or setting: " k)))
+               (= arg :default)
+               (try ((k bank) g (get defaults (sg-map k)))
+                 (catch Exception e (report-e (str "Error (when resetting to defaults) for command: " (k bank) " given: " (get defaults (sg-map k)) " on: " (g-code k)))))
+               :else
+               (try ((k bank) g arg)
+                 (catch Exception e (report-e (str "Error for command: " (k bank) " given: " arg " on: " (g-code k)) e)))))
+           (throw (Exception. (str "Unrecognized draw command: " k))))))))
+
+(defn paint-gfx! [^Graphics2D g cmds]
+  "Paints graphics given a vector of cmds in the format described at the top of this file."
+  (if (nil? cmds) (throw (Exception. "Nil gfx cmds given.")))
+  (if (not (sequential? cmds)) (throw (Exception. "gfx cmds arent a vector, list, etc.")))
+  (let [cmds (convert-commands cmds)
         intro (:intro cmds) ; defaults we need to store.
         body (:cmds cmds) ; the drawing itself.
-        bank cmd-bank
-        sg-map set-get-map ; Setting keywords -> getting keywords.
+        
         g-code (fn [k] (binding [*print-meta* true] (pr-str (k _cmd-bank)))) ; for error reporting.
         defaults (zipmap intro (mapv #(try ((get cmd-bank %) g) ; Settings that will be changed, requiring us to store defaults.
                                         (catch Exception e (report-e (str "Error getting default:" % " on: " (g-code %)) e))) intro))]
-    (reset! dbat {:pre cmds0 :post body})
-    (mapv #(let [k (first %)] ; kc (k bank)
-             (if (not (keyword? k)) (throw (Exception. (str "Gfx option keyword not a keyword:" k))))
-             (if (= k :java)
-               (try ((second %) g) (catch Exception e (report-e "Custom user graphics call error: " e)))
-               (let [kc (k bank)]
-                 (if kc 
-                   (let [arg (second %) f (k bank)]
-                     (cond (nil? arg) (throw (RuntimeException. (str "Nil value for draw command: " k)))
-                       (nil? f) (throw (RuntimeException. (str "Unrecognized draw command or setting: " k)))
-                       (= arg :default)
-                       (try ((k bank) g (get defaults (sg-map k)))
-                         (catch Exception e (report-e (str "Error (when resetting to defaults) for command: " (k bank) " given: " (get defaults (sg-map k)) " on: " (g-code k)))))
-                       :else
-                       (try ((k bank) g arg)
-                         (catch Exception e (report-e (str "Error for command: " (k bank) " given: " arg " on: " (g-code k)) e)))))
-                   (throw (Exception. (str "Unrecognized draw command: " k)))))))
-      body)))
+    (reset! dbat {:pre cmds :post body})
+    (mapv #(draw1! g % defaults) body)))
+
+(defn make-imagep [cmds]
+  "Makes a single image's gfx cmds along with it's xform. This is before any camera translation.
+   Returns [image xf] where xf is the xform that is applied to the image's graphics (xk needs to be inverted)."
+  (let [xxyy (xform/xxyy-gfx-bound cmds) 
+        pad 5 ; padding since gfx-bound isn't perfect. Accuracy vs performance.
+        x0 (- (first xxyy) pad) x1 (+ (second xxyy) pad) y0 (- (nth xxyy 2) pad) y1 (+ (nth xxyy 3) pad)
+        
+        scaleup 2 ; scaleup so the image is higher fidelity.
+        xf [(- (* x0 scaleup)) (- (* y0 scaleup)) scaleup scaleup] ; xform to not cut off the up or left and to scale up.
+        
+        sx (* scaleup (- x1 x0)) sy (* scaleup (- y1 y0))
+  
+        ; Not sure how much createCompatibleImage helps, but seems to be the standard practice:
+        ; https://stackoverflow.com/questions/2374321/how-can-i-create-a-hardware-accelerated-image-with-java2d?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+        ^GraphicsEnvironment ge (GraphicsEnvironment/getLocalGraphicsEnvironment);
+        ^GraphicsDevice gd (.getDefaultScreenDevice ge)
+        ^GraphicsConfiguration gc (.getDefaultConfiguration gd);
+        ^BufferedImage img (.createCompatibleImage gc (int sx) (int sy) (int Transparency/TRANSLUCENT))
+        ;(BufferedImage. (int sx) (int sy) (int BufferedImage/TYPE_INT_ARGB))
+        ^Graphics2D g (.createGraphics img)
+        _ (healthy-stroke! g)
+        cmds-xformed (mapv #(xform/xgfx xf % true) cmds)]
+    (fixed-width-font! g)
+    (paint-gfx! g cmds-xformed) [img xf]))
+  
+(defn add-image! [^Graphics2D g ^BufferedImage sprite im-xform camera]
+  "Adds the image to g with the xform applied from the camera."
+  ; TODO: only draw images that partially or fully fit on the screen [not needed if the gfx does this optimization for us].
+  (let [^AffineTransform affineXform (AffineTransform.)
+        ;im-xform [(first im-xform) (second im-xform) 1 1]
+        xf (xform/xx camera im-xform)
+        ; AffineXforms work backwards from our system, thus the translate bf scale.
+        _ (.translate affineXform (double (nth xf 0)) (double (nth xf 1)))
+        _ (.scale affineXform (double (nth xf 2)) (double (nth xf 3)))
+        ^ImageObserver null-observer nil]       
+    (.drawImage g sprite affineXform null-observer)))
+
+(defn global-paint! [^Graphics2D g sprites-oldp cmds-old cmds]
+  "Cmds is a map of vectors, each vector is passed to an image. Cam determines how to position everything.
+   cmds-old and sprites are for precomputation, set to {} to recalculate everything.
+   Returns the map of sprites to use for the precompute."
+  (fixed-width-font! g)
+  (interpolate-img! g)
+  (let [kys (sort-by #(:z (get cmds %)) (keys cmds)) vls (mapv #(get cmds %) kys) ; z-sort
+        ; code here a bit messy...
+        cameras (zipmap kys (mapv :camera vls))
+        gfx-cmds (zipmap kys (mapv :gfx vls))
+        gfx-cmds-old (zipmap kys (mapv #(:gfx (get cmds-old %)) kys)) ;may be nil.
+        ; TODO: does flushing when deleting help with memory?
+        sprites1p (zipmap kys
+                    (mapv #(let [sp? (not (:no-sprite? %2)) gc-old (get gfx-cmds-old %1)
+                                 gc (get gfx-cmds %1) sp-old (get sprites-oldp %1)]
+                             (if (and sp? (= gc-old gc)) sp-old
+                               (if sp? (make-imagep gc)))) kys vls))
+        camg (fn [cm] #(xform/xgfx cm %1 true))]
+    (mapv #(let [sp (get sprites1p %) cam (get cameras %)]
+             (if sp 
+               (add-image! g (first sp) (xform/x-1 (second sp)) cam)
+               (let [gc (get gfx-cmds %)] 
+                 (paint-gfx! g (mapv (camg cam) gc))))) kys)
+    sprites1p))
 
 (defn defaultPaintComponent! [g this-obj]
   "Allows us to use our gfx/paint! function on paint-component.
+   Uses the repaintCmds client property.
    does NOT include the proxy-super, so you need to:
-   (proxy-super paintComponent g) (defaultPaintComponent g this)"
-  (if-let [cmds (.getClientProperty this-obj "repaintCmds")] (paint! g cmds)))
+   (proxy-super paintComponent g) (gfx/defaultPaintComponent! g this)"
+  (if-let [cmds (.getClientProperty this-obj "repaintCmds")] 
+    (let [^Graphics2D g g
+          _ (.setColor g ^Color (Color. (float 0) (float 0) (float 0) (float 1)))
+          _ (.fillRect g (int 0) (int 0) (int 2000) (int 2000))
+          old-spritesp (if-let [x (.getClientProperty this-obj "precomputeGfxSpritesp")] x {})
+          old-cmds (if-let [x (.getClientProperty this-obj "precomputeGfxCmds")] x {})
+          new-spritesp (if cmds (global-paint! g old-spritesp old-cmds cmds) {})]
+      (.putClientProperty this-obj "precomputeGfxCmds" cmds)
+      (.putClientProperty this-obj "precomputeGfxSpritesp" new-spritesp))))

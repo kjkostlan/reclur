@@ -276,32 +276,51 @@
         
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
 
-(defn app-render [precompute s]
-    "Returns precompute gfx"
-    (let [cam (:camera s) comps (:components s)
-          _ (multisync/nil-assert comps "The render fn is missing comps")
-          precompute (if (map? precompute) precompute {})
-          old-compgfx-map (if-let [x (get precompute :compgfx-map)] x {})
-          kys (mapv second (sort-by first (mapv #(vector (:z (get comps %)) %) (keys comps)))) ; sorted components by :z value, low to high to put high ontop of low.
-          
-          ; Draws a component's graphics w/o camera or translation:
-          draw-comp-l (fn [k] (let [c (get comps k) cg0 (get old-compgfx-map k)] 
-                                (if (and (:pure-gfx? (:optimize c)) (= (dissoc (first cg0) :position) (dissoc (get comps k) :position)))
-                                  (second cg0) (singlecomp/draw-component-l c true))))
-          gfx-comps-l (mapv draw-comp-l kys)
+(defn update-gfx [s]
+  "Creates the gfx commands in the :precompute that are returned in app-render, see javac/gfx for format details."
+  (let [precompute (if-let [x (:gfx (:precompute s))] x {})
+        comps (:components s)
+        cam (:camera s)
+        _ (multisync/nil-assert comps "The update-gfx fn is missing comps")
+        old-comps (if-let [x (get precompute :comps-at-render)] x {})
+        old-compgfx (if-let [x (get precompute :comp-renders)] x {})
+        draw-or-reuse (fn [k] (let [c (get comps k) c0 (get old-comps k) g0 (get old-compgfx k)] 
+                                ; Cant use comp-eq? b/c comp-eq? is only for the :pieces not the gfx.
+                                (if (and (:pure-gfx? (:optimize c)) (= (dissoc c0 :position) (dissoc c :position)))
+                                  g0 (singlecomp/draw-component-l c true))))
+        gfx-comps-l (zipmap (keys comps) (mapv draw-or-reuse (keys comps)))
+        
+        precompute1 (assoc precompute :comps-at-render comps :comp-renders gfx-comps-l)]
+    (assoc-in s [:precompute :gfx] precompute1)))
 
-          new-compgfx-map (zipmap kys (mapv #(vector (get comps %1) %2) kys gfx-comps-l))
+(defn app-render [s]
+  (let [pre-gfx (:comp-renders (:gfx (:precompute s)))
+        ;_ (println "RENDERGFX: " pre-gfx)
+        cam (:camera s) comps (:components s)
 
-          precompute1 (assoc precompute :compgfx-map new-compgfx-map)
-
-          sel-kys (apply hash-set (:selected-comp-keys s))
-          gfx-comps (apply concat (mapv #(concat (singlecomp/gfx-l2g %1 cam (:position (get comps %2)))
-                                           (if (get sel-kys %2) (multicomp/draw-select-box comps %2 cam) [])) 
-                                   gfx-comps-l kys))
-          tool (:active-tool s)
-          tool-gfx (mapv #(xform/xgfx (:camera s) % true) (if-let [rf (:render tool)] (rf s) []))
-          sms-gfx (if (:typing-mode? s) [] (mapv #(xform/xgfx (:camera s) % true) ((:render (selectmovesize/get-tool)) s)))]
-      [precompute1 (cpanel/grequel (multicomp/add-which-tool-hud (into [] (concat gfx-comps tool-gfx sms-gfx)) s))]))
+        sel-kys (apply hash-set (:selected-comp-keys s))
+        
+        comp-sprites (zipmap (keys comps) 
+                       (mapv (fn [k] 
+                               (let [c (get comps k)
+                                     cam1 (xform/xx cam (singlecomp/pos-xform (:position c)))]
+                                 {:camera cam1 :gfx (get pre-gfx k) :z (:z c)})) (keys comps)))
+        tool (:active-tool s) ; don't precompute the tools, not necessary, at least for now.
+        ; TODO: use the cam or use no cam?
+        tool-sprite {:camera cam :gfx (if-let [rf (:render tool)] (rf s) []) :no-sprite? true}
+        
+        sms-sprite (if (:typing-mode? s) {:camera [0 0 1 1] :gfx []} 
+                     {:camera cam :gfx ((:render (selectmovesize/get-tool)) s) :z 1e10 :no-sprite? true})
+        
+        ;_ (println "tool gfx: " tool-sprite)
+        
+        sel-keys (apply hash-set (:selected-comp-keys s))
+    
+        sel-sprite {:no-sprite? true :camera cam :z 2e10
+                    :gfx (into [] (apply concat (mapv #(multicomp/draw-select-box comps % [0 0 1 1]) sel-keys)))}
+        which-tool {:no-sprite? true :camera [0 0 1 1] :z 1e100
+                    :gfx (multicomp/which-tool-hud s)}]
+    (assoc comp-sprites :TOOL-SPRITE-GAUCORE tool-sprite :TOOL-SMS-SPRITE sms-sprite :TOOL-SEL-SPRITE sel-sprite :TOOL-WHICH-MODE which-tool)))
 
 ;;;;;;;;;;;;;;;; The setup ;;;;;;;;;;;;;;;;;;;;;
 
@@ -340,6 +359,8 @@
         s1 (-> s (open-console) (open-file-browser) (open-repl))
         s2 (update s1 :components multicomp/grid-layout)
         s3 (assoc s2 :selected-comp-keys #{})]
-    (cpanel/launch-app!! (update s3 :components multicomp/unique-z) (listener-fns) 
+    (cpanel/launch-app!! (update s3 :components multicomp/unique-z) (listener-fns)
+      (fn [& args] (try (apply update-gfx args)
+                     (catch Exception e (do (println "error: " e)))))
       (fn [& args] (try (apply app-render args)
                      (catch Exception e (do (println "error: " e))))))))

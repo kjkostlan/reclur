@@ -93,10 +93,11 @@
   (swap! one-atom #(queue1 % e kwd)))
 
 (defn update-graphics!! []
-  (let [x @one-atom pnew-gfx ((:render-fn x) (:gfx-precompute x) (:app-state x))
-        p (first pnew-gfx) new-gfx (second pnew-gfx)]
+  (let [x @one-atom 
+        gfx-updated-app-state ((:update-gfx-fn x) (:app-state x))
+        new-gfx ((:render-fn x) gfx-updated-app-state)]
     (if-let [panel (:JPanel x)] (gfx/update-graphics! panel (:last-drawn-gfx x) new-gfx))
-    (swap! one-atom #(assoc % :last-drawn-gfx new-gfx :gfx-precompute p))))
+    (swap! one-atom #(assoc % :last-drawn-gfx new-gfx :app-state gfx-updated-app-state))))
 
 (defn upkeep-loop!! [update-graphics?]
   "The loop stops unless *low-cpu?* is false or events trigger it."
@@ -164,15 +165,16 @@
   (if *mac-keyboard-kludge?* (f)
     (SwingUtilities/invokeAndWait f)))
 
-(defn launch-app!! [init-state evt-fns render-fn]
+(defn launch-app!! [init-state evt-fns update-gfx-fn render-fn]
   "app is singleton, launching 
    evt-fns including :everyFrame are (f evt-clj state), we make our own every-frame event.
-   render-fn is (f precompute state-clj) but some render commands are functions on the java object."
+   update-gfx-fn is (f state-clj), returns the new state, and should cache any expensive gfx cmds.
+   render-fn is (f state-clj) but some render commands are functions on the java object."
   (if *low-cpu?* (println "Low CPU mode, less mouse moves and no animations."))
-   ; https://nelsonmorris.net/2015/05/18/reloaded-protocol-and-no-implementation-of-method.html
-   ; Reload the implementation of the protocol. Other languages must go here.
-   ; This is very messy and protocols may be abandoned all together.
-   (require '[coder.lang.clojure :reload true])  
+  ; https://nelsonmorris.net/2015/05/18/reloaded-protocol-and-no-implementation-of-method.html
+  ; Reload the implementation of the protocol. Other languages must go here.
+  ; This is very messy and protocols may be abandoned all together.
+  (require '[coder.lang.clojure :reload true])  
   (swing-or-kludge (fn [& args]
       ;https://stackoverflow.com/questions/1234912/how-to-programmatically-close-a-jframe
       (if-let [old-frame (:JFrame @one-atom)]
@@ -182,13 +184,11 @@
             frame (first frame-panel) panel (second frame-panel)]
         (reset! one-atom
           (assoc (empty-state)
-             :app-state init-state :listeners evt-fns :last-drawn-gfx nil :render-fn render-fn
+             :app-state init-state :listeners evt-fns :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn 
              :external-state {}
              :evt-queue []
-             :JFrame frame :JPanel panel))
-  ))
-  ))
+             :JFrame frame :JPanel panel))))))
 
 (defn stop-app!! []
   (if (not= @one-atom (empty-state)) (println "stopping app"))
-  (launch-app!! {} {} (fn [precompute state] [])))
+  (launch-app!! {} {} (fn [state] []) (fn [state] [])))

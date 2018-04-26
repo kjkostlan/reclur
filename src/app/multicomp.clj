@@ -185,10 +185,10 @@
 
 ;;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;
 
-(defn add-which-tool-hud [gfx s]
+(defn which-tool-hud [s]
   (let [tool (if-let [m (:active-tool s)] (:name m) :OOPS) typing? (:typing-mode? s)
         g-cmd [:drawString [(str "tool = " tool " typing? = " typing?) 2 15] {:FontSize 18 :Color [0 1 1 0.7]}]]
-    (conj gfx g-cmd)))
+    [g-cmd]))
 
 (defn draw-select-box [comps k camera]
   (let [f-comp (get comps k) p (:position f-comp) sz (:size f-comp)]
