@@ -107,23 +107,19 @@
           (update-in box [:pieces 0 :text] #(str (subs % 0 (:ix0 ed)) txt (subs % (:ix1 ed)))))
           (rtext/dispatch-edit-event box ed)))))
 
-(defn save-and-update!!! [filename text]
-  "Saves a file to filename.
-   If it is a clj file: attempts to reload the namespace, returning the error info if there is a syntax error."
-  (let [_ (jfile/save!!! filename text)]
-    (if (jfile/clj? filename)
-      (let [dotpath (jfile/file2dotpath filename) 
-            tmp-ns (create-ns '_debugger.namespace)]
-        ; TODO: remove functions if they are discarded.
-        (try (binding [*ns* tmp-ns] 
-               (do (if-let [target-ns (find-ns (symbol dotpath))] ; remove all mappings so deleted fns are really deleted.
-                     (let [bindings (ns-map target-ns)]
-                       (mapv #(ns-unmap target-ns %) (keys bindings))))
-                 (require (symbol dotpath) :reload) ; reload the new fns.
-                 {:error false :message "Code saved without error."}))
-          (catch Exception e
-            {:error (jexc/clje e) :message "Compile error"}))
-      {:error false :message "Non-clojure file, no coding error is possible."}))))
+(defn save-and-update!!! [cljfile text]
+  "Saves a clj file and attempts to reload the namespace, returning the error info if there is a compile error."
+  (jfile/save!!! cljfile text)
+  (let [dotpath (jfile/file2dotpath cljfile) 
+        tmp-ns (create-ns '_debugger.namespace)]
+    (try (binding [*ns* tmp-ns] 
+           (do (if-let [target-ns (find-ns (symbol dotpath))] ; remove all mappings so deleted fns are really deleted.
+                 (let [bindings (ns-map target-ns)]
+                   (mapv #(ns-unmap target-ns %) (keys bindings))))
+             (require (symbol dotpath) :reload) ; reload the new fns.
+             {:error false :message "Code saved without error."}))
+      (catch Exception e
+        {:error (jexc/clje e) :message "Compile error"}))))
 
 ; No child UI is planned in the near future.
 (defn expandable? [mouse-evt box] false)

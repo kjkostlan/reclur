@@ -65,17 +65,26 @@
         comps1 (reduce #(assoc-in %1 [(nth kys %2) :z] (nth zs1 %2)) comps (range (count kys)))]
     (assoc s :components comps1)))
 
+(defn save1!!! [fname txt clj?]
+  (if clj? 
+    (let [report (orepl/save-and-update!!! fname txt)]
+      (if (:error report)
+        (println "Saved:" fname "Compile error:" (:error report))
+        (println "Saved:" fname "Namespace updated.")))
+    (do (jfile/save!!! fname txt) (println "Saved:" fname "Not a clojure file"))))
+
 (defn _save-core!!! [s usfiles open2text new-files changed-files deleted-files0 missing-files renamed-map copied-map]
   "Applys the save, with warning dialogues. Returns the modified s."
   (println "crtl+s results: new: " new-files "changed:" changed-files
     "deleted if click yes: " deleted-files0 "missing: " missing-files "renamed: " renamed-map "copied: " copied-map)
   (let [deleted-files (if (and (> (count deleted-files0) 0) (warnbox/yes-no? (str "Delete: " deleted-files0))) deleted-files0 #{})]
     ;(throw (Exception. "Save disabled for safety reasons.")) ; DEBUG safety.
+    ; TODO: rename file reload namespace somehow.
     (mapv #(jfile/rename!!! %1 %2) (keys renamed-map) (vals renamed-map))
     (mapv (fn [fname] 
             (let [text (jfile/open fname)]
               (mapv #(jfile/save!!! % text) (get copied-map fname)))) (keys copied-map))
-    (mapv #(jfile/save!!! % (if-let [x (get open2text %)] x "")) (set/union new-files changed-files))
+    (mapv #(save1!!! % (if-let [x (get open2text %)] x "") (jfile/clj? %)) (set/union new-files changed-files))
     (mapv jfile/delete!!! deleted-files)
     ; The fbrowser was already updated. Thus only missing files or files the user decided not to delete:
     (let [new-fileset (-> usfiles
@@ -85,7 +94,7 @@
 
 (defn save-all!!! [s]
    "Everything is saved, deletions will be prompted."
-  (let [disk (apply hash-set (multicomp/get-filelist {:components {:tmp {:pieces [(first (:pieces (fbrowser/load-from-disk)))] :type :fbrowser}}} false))
+  (let [disk (apply hash-set (multicomp/get-filelist {:components {:tmp {:pieces [(first (:pieces (fbrowser/load-from-disk)))] :type :fbrowser}}} false nil))
         ; disk has ./folder/file.clj format, and is more than just clj files.
         comps (:components s) codeboxks (filterv #(= (:type (get comps %)) :codebox) (keys comps))
         open (apply hash-set (mapv #(first (:path (get comps %))) codeboxks))
@@ -187,14 +196,18 @@
         s (assoc-in s [:precompute :desync-safe-mod?] true) 
         evt (xform/xevt (xform/x-1 (singlecomp/pos-xform (:position comp))) evt-c)
         file (if (and (= (:type evt-c) :mousePressed) (= (:type comp) :fbrowser)) 
-                (fbrowser/fullfile-click evt comp))]
+                (fbrowser/fullfile-click evt comp))
+        non-dir? (if file (fbrowser/non-folder-file-click? evt comp))]
     ; Add the file to the key :fname-gui, these will be used to effect changes when the fbrowser is changed:
-    (if file (let [lix (fbrowser/pixel-to-line comp (:X evt) (:Y evt))
-                   comp1 (assoc-in comp [:pieces lix :fname-gui] file)
-                   cbox (assoc (codebox/load-from-file file) :position [610 420])
-                   s1 (assoc-in s [:components compk] comp1)
-                   s2 (update s1 :components #(multisync/spread-fname-gui % (hash-set compk)))]
-                (add-component s2 cbox (gensym 'codebox))) s)))
+    (if (and file non-dir?) 
+      (let [lix (fbrowser/pixel-to-line comp (:X evt) (:Y evt))
+            comp1 (assoc-in comp [:pieces lix :fname-gui] file)
+            pos (:position comp) sz (:size comp)
+            cbox (assoc (if (jfile/exists? file) (codebox/load-from-file file) (assoc (codebox/new-codebox) :path [file])) 
+                   :position (mapv + pos sz))
+            s1 (assoc-in s [:components compk] comp1)
+            s2 (update s1 :components #(multisync/spread-fname-gui % (hash-set compk)))]
+        (add-component s2 cbox (gensym 'codebox))) s)))
 
 (defn maybe-run-repl [evt-g evt-c s k]
   (if (and (= k :keyPressed) (shift-enter? evt-c))

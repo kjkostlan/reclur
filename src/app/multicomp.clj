@@ -136,16 +136,16 @@
           (mapv _wrap-tree (vals paths-uprootm)))))))
 (defn wrap-tree [paths] [(_wrap-tree paths)])
 
-(defn get-filelist [s old?]
-  "All strings."
+(defn get-filelist [s old? allow-false-old?]
   (let [comps (:components s)
         fbrowserk (filterv #(= (:type (get comps %)) :fbrowser) (keys comps))
-        filepath2elem (apply merge (mapv #(fbrowser/unwrapped-tree (get comps %)) fbrowserk))]
-    (mapv fbrowser/devec-file (if old? (mapv :fullname0 (vals filepath2elem)) (keys filepath2elem)))))
+        filepath2elem (apply merge (mapv #(fbrowser/unwrapped-tree (get comps %)) fbrowserk))
+        ffil (if allow-false-old? identity #(filterv identity %))]
+    (mapv #(if % (fbrowser/devec-file %) %) (if old? (ffil (mapv :fullname0 (vals filepath2elem))) (keys filepath2elem)))))
 
 (defn new2?old-files [s]
   "map from new to old files, both fullpath. Nil values mean no old files."
-  (zipmap (get-filelist s false) (get-filelist s true)))
+  (zipmap (get-filelist s false nil) (get-filelist s true true)))
 
 (defn set-filetree [s tree reset-fullname0s?]
   "tree is indexes with :children for folders and :text for the filename."

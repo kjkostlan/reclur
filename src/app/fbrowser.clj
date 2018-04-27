@@ -239,6 +239,11 @@
 ;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Interactions beyond the usual rtext interactions.
 
+(defn non-folder-file-click? [mouse-evt box]
+  (let [lix (pixel-to-line box (:X mouse-evt) (:Y mouse-evt))
+        piece (get (:pieces box) lix)]
+    (and piece (not (expanded? piece)) (not (exported? piece)))))
+
 (defn fullfile-click [mouse-evt box]
   (let [lix (pixel-to-line box (:X mouse-evt) (:Y mouse-evt))]
     (if-let [fvec (get (paths-of-lines box) lix)] (devec-file fvec))))

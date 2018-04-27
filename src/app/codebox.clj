@@ -196,7 +196,7 @@
 
 (defn new-codebox []
   (assoc rtext/empty-text :interact-fns (interact-fns) :outline-color [0.3 0.5 0.9 1] :path []
-    :type :codebox :lang :clojure :precompute {:tokens []} :colorize-fn (fn [& args] (apply colorize args))))
+    :type :codebox :lang :clojure :precompute {:tokens [] :levels []} :colorize-fn (fn [& args] (apply colorize args))))
 
 (defn code-fold-toggle [cur-pieceix folding? ixs export-marker box]
   "Both (un)exporting and code (un)folding."

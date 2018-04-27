@@ -243,8 +243,8 @@
 (defn string-digest [^String s]
   "Newline analysis of a given string s.
     :counts = # chars/line. :num-b4[i] = # chars before line[i], it has one more element than length of lines."
-  (let [lines (into [] (.split s "\n")) ;each line.
-        lines (if (= (count lines) 0) [""] lines) ; have at least one line.
+  (let [lines (into [] (.split (str s " ") "\n")) ;each line.
+        lines (update lines (dec (count lines)) #(subs % 0 (dec (count %)))) ; remove the extra space
         line-counts (mapv count lines)]
     {:counts line-counts :nlines (count lines)
      :num-b4 (into [] (reductions + 0 (mapv inc line-counts))) ; puts the \n on the previous line, and an extra at the end.
