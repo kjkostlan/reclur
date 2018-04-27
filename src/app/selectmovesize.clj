@@ -99,11 +99,8 @@
      (apply max (mapv #(+ (second (:position %)) (second (:size %))) comps))]))
 
 (defn derive-key [kwd]
-  (let [s (subs (str kwd) 1) r #"copy\d+"
-        cn (re-find r s)
-        n (if cn (Integer. (string/replace cn #"copy" "")))]
-    (keyword
-      (if cn (str (string/replace s r "") "copy" (inc n)) (str s "copy1")))))
+  (let [s (if (keyword? kwd) (subs (str kwd) 1) (str kwd))]
+    (keyword (str (string/replace (string/replace s #"\d" "") #"copy" "") "-" (gensym "copy")))))
 
 (defn gts [s] (add-defaults (:selectmovesize (:tool-state s))))
 (defn sts [s ts] (assoc-in s [:tool-state :selectmovesize] ts))

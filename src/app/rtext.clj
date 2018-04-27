@@ -86,10 +86,6 @@
           #(str (subs % 0 jx0) (apply str (mapv :text xv)) (subs % jx1))))
         (assoc box :pieces (into [] (concat (:b4 stats) xv (:afr stats)))))))))
 
-(defn default-save-fn!!! [box]
- "Must return the box, even if it is different."
- (do (println "no save function specified.") box))
-
 (defn default-delete [box stats]
   "Delete pressed on selection from ix0 to ix1, inclusive-exlcuisve pattern.
    Stats is the same as it is in default-insert."
@@ -216,10 +212,8 @@
    :show-line-nums? true
    :optimize {:pure-gfx? true} ; not quite true (the cursor blink) but one day we will fix this. 
    :insert-fn default-insert :delete-fn default-delete
-   :colorize-fn default-colorize :double-click-fn default-doubleclick
-   ; Move-cursor can be done by changing mouse-moved.
-   :save-fn!!! default-save-fn!!!})
-
+   :colorize-fn default-colorize :double-click-fn default-doubleclick})
+   
 ;;;;;;;;;;;;;;;;;;;; Mutable:
 
 ; On copy: store here and put the rendered string into the clipboard (for other apps).
@@ -622,7 +616,7 @@
       (= ty :paste) (let [x (:value ed) agree? (not (string? x))]
                       (edit box (:ix0 ed) (:ix1 ed)
                         x (if agree? (:ixs (meta x)) [])))
-      (= ty :save) ((:save-fn!!! box) box)
+      (= ty :save) box; We don't handle saves here, just do nothing.
       (= ty :arrow) (arrow-cursor box (:value ed) (:ShiftDown (:external-state @cpanel/one-atom)))
       (= ty :type) (edit box (:ix0 ed) (:ix1 ed) (:value ed) [])
       :else box)))

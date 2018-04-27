@@ -123,7 +123,7 @@
 
 ;;;;;;;;;;;;;;;;;;;; Getting and setting files ;;;;;;;;;;;;;;;
 
-(defn wrap-tree [paths]
+(defn _wrap-tree [paths]
   "Only used for updating the filetree, it would be nice to refactor this away."
   (let [paths (mapv fbrowser/vec-file paths)
         children (apply hash-set (mapv first paths))
@@ -133,13 +133,15 @@
             ; map from first key to other paths:
             paths-uprootm (reduce (fn [acc k] (update acc (first k) #(if % (conj % k) [k]))) {} paths-uproot)]
         (assoc out :children
-          (mapv wrap-tree (vals paths-uprootm)))))))
+          (mapv _wrap-tree (vals paths-uprootm)))))))
+(defn wrap-tree [paths] [(_wrap-tree paths)])
 
 (defn get-filelist [s old?]
+  "All strings."
   (let [comps (:components s)
         fbrowserk (filterv #(= (:type (get comps %)) :fbrowser) (keys comps))
         filepath2elem (apply merge (mapv #(fbrowser/unwrapped-tree (get comps %)) fbrowserk))]
-    (if old? (mapv :fullname0 (vals filepath2elem)) (mapv #(apply str (interpose "/" %)) (keys filepath2elem)))))
+    (mapv fbrowser/devec-file (if old? (mapv :fullname0 (vals filepath2elem)) (keys filepath2elem)))))
 
 (defn new2?old-files [s]
   "map from new to old files, both fullpath. Nil values mean no old files."
@@ -148,7 +150,7 @@
 (defn set-filetree [s tree reset-fullname0s?]
   "tree is indexes with :children for folders and :text for the filename."
   (let [tmpk (gensym "reference") fb (fbrowser/new-fbrowser tree) ; sync to a temp component.
-        comps1 (dissoc (multisync/iterative-sync (:components s) (assoc (:components s) tmpk fb)) tmpk)]
+        comps1 (dissoc (:components (multisync/iterative-sync s {:components (assoc (:components s) tmpk fb)})) tmpk)]
     (assoc s :components (if reset-fullname0s? (zipmap (keys comps1) (mapv fbrowser/reset-fullname0s (vals comps1))) comps1))))
 
 (defn codebox-keys [comps fname] (filterv #(and (= (first (:path (get comps %))) fname) (= (:type (get comps %)) :codebox)) (keys comps)))

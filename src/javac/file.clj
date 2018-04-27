@@ -115,7 +115,7 @@
 (defn delete!!! [^String file]
   "File or folder, all contents in folder (if it is a folder) are also deleted just like GUI delete."
   (let [^File f (File. file)]
-    (cond (.isDirectory? f) (FileUtils/deleteDirectory f)
+    (cond (.isDirectory f) (FileUtils/deleteDirectory f)
       (.isFile f) (.delete f)
       :else (throw (Exception. "File isn't a file or folder.")))))
 
