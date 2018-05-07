@@ -15,3 +15,4 @@ Specific features (TODO's):
     Tab browser tweaks:
         User defines a leaf.
         Leafs can do anything, like open a video, etc.
+    Consider rewrite-clj.
