@@ -210,24 +210,20 @@
 (defn new-file [name] ; no fullname0.
   {:text (str name "\n") :fullname0 false :timestamp 0})
 
-(defn _load-from-disk [foldername-full] ; doesn't load the files themselves.
+(defn _load-from-folder [foldername-full] 
+  "loads the names, doesn't load the files themselves."
   (let [filders (sort (jfile/visible-children foldername-full false)) nf (count filders)
         arbor {:fullname0 foldername-full}] ; children start off invisible.
     (assoc arbor :children ; everything starts out unexpanded.
       (mapv #(let [ffull (str foldername-full (jfile/sep) %)] ; this filder converted to a full-path.
-               (if (jfile/dir? ffull) (_load-from-disk ffull)
+               (if (jfile/dir? ffull) (_load-from-folder ffull)
                  {:fullname0 ffull})) filders))))
-         
-(defn load-from-disk []
-  "All children startout contracted.
-   TODO: lazy filesystem that only recursivly runs through changes, probably manual implementation b/c serialization."
-  (assoc (new-fbrowser [(_text-to-leaf0 (_load-from-disk ".") 0)]) :path []))
 
-(defn save-to-disk!!! [] 
-  (throw (Exception. "Saving not implemented yet TODO")))
-
-(defn update-from-disk [] ; not sure the best way to implement this.
-  (throw (Exception. "Updating from external modifications not implemented yet TODO")))
+(defn load-from-folder [foldername-full]
+  "All children startout contracted. The last element of foldername-full goes into the root folder holding everything.
+   TODO: lazy filesystem that only operates at need, probably manual implementation b/c the mechanics are complex."
+  (assoc (new-fbrowser [(_text-to-leaf0 (_load-from-folder foldername-full) 0)]) 
+    :path (into [] (butlast (vec-file foldername-full)))))
 
 (defn _recursive-indent [x] ; any :children are also indented.
   (update (if-let [ch (:children x)] (assoc x :children (mapv _recursive-indent ch)) x) 

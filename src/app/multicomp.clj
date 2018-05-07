@@ -1,4 +1,5 @@
 ; Multiple component manager.
+; Trying not to have too much component-specific code here, but the coupling is just so tight for the structural editor.
 
 (ns app.multicomp
   (:require 
@@ -6,9 +7,14 @@
     [app.singlecomp :as singlecomp]
     [app.codebox :as codebox]
     [app.xform :as xform]
+    [app.chfile :as chfile]
+    [javac.file :as jfile]
+    [javac.warnbox :as warnbox]
     [app.multisync :as multisync]
     [app.stringdiff :as stringdiff]
     [app.fbrowser :as fbrowser]))
+
+(defn rootfbrowser? [box] (and (= (:type box) :fbrowser) (= (count (:path box)) 0)))
 
 ;;;;;;;;;;;;;;;;; Layouts ;;;;;;;;;;;;;;;;;
 ; the :position of the top-left corner and the :size.
@@ -40,6 +46,70 @@
 (defn new-position [components pos sz]
   ; It should try to find room. This can be improved quite a bit.
   [(+ (first pos) 610) (+ (second pos) 510)])
+
+;;;;;;;;;;;;;;;;;;;; Getting and setting files, based on s NOT the disk ;;;;;;;;;;;;;;;
+
+(defn _wrap-tree [paths]
+  "Only used for updating the filetree, it would be nice to refactor this away."
+  (let [paths (mapv fbrowser/vec-file paths)
+        children (apply hash-set (mapv first paths))
+        out {:text (first (first paths))}]
+    (if (> (count children) 0)
+      (let [paths-uproot (filterv #(> (count %) 0) (apply hash-set (mapv #(into [] (rest %)) paths)))
+            ; map from first key to other paths:
+            paths-uprootm (reduce (fn [acc k] (update acc (first k) #(if % (conj % k) [k]))) {} paths-uproot)]
+        (assoc out :children
+          (mapv _wrap-tree (vals paths-uprootm)))))))
+(defn wrap-tree [paths] [(_wrap-tree paths)])
+
+(defn get-filelist [s old? allow-false-old?]
+  (let [comps (:components s)
+        fbrowserk (filterv #(= (:type (get comps %)) :fbrowser) (keys comps))
+        filepath2elem (apply merge (mapv #(fbrowser/unwrapped-tree (get comps %)) fbrowserk))
+        ffil (if allow-false-old? identity #(filterv identity %))]
+    (mapv #(if % (fbrowser/devec-file %) %) (if old? (ffil (mapv :fullname0 (vals filepath2elem))) (keys filepath2elem)))))
+
+(defn new2?old-files [s]
+  "map from new to old files, both fullpath. Nil values mean no old files."
+  (zipmap (get-filelist s false nil) (get-filelist s true true)))
+
+(defn set-filetree [s tree reset-fullname0s?]
+  "tree is indexes with :children for folders and :text for the filename."
+  (let [tmpk (gensym "reference") fb (fbrowser/new-fbrowser tree) ; sync to a temp component.
+        comps1 (dissoc (multisync/comprehensive-sync (:components s) (assoc (:components s) tmpk fb)) tmpk)]
+    (assoc s :components (if reset-fullname0s? (zipmap (keys comps1) (mapv fbrowser/reset-fullname0s (vals comps1))) comps1))))
+
+(defn codebox-keys [comps fname-alias] (filterv #(and (= (first (:path (get comps %))) fname-alias) (= (:type (get comps %)) :codebox)) (keys comps)))
+
+(defn get-filetext [s fname-alias]
+  (let [string-pathP-tuples (multisync/string-path+ (:components s) fname-alias)]
+    (apply str (mapv first string-pathP-tuples))))
+
+(defn set-filetext [s fname-alias new-string]
+  (let [comps (:components s) string-pathP-tuples (multisync/string-path+ comps fname-alias)
+        
+        codeboxks (codebox-keys comps fname-alias)
+        path-to-kys (reduce (fn [m k] (let [p (:path (get comps k))] ; to vector of keys.
+                                        (update m p #(if % [k] (conj % k))))) codeboxks)
+                                
+        nb4s (zipmap (mapv second string-pathP-tuples) (reduce + 0 (mapv #(count (first %)) string-pathP-tuples)))
+        old-string (apply str (mapv first string-pathP-tuples))
+        edits (stringdiff/edits-between old-string new-string)
+        
+        comps1 (reduce 
+                 (fn [acc p] 
+                   (let [ks (get path-to-kys p) real-s (codebox/real-strings (get comps (first ks)))
+                         nchars (mapv count real-s) nr (count real-s)
+                         p+s (mapv #(conj p %) (range nr)) ix0s (mapv #(get nb4s %) p+s)
+                         ix1s (mapv + ix0s nchars)
+                         editss (mapv #(stringdiff/window-edits edits %1 %2 (= %3 nr)) ix0s ix1s (range nr))
+                         acc1 (fn [acc k]
+                                (reduce #(codebox/apply-edits-to-real-string
+                                           %1 (nth editss %2) %2)) (get acc k) (range nr))]
+                     (reduce acc1 acc ks))) (keys path-to-kys))]
+    
+    (if (not= (get-filetext (assoc s :components comps1) fname-alias) new-string) (throw (Exception. "Bug in multicomp/set-filetext"))) ; TODO: DEBUG remove when trusted.
+    (assoc s :components comps1)))
 
 ;;;;;;;;;;;;;;;;; Child expansion and contraction ;;;;;;;;;;;;
 
@@ -100,7 +170,7 @@
           comps1 (reduce #(contract-descendents %1 %2) comps ch)]
       (reduce #(contract-child-cb %1 k %2) comps1 ch))))
 
-(defn close-component [s kwd]
+(defn close-component-noprompt [s kwd]
   "Contracts into the parent(s) if it has parents."
   (let [cs0 (:components s) ty (get-in cs0 [kwd :type])]
     (if (or (= ty :fbrowser) (= ty :codebox)) 
@@ -121,75 +191,29 @@
                        (reduce (fn [acc k] (update-in acc [:components k :path p-ix] #(if (> % leaf-ix) (dec %) %))) s1 desc)) s1)]
             s2))) (assoc s :components (dissoc cs0 kwd)))))
 
-;;;;;;;;;;;;;;;;;;;; Getting and setting files ;;;;;;;;;;;;;;;
-
-(defn _wrap-tree [paths]
-  "Only used for updating the filetree, it would be nice to refactor this away."
-  (let [paths (mapv fbrowser/vec-file paths)
-        children (apply hash-set (mapv first paths))
-        out {:text (first (first paths))}]
-    (if (> (count children) 0)
-      (let [paths-uproot (filterv #(> (count %) 0) (apply hash-set (mapv #(into [] (rest %)) paths)))
-            ; map from first key to other paths:
-            paths-uprootm (reduce (fn [acc k] (update acc (first k) #(if % (conj % k) [k]))) {} paths-uproot)]
-        (assoc out :children
-          (mapv _wrap-tree (vals paths-uprootm)))))))
-(defn wrap-tree [paths] [(_wrap-tree paths)])
-
-(defn get-filelist [s old? allow-false-old?]
-  (let [comps (:components s)
-        fbrowserk (filterv #(= (:type (get comps %)) :fbrowser) (keys comps))
-        filepath2elem (apply merge (mapv #(fbrowser/unwrapped-tree (get comps %)) fbrowserk))
-        ffil (if allow-false-old? identity #(filterv identity %))]
-    (mapv #(if % (fbrowser/devec-file %) %) (if old? (ffil (mapv :fullname0 (vals filepath2elem))) (keys filepath2elem)))))
-
-(defn new2?old-files [s]
-  "map from new to old files, both fullpath. Nil values mean no old files."
-  (zipmap (get-filelist s false nil) (get-filelist s true true)))
-
-(defn set-filetree [s tree reset-fullname0s?]
-  "tree is indexes with :children for folders and :text for the filename."
-  (let [tmpk (gensym "reference") fb (fbrowser/new-fbrowser tree) ; sync to a temp component.
-        comps1 (dissoc (:components (multisync/iterative-sync s {:components (assoc (:components s) tmpk fb)})) tmpk)]
-    (assoc s :components (if reset-fullname0s? (zipmap (keys comps1) (mapv fbrowser/reset-fullname0s (vals comps1))) comps1))))
-
-(defn codebox-keys [comps fname] (filterv #(and (= (first (:path (get comps %))) fname) (= (:type (get comps %)) :codebox)) (keys comps)))
-
-(defn get-filetext [s fname]
-  (let [string-pathP-tuples (multisync/string-path+ (:components s) fname)]
-    (apply str (mapv first string-pathP-tuples))))
-
-(defn set-filetext [s fname new-string]
-  (let [comps (:components s) string-pathP-tuples (multisync/string-path+ comps fname)
-        
-        codeboxks (codebox-keys comps fname)
-        path-to-kys (reduce (fn [m k] (let [p (:path (get comps k))] ; to vector of keys.
-                                        (update m p #(if % [k] (conj % k))))) codeboxks)
-                                
-        nb4s (zipmap (mapv second string-pathP-tuples) (reduce + 0 (mapv #(count (first %)) string-pathP-tuples)))
-        old-string (apply str (mapv first string-pathP-tuples))
-        edits (stringdiff/edits-between old-string new-string)
-        
-        comps1 (reduce 
-                 (fn [acc p] 
-                   (let [ks (get path-to-kys p) real-s (codebox/real-strings (get comps (first ks)))
-                         nchars (mapv count real-s) nr (count real-s)
-                         p+s (mapv #(conj p %) (range nr)) ix0s (mapv #(get nb4s %) p+s)
-                         ix1s (mapv + ix0s nchars)
-                         editss (mapv #(stringdiff/window-edits edits %1 %2 (= %3 nr)) ix0s ix1s (range nr))
-                         acc1 (fn [acc k]
-                                (reduce #(codebox/apply-edits-to-real-string
-                                           %1 (nth editss %2) %2)) (get acc k) (range nr))]
-                     (reduce acc1 acc ks))) (keys path-to-kys))]
-    
-    (if (not= (get-filetext (assoc s :components comps1) fname) new-string) (throw (Exception. "Bug in multicomp/set-filetext"))) ; TODO: DEBUG remove when trusted.
-    (assoc s :components comps1)))
+(defn close-component [s kwd]
+  "Prompts the user if there are modified files open and the last codebox of a given type is open."
+  (let [comp (get (:components s) kwd) ph (:path comp)]
+    (if (not chfile/we-are-child?)
+      (do 
+        (if (and (= (:type comp) :codebox) (= (count ph) 1)
+              (= (count (multisync/twins (:components s) kwd)) 0))
+          (let [fname-alias (first (:path comp))
+                fname (if chfile/we-are-child? fname-alias (chfile/us2child fname-alias))
+                txt0 (if (jfile/exists? fname) (jfile/open fname))
+                txt1 (get-filetext s fname-alias)]
+            (if (and (not= txt0 txt1) (warnbox/yes-no? (str "Save file before closing? " fname-alias)))
+              ; Think through all the ramifications of creating and closing a file, then later saving and disk updates, etc, b4 removing this lazy thing.
+              (throw (Exception. "Ctrl+s before closing that window, stupid limitation in the program TODO.")))))  
+        (if (and (rootfbrowser? comp) (= (count (filterv rootfbrowser? (vals (:components s)))) 1))
+          (throw (Exception. "Can't close the last root fbrowser.")))))
+    (close-component-noprompt s kwd)))
 
 ;;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;
 
 (defn which-tool-hud [s]
   (let [tool (if-let [m (:active-tool s)] (:name m) :OOPS) typing? (:typing-mode? s)
-        g-cmd [:drawString [(str "tool = " tool " typing? = " typing?) 2 15] {:FontSize 18 :Color [0 1 1 0.7]}]]
+        g-cmd [:drawString [(str "tool = " tool " typing? = " typing? (if chfile/we-are-child? "CHILD VERSION" "")) 2 15] {:FontSize 18 :Color [0 1 1 0.7]}]]
     [g-cmd]))
 
 (defn draw-select-box [comps k camera]

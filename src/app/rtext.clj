@@ -8,7 +8,7 @@
 
 (ns app.rtext
   (:require [javac.clipboard :as clipboard]
-    [javac.cpanel :as cpanel] ; a slight kludge using the state.
+    [globals] ; a slight kludge using the state.
     [clojure.string :as string]
     [app.stringdiff :as stringdiff]))
 
@@ -577,7 +577,7 @@
 (defn mouse-press [mouse-evt box]
   "Mouse :X and :Y are local points and not necessarily integers."
   (let [box (v box) x (:X mouse-evt) y (:Y mouse-evt)
-        sh? (:ShiftDown (:external-state @cpanel/one-atom))
+        sh? (:ShiftDown (:external-state @globals/one-atom))
         i1 (:cursor-ix box) i2 (cursor-pixel-to-ix box x y)]
     (if (= (:ClickCount mouse-evt) 2) ; double-click select.
       (let [ij (ixjx-pieces (:pieces box) i2 i2)]
@@ -617,7 +617,7 @@
                       (edit box (:ix0 ed) (:ix1 ed)
                         x (if agree? (:ixs (meta x)) [])))
       (= ty :save) box; We don't handle saves here, just do nothing.
-      (= ty :arrow) (arrow-cursor box (:value ed) (:ShiftDown (:external-state @cpanel/one-atom)))
+      (= ty :arrow) (arrow-cursor box (:value ed) (:ShiftDown (:external-state @globals/one-atom)))
       (= ty :type) (edit box (:ix0 ed) (:ix1 ed) (:value ed) [])
       :else box)))
 

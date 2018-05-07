@@ -1,9 +1,10 @@
 ; One repl: it shows the output of commands.
 (ns app.orepl
   (:require [clojure.string :as string]
+    [clojure.set :as set]
+    [app.codebox :as codebox]
     [app.rtext :as rtext]
     [javac.clipboard :as clipboard] 
-    [app.codebox :as codebox]
     [javac.file :as jfile]
     [javac.exception :as jexc]))
 
@@ -14,7 +15,7 @@
 
 ; Allows us to view and change the gui state from the repl.
 (def state-atom (atom {})) 
-(defn get-state [] @state-atom)
+(defn get-state [] @state-atom) ; TODO: remove this.
 (defn set-state [s-new] (reset! state-atom s-new))
 (defn swap-state [f] (swap! state-atom f))
 
@@ -107,19 +108,60 @@
           (update-in box [:pieces 0 :text] #(str (subs % 0 (:ix0 ed)) txt (subs % (:ix1 ed)))))
           (rtext/dispatch-edit-event box ed)))))
 
+(defn _resolve [sym]
+  (try (resolve sym) (catch Exception e)))
+
+(defonce var-atom
+   ;Fully-qualified symbols -> var for the old namespace vars. Thus we don't lose the old references.
+   (atom {}))
+
+(defn _update-core!! [ns-symbol ns-object removing?]
+  (let [tmp-sym (gensym 'tmp) ns-tmp (create-ns tmp-sym)]
+    (binding [*ns* ns-tmp] ; So the require we call doesn't affect the orepl ns.
+      (let [vars-dayold (ns-interns ns-object) ; symbol -> var.
+            _ (mapv #(ns-unmap ns-object %) (keys vars-dayold)) 
+            _ (if (not removing?) (require ns-symbol :reload))
+            var-at @var-atom
+            vars-new (if removing? {} (ns-interns ns-object))
+            deleted-stuff (set/difference (apply hash-set (keys vars-dayold)) (apply hash-set (keys vars-new)))]
+        #_(if (> (count deleted-stuff) 0) (println "Removed from the code: " ns-symbol deleted-stuff))
+        ; Keep the old var objects around, just set their value to the new stuff.
+        (mapv (fn [sym] 
+                (let [sym-full-qual (symbol (str ns-symbol "/" sym))
+                      var-old (if-let [v (get var-at sym-full-qual)] v (get vars-dayold sym))
+                      old-val @var-old deleted? (boolean (get deleted-stuff sym))
+                      err (Exception. (str sym-full-qual (if removing? " belongs to a .clj file that was deleted." " has been removed from it's .clj file.")))
+                      new-val (if deleted?
+                                (if (fn? old-val) (fn [& args] (throw err)) err)
+                                @(get vars-new sym))]
+                  ; Don't know which of these (or both) is necessary. They are very similar:
+                  (alter-var-root var-old (fn [_] new-val))
+                  (swap! var-atom #(assoc % sym-full-qual var-old))
+                  (if (not deleted?) (intern ns-object sym new-val))))
+          (keys vars-dayold))))
+    (remove-ns tmp-sym)))
+
+(defn reload-file!! [cljfile]
+  "Reloads a given clj file, removing the ns if the file no longer exists."
+  (let [ns-symbol (symbol (jfile/file2dotpath cljfile))
+        target-ns (find-ns ns-symbol)
+        file-exists? (jfile/exists? cljfile)]
+    (cond 
+      (and (not target-ns) (not file-exists?)) {:error false :message "Non-existant namespace with non-existant file, no reloading needed."}
+      file-exists?
+      (let [report (try (do (_update-core!! ns-symbol target-ns false)
+                            {:error false :message (str cljfile " saved and updated without error.")})
+                     (catch Exception e
+                       {:error (pr-error e) :message "Compile error"}))] report)
+      :else (do (_update-core!! ns-symbol target-ns true) {:error false :message "File no longer exists, deleted ns."}))))
+
 (defn save-and-update!!! [cljfile text]
   "Saves a clj file and attempts to reload the namespace, returning the error info if there is a compile error."
   (jfile/save!!! cljfile text)
-  (let [dotpath (jfile/file2dotpath cljfile) 
-        tmp-ns (create-ns '_debugger.namespace)]
-    (try (binding [*ns* tmp-ns] 
-           (do (if-let [target-ns (find-ns (symbol dotpath))] ; remove all mappings so deleted fns are really deleted.
-                 (let [bindings (ns-map target-ns)]
-                   (mapv #(ns-unmap target-ns %) (keys bindings))))
-             (require (symbol dotpath) :reload) ; reload the new fns.
-             {:error false :message "Code saved without error."}))
-      (catch Exception e
-        {:error (jexc/clje e) :message "Compile error"}))))
+  (reload-file!! cljfile))
+
+(defn delete-and-update!!! [cljfile]
+  (jfile/delete!!! cljfile) (reload-file!! cljfile) {:error false :message (str "Deleted" cljfile)})
 
 ; No child UI is planned in the near future.
 (defn expandable? [mouse-evt box] false)

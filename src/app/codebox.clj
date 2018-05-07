@@ -4,7 +4,6 @@
  (:require [clojure.string :as string]
    [coder.rcode :as rcode]
    [app.rtext :as rtext]
-   [javac.cpanel :as cpanel] ; a slight kludge using the state.
    [app.fbrowser :as fbrowser]
    [coder.lang.clojure :as clojurelang]
    [app.colorful :as colorful]
@@ -330,7 +329,7 @@
    Other fns work normally."
   (let [ed (rtext/key-to-edit box key-evt) bk-sp? (= (str (:value ed) (str \backspace)))
         render-str (rtext/rendered-string box)
-        shifting? (:ShiftDown (:external-state @cpanel/one-atom))]
+        shifting? (:ShiftDown key-evt)]
     (keep-fe-length
     (if (and (= (:type ed) :type) (= (:value ed) "    ")) ; line-by line indent or dedent.
       (let [c-ix (:cursor-ix box)

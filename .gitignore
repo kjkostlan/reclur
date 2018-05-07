@@ -13,3 +13,4 @@ pom.xml.asc
 .DS_Store
 /resources/client/
 /src/client/
+.junkio.txt*

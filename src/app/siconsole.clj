@@ -1,4 +1,4 @@
-; Just a place to print results, maybe features will be added one day.
+; Just a place to print results, eventual TODO of browsing features and macro log file location.
 (ns app.siconsole
  (:require [app.rtext :as rtext]))
 
@@ -10,8 +10,11 @@
   (assoc rtext/empty-text :interact-fns (interact-fns) 
   :outline-color [0.5 0.3 0.2 1] :path "console" :type :siconsole :show-line-nums? false))
 
-(defn set-text [box s]
-  (assoc box :pieces [{:text s}]))
+(defn get-text [box]
+  (:text (first (:pieces box))))
+
+(defn set-text [box txt]
+  (assoc box :pieces [{:text txt}]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Interactions beyond the usual rtext interactions.
@@ -20,6 +23,19 @@
   "Read-only"
   (let [ed (rtext/key-to-edit box key-evt)]
     (if (or (= (:type ed) :arrow) (= (:type ed) :copy)) (rtext/key-press key-evt box) box)))
+
+(defn log1 [console msg]
+  (let [max-text-ln 10000 ; performance tradeoff. Needs to increase if we get more performance in the rtexts.
+        s (str (get-text console) "\n" msg)
+        console1 (assoc console :scroll-top 1000000000000)
+        s1 (if (> (count s) max-text-ln) (subs s 0 max-text-ln) s)]
+    (rtext/scroll-bound (set-text console1 s1))))
+
+(defn log [s msg]
+  "Logs msg to all consoles in s."
+  (let [comps (:components s)
+        comps1 (zipmap (keys comps) (mapv #(if (= (:type %) :siconsole) (log1 % msg) %) (vals comps)))]
+    (assoc s :components comps1)))
 
 ;;;;;;;;;;;;;;;;;;;;; Child UI functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

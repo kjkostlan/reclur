@@ -3,7 +3,8 @@
 (ns javac.clojurize
   (:require [clojure.string :as string])
   (:import [java.awt Point Rectangle Dimension]
-   [javax.swing SwingUtilities]))
+    [javax.swing SwingUtilities]
+    [java.io StringWriter]))
 
 (defn edt? [] (SwingUtilities/isEventDispatchThread))
 
@@ -110,3 +111,10 @@
       
 (defn translate-generic [java-ob]
   (java-to-clj java-ob nil simple-java-to-clj))
+  
+(defn capture-out-tuple [f & args]
+  "Runs f and returns a tuple of [output of f, stuff that would go to *out*].
+   Similar to with-out-str only the output of f is also returned."
+  (let [w (StringWriter.)
+        val (binding [*out* w] (apply f args))]
+    [val (str w)]))

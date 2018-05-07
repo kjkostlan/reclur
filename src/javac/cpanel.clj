@@ -2,9 +2,12 @@
 ; All buttons, etc have to be implemented manually, a level of control useful to gameify the app.
 
 (ns javac.cpanel
-  (:require [clojure.string :as string]
-    [javac.gfx :as gfx]
-    [javac.clojurize :as clojurize])
+  (:require [clojure.string :as string] [globals]
+    [javac.gfx :as gfx] [javac.exception :as exception]
+    [javac.clojurize :as clojurize]
+    [app.chfile :as chfile]
+    [app.orepl :as orepl]
+    [app.iteration :as iteration])
   (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent]
     [javac JFrameClient] [javax.swing SwingUtilities]
     [java.awt FlowLayout] 
@@ -14,7 +17,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;; Settings ;;;;;;;;;;;;;;;;;;;;
 
-(def ^:dynamic *frame-time-ms* 30)
+(def ^:dynamic *frame-time-ms* 30) ; a somewhat complex mechanism to ensure graceful degradation when the events are heavy.
 (def ^:dynamic *dispatch-patience-ms* 1000)
 (def ^:dynamic *drop-frames-queue-length-threshold* 3)
 (def ^:dynamic *low-cpu?* true) ; mousemotion and everyframe events ignored.
@@ -32,6 +35,8 @@
   "Black background and monospaced font, added to the beginning of graphics."
   (into [] (concat [[:java (fn [g] (.setFont g (java.awt.Font. "Monospaced" 0 10)))]
              [:fillRect [0 0 3000 3000] {:Color [0.01 0 0 1]}]] gr)))
+
+;;;;;;;;;;;;;;;;;;;;; Queing ;;;;;;;;;;;;;;;;;;;;;
 
 (defn update-external-state [e-clj kwd old-extern]
   (cond (= kwd :mousePressed)
@@ -54,14 +59,15 @@
     :else old-extern))
 
 (defn queue1 [x e kwd] 
-  "Queues e, but frame events can't stack directly on other frame events or else pileup to infinity."
+  "Queues e, but frame events can't stack directly on other frame events or else pileup to infinity.
+   Handles both java and clojure datastructures for e, converting e into clojure if it is a java event."
   (let [e-clj (if (map? e) e (clojurize/translate-event e (.getSource e)))
         e-clj (assoc (dissoc e-clj :ParamString :ID :When) :type kwd)
         evtq (:evt-queue x)
         add? (or (not (= kwd :everyFrame)) 
                (and (not= (:type (last evtq)) :everyFrame)
                  (< (count evtq) *drop-frames-queue-length-threshold*)))]
-    (if add? (assoc x :evt-queue (conj evtq e-clj)))))
+    (if add? (assoc x :evt-queue (conj evtq e-clj)) x)))
 
 (defn dequeue1 [x]
   (if-let [evt (first (:evt-queue x))]
@@ -78,14 +84,15 @@
 
 ;;;;;;;;;;;;;;;;;;;;; Mutation ;;;;;;;;;;;;;;;;;;;;;
 
-(defonce one-atom (atom (empty-state)))
+(def one-atom globals/one-atom)
+(reset! one-atom (empty-state))
 
 (defn dispatch-attempt!! []
   "Attempts to dispatch an event, removing it from the queue.
    run-event won't be called multiple times per queue item (as swap! may do), so it is safe to have side-effects."
   (if (= (:dispatch-lock @one-atom) 0) ; <- This check is probably not needed.
     (let [x (swap! one-atom #(update % :dispatch-lock inc))]
-      ; At this point (very lucky) multiple threads will have x at different :dispatch-lock's. But only one will get :dispatch-lock = 1
+      ; At this point (if very lucky) multible threads may have x at different :dispatch-lock's. But only one will get :dispatch-lock = 1
       (if (and (= (:dispatch-lock x) 1) (> (count (:evt-queue x)) 0)) 
         (reset! one-atom (assoc (dequeue1 x) :dispatch-lock 0))))))
 
@@ -110,9 +117,9 @@
        (if (= (:upkeep-lock x) 1)
          (future (Thread/sleep *frame-time-ms*) (swap! one-atom #(assoc % :upkeep-lock 0)) (upkeep-loop!! (not *low-cpu?*))))))))
 
-;;;;;;;;;;;;;;;;;;;;; Java components ;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;; Java listeners and windowing ;;;;;;;;;;;;;;;;;;;;;
 
-(defn add-mouse-listener! [panel]
+(defn add-mouse-listeners! [panel]
   (.addMouseListener panel
     (proxy [MouseAdapter] []
       (mouseClicked [e] (event-queue!! e :mouseClicked) (if *low-cpu?* (upkeep-loop!! true)))
@@ -132,11 +139,20 @@
     (proxy [MouseAdapter] []
       (mouseMoved [e] (event-queue!! e :mouseMoved) (if *low-cpu?* (upkeep-loop!! false)))
       (mouseDragged [e] (event-queue!! e :mouseDragged) (if *low-cpu?* (upkeep-loop!! true))))))
-(defn add-key-listener! [x]
+
+(defn add-key-listeners! [x]
   (.addKeyListener x
     (proxy [KeyAdapter] []
       (keyPressed [e] (event-queue!! e :keyPressed) (if *low-cpu?* (upkeep-loop!! true)))
       (keyReleased [e] (event-queue!! e :keyReleased) (if *low-cpu?* (upkeep-loop!! true))))))
+
+(defn add-parentin-listener! [] 
+  "Adds a listener for stdin."
+  (future
+    (while [true]
+      (let [s (try (iteration/get-input) (catch Exception e (do (Thread/sleep 1000) (str "ERROR in iteration/get-input:\\n" (orepl/pr-error e)))))] ; waits here until the stream has stuff in it.
+        (SwingUtilities/invokeLater #(do (event-queue!! {:contents s} :parent-in) (if *low-cpu?* (upkeep-loop!! true)))))))) ; all evts are launched on the edt thread.
+(if chfile/we-are-child? (add-parentin-listener!))
 
 (defn proxy-panel []
   (proxy [javax.swing.JPanel] [] 
@@ -150,15 +166,15 @@
         panel (proxy-panel)]
     ; Example from: https://www.javatpoint.com/java-jframe
     (.setLayout panel (FlowLayout.))
-    (add-mouse-listener! panel)
+    (add-mouse-listeners! panel)
     ; Gets tab working: http://www.java2s.com/Code/Java/Event/KeyEventDemo.htm
     (.setFocusTraversalKeysEnabled frame false) 
     (.add frame panel)
     (.setSize frame 1600 1200)
     (.setLocationRelativeTo frame nil)
     (.setVisible frame true)
-    (if *add-keyl-to-frame?* (add-key-listener! frame)
-      (do (add-key-listener! panel) (.setFocusable panel true) (.requestFocus panel)))
+    (if *add-keyl-to-frame?* (add-key-listeners! frame)
+      (do (add-key-listeners! panel) (.setFocusable panel true) (.requestFocus panel)))
     [frame panel]))
 
 (defn swing-or-kludge [f]

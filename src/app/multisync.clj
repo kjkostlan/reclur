@@ -141,7 +141,6 @@
 
 ;;;;;;;;;;;;;;;;; Twin codebox and partially-twin fbrowser updating ;;;;;;;;;;;;;
 
-
 (defn filepath2export?-1 [box]
   "Map of filepaths to whether the comp is exported"
   (if (= (:type box) :fbrowser) 
@@ -312,10 +311,10 @@
 
 ;;;;;;;;;;;;;;;;; Line number sync ;;;;;;;;;;;;;;;;;
 
-(defn string-path+ [comps fname]
+(defn string-path+ [comps fname-alias]
    "Ordered [string path], where path extends one beyond the :path with an indexed of 0,1,2,... number of real strings-1
     If multible codeboxes have the same path one is chosen arbitrarily, the choice doesn't matter if we are in a consistant state."
-   (let [codeboxks (filterv #(and (= (first (:path (get comps %))) fname) (= (:type (get comps %)) :codebox)) (keys comps))
+   (let [codeboxks (filterv #(and (= (first (:path (get comps %))) fname-alias) (= (:type (get comps %)) :codebox)) (keys comps))
          n (count codeboxks)
          ; only one ky per path:
          codeboxks (loop [acc [] paths #{} ix 0]
@@ -329,9 +328,9 @@
          formats (fn [p] (apply str (mapv #(if (number? %) (format "%09d" %) %) p)))]
      (into [] (sort-by #(formats (second %)) spath+)))) ; alphabetical order if numbers are padded with zeros.
 
-(defn compute-linenums [comps fname]
-  (let [s-pathP-tuples (string-path+ comps fname)
-        codeboxks (filterv #(and (= (first (:path (get comps %))) fname) (= (:type (get comps %)) :codebox)) (keys comps))
+(defn compute-linenums [comps fname-alias]
+  (let [s-pathP-tuples (string-path+ comps fname-alias)
+        codeboxks (filterv #(and (= (first (:path (get comps %))) fname-alias) (= (:type (get comps %)) :codebox)) (keys comps))
         path-to-kys (reduce (fn [m k] (let [p (:path (get comps k))] ; to vector of keys.
                                         (update m p #(if % [k] (conj % k))))) {} codeboxks)
         countnl (fn [s] (count (string/split (str "_" s "_") #"\n")))
@@ -354,26 +353,15 @@
 
 ;;;;;;;;;;;;;;;;; The global update function ;;;;;;;;;;;;;;;
 
-(defn iterative-sync [s0 s1]
+(defn comprehensive-sync [comps0 comps1]
   "Not really iterativly, as multible iterations of total-descendent-update cause bugs.
    Not sure the best one to go first."
-  (let [get-ky-diff (fn [sA sB] (apply hash-set (filterv #(not (comp-eq? (get (:components sA) %) (get (:components sB) %)))
-                                                  (apply hash-set (concat (keys (:components sA)) (keys (:components sB)))))))
-        s2 (assoc s1 :components (total-sibling-update (:components s1) (get-ky-diff s0 s1)))
-        s3 (assoc s2 :components (total-descendent-update (:components s0) (:components s2) (get-ky-diff s0 s2)))
-        s4 (assoc s3 :components (total-sibling-update (:components s3) (get-ky-diff s0 s3)))
-        ;s5 (assoc s4 :components (spread-fname-gui (:components s4) (get-ky-diff s0 s4)))
-        ] s4))
-  #_(let [one-step (fn [s0 s1 kys-diff]
-                   (if (comps-eq? (:components s0) (:components s1)) s1
-                     (let [c0 (:components s0) c1 (:components s1) _ (nil-assert c0 "has nils to start with") _ (nil-assert c1 "has nils to start with")
-                           c2 (total-descendent-update c0 c1 kys-diff) _ (nil-assert c2 "descendent step makes nils")
-                           c3 (total-sibling-update c2 kys-diff) _ (nil-assert c3 "sibling step makes nils")] (assoc s1 :components c3))))
-        maxsteps 200]
-    (loop [old s0 new s1 nsteps 0 kys-diff (get-ky-diff s0 s1)]
-      (let [very-new (one-step old new kys-diff) 
-            _ (if (= nsteps maxsteps) (throw (Exception. "child-sibling-path-sync likely doesn't converge, component tree-deltas may be bugged.")))]
-        (if (= new very-new) (update very-new :components #(sync-line-nums (:components s0) %))
-          (recur new very-new (inc nsteps) (set/union kys-diff (get-ky-diff new very-new)))))))
+  (let [get-ky-diff (fn [cA cB] (apply hash-set (filterv #(not (comp-eq? (get cA %) (get cB %)))
+                                                  (apply hash-set (concat (keys cA) (keys cB))))))
+        comps2 (total-sibling-update comps1 (get-ky-diff comps0 comps1))
+        comps3 (total-descendent-update comps0 comps2 (get-ky-diff comps0 comps2))
+        comps4 (total-sibling-update comps3 (get-ky-diff comps0 comps3))
+        ; spread-fname-gui is not handled in this sync, it is handled elsewhere.
+        ] comps4))
 
 ;;;;;;;;;;;;;;;;;;;; Getting and setting files ;;;;;;;;;;;;;;;

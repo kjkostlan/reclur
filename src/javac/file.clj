@@ -5,12 +5,12 @@
    ;TODO
 ; TODO: maybe get rid of the timestamp functions, if they are only called upon when we load.
  ; not sure what happens if the disk is modified during the multicomp/save file, but as long as one save is free of other changes this should correct any errors.
+; TODO: consider normalizing the api as to whether to give an error on missing files, etc.
 
 (ns javac.file
   (:require [clojure.java.io :as io]
             [clojure.string :as string])
   (:import (java.io File BufferedWriter OutputStreamWriter FileOutputStream)
-           (javax.swing JOptionPane)
            (org.apache.commons.io FileUtils)
            (java.nio.file Files Paths)
            (java.nio.charset StandardCharsets)))
@@ -29,6 +29,21 @@
       []
       (reduce #(conj %1 (+ (last %1) %2)) [(nth couts 0)] (rest cs)))))
 
+;;;;;;;;;;;;;;;;;;;;; Various types of files:
+
+; is .clj file and is folder. Yes this could be abstracted to save a couple of lines.
+(defn _clj? [^File file] (and (not (.isDirectory file)) (.endsWith (.getName file) ".clj")))
+(defn _java? [^File file] (and (not (.isDirectory file)) (.endsWith (.getName file) ".java")))
+(defn _texty? [^File file] (and (not (.isDirectory file))
+  (or (.endsWith (.getName file) ".clj") (.endsWith (.getName file) ".java") (.endsWith (.getName file) ".js")
+      (.endsWith (.getName file) ".txt") (.endsWith (.getName file) ".text"))))
+(defn _dir? [^File file] (.isDirectory file))
+(defn clj? [^String file] (_clj? (File. file)))
+(defn java? [^String file] (_java? (File. file)))
+(defn texty? [^String file] (_texty? (File. file)))
+(defn dir? [^String file] (_dir? (File. file)))
+(defn file? [^String file] (.isFile (File. file)))
+(defn exists? [^String file] (.exists (File. file)))
 
 ;;;;;;;;;;;;;;;;;;;;;; environment:
 
@@ -94,7 +109,6 @@
              out)
   (catch Exception e
     false ;(println (.getMessage e))
-    ; DANGEROUS (can crash computer with super many windows): (JOptionPane/showMessageDialog nil (str "Unable to load file: " file) "Oops" JOptionPane/ERROR_MESSAGE)
     )))
 
 (defn save!!! [^String file ^String contents] ; three ! means that the disk is mutated.
@@ -106,7 +120,6 @@
                     (.write writer contents)))     
   (catch Exception e
     (println (.getMessage e))
-    ; DANGEROUS (JOptionPane/showMessageDialog nil (str "Unable to save file: " file) "Oops" JOptionPane/ERROR_MESSAGE)
     )))
 
 (defn rename!!! [^String file-old ^String file-new]
@@ -126,28 +139,15 @@
 (defn revert!!! [^String file]
   (let [old (get-buffer file)]
     (if (nil? old)
-      (do (println "unable to revert file, maybe it fell off the finite buffer.") #_(JOptionPane/showMessageDialog DANGEROUS nil
-       (str "Unable to revert file (we limit the old file buffer storage, that may be the issue): " file)
-        "Oops" JOptionPane/ERROR_MESSAGE) "")
+      (do (println "unable to revert file, maybe it fell off the finite buffer.") "")
       (do (save!!! file old) old))))
 
-;;;;;;;;;;;;;;;;;;;;; Various types of files:
-
-; is .clj file and is folder. Yes this could be abstracted to save a couple of lines.
-(defn _clj? [^File file] (and (not (.isDirectory file)) (.endsWith (.getName file) ".clj")))
-(defn _java? [^File file] (and (not (.isDirectory file)) (.endsWith (.getName file) ".java")))
-(defn _texty? [^File file] (and (not (.isDirectory file))
-  (or (.endsWith (.getName file) ".clj") (.endsWith (.getName file) ".java") (.endsWith (.getName file) ".js")
-      (.endsWith (.getName file) ".txt") (.endsWith (.getName file) ".text"))))
-(defn _dir? [^File file] (.isDirectory file))
-(defn clj? [^String file] (_clj? (File. file)))
-(defn java? [^String file] (_java? (File. file)))
-(defn texty? [^String file] (_texty? (File. file)))
-(defn dir? [^String file] (_dir? (File. file)))
-(defn file? [^String file] (.isFile (File. file)))
-(defn exists? [^String file] 
-  "Make sure you check for existance before creating new files!"
-  (.exists (File. file)))
+(defn copy!!! [^String orig ^String dest]
+  "Copies a file from origin to destination. Completely wipes out any file contents files/subfolders in dest."
+  (let [^File origf (File. orig) ^File destf (File. dest)]
+    (cond (.isDirectory origf) (do #_(if (exists? dest) (FileUtils/deleteDirectory destf)) (FileUtils/copyDirectory origf destf))
+      (.isFile origf) (FileUtils/copyFile origf destf)
+      :else (throw (Exception. "Original file isn't a file or folder ... somehow.")))))
 
 ;;;;;;;;;;;;;;;;;;;;; Trees:
 
