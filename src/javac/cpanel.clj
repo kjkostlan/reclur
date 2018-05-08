@@ -9,7 +9,7 @@
     [app.orepl :as orepl]
     [app.iteration :as iteration])
   (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent]
-    [javac JFrameClient] [javax.swing SwingUtilities]
+    [javax.swing SwingUtilities]
     [java.awt FlowLayout] 
     [javax.swing JFrame JPanel])
   )
@@ -162,7 +162,7 @@
 
 (defn new-window []
   "Sets up all listeners and atoms. EDT thread only."
-  (let [frame (JFrameClient.);(JFrame. "The app")
+  (let [frame (JFrame.);(JFrame. "The app")
         panel (proxy-panel)]
     ; Example from: https://www.javatpoint.com/java-jframe
     (.setLayout panel (FlowLayout.))
@@ -187,23 +187,24 @@
    update-gfx-fn is (f state-clj), returns the new state, and should cache any expensive gfx cmds.
    render-fn is (f state-clj) but some render commands are functions on the java object."
   (if *low-cpu?* (println "Low CPU mode, less mouse moves and no animations."))
-  ; https://nelsonmorris.net/2015/05/18/reloaded-protocol-and-no-implementation-of-method.html
-  ; Reload the implementation of the protocol. Other languages must go here.
-  ; This is very messy and protocols may be abandoned all together.
+  ;; https://nelsonmorris.net/2015/05/18/reloaded-protocol-and-no-implementation-of-method.html
+  ;; Reload the implementation of the protocol. Other languages must go here.
+  ;; This is very messy and protocols may be abandoned all together.
   (require '[coder.lang.clojure :reload true])  
-  (swing-or-kludge (fn [& args]
-      ;https://stackoverflow.com/questions/1234912/how-to-programmatically-close-a-jframe
-      (if-let [old-frame (:JFrame @one-atom)]
-        (do (.dispatchEvent old-frame (WindowEvent. old-frame WindowEvent/WINDOW_CLOSING)))
-          (swap! one-atom #(dissoc % :JFrame)))
-      (let [frame-panel (new-window)
-            frame (first frame-panel) panel (second frame-panel)]
-        (reset! one-atom
-          (assoc (empty-state)
-             :app-state init-state :listeners evt-fns :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn 
-             :external-state {}
-             :evt-queue []
-             :JFrame frame :JPanel panel))))))
+  (swing-or-kludge
+   (fn [& args]
+     ;; https://stackoverflow.com/questions/1234912/how-to-programmatically-close-a-jframe
+     (if-let [old-frame (:JFrame @one-atom)]
+       (do (.dispatchEvent old-frame (WindowEvent. old-frame WindowEvent/WINDOW_CLOSING)))
+       (swap! one-atom #(dissoc % :JFrame)))
+     (let [[frame panel] (new-window)]
+       (reset! one-atom
+               (assoc (empty-state)
+                      :app-state init-state
+                      :listeners evt-fns :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn 
+                      :external-state {}
+                      :evt-queue []
+                      :JFrame frame :JPanel panel))))))
 
 (defn stop-app!! []
   (if (not= @one-atom (empty-state)) (println "stopping app"))
