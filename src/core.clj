@@ -28,8 +28,6 @@
 
 (def this-ns *ns*)
 
-(defonce _state-buf (atom {}))
-
 (declare launch-main-app!!) ; avoids a circular dependency with launch main app.
 
 ;;;;;;;;;;;;;;;; Library of commands ;;;;;;;;;;;;;;;;;;;;;
@@ -47,12 +45,20 @@
     (if tool (assoc s :active-tool tool)
       (throw (Exception. (str "no tool with :name " tool-kwd))))))
 
-(defn store-state [s]
+(defn store-state! [s]
   "stores the state in our own buffer atom, to be retrieved later. 
    More sophisticated undo system TODO."
-  (reset! _state-buf s) s)
+  (swap! cpanel/one-atom
+         assoc
+         :reclur.state-snapshot
+         s
+         #_ (dissoc s :reclur.state-snapshot) ;; this version prevents chaining
+         ))
 
-(defn retrieve-state [] (assoc-in @_state-buf [:precompute :desync-safe-mod?] true))
+(defn retrieve-state! []
+  (assoc-in (:reclur.state-snapshot @cpanel/one-atom)
+            [:precompute :desync-safe-mod?]
+            true))
 
 (defn swap-on-top [s] ; all selected comps.
   (let [s (assoc-in s [:precompute :desync-safe-mod?] true)
@@ -100,8 +106,8 @@
    #(ctrl-shift+? % "s") (fn [s] ; copy from the child to us once we are init.
                            (let [s1 (iteration/ensure-childapp-folder-init!!! s)]
                              (iteration/copy-child-to-us!!! s1) s1))
-   #(ctrl-shift+? % "c") store-state
-   #(ctrl-shift+? % "z") (fn [_] (retrieve-state))})
+   #(ctrl-shift+? % "c") store-state!
+   #(ctrl-shift+? % "z") #(retrieve-state!)})
 
 ;;;;;;;;;;;;;;;; Run by symbol with evals ;;;;;;;;;;;;;;;;;;;;;
 

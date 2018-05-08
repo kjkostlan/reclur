@@ -210,11 +210,18 @@
 
 (defn load-timestamp [^String file]
   "Loads a textfile, returning {:text :last-modified}.
-   Keeps loading the file until the :last-modified date doesn't change before vs after.
-   I think this is concurrent safe, in that it can't give back an old version without an updated modification date."
-  (let [a (atom {})]
-    (while (let [d0 (get-last-modified file) txt (load file) d1 (get-last-modified file)]
-             (reset! a {:text txt :last-modified d1}) (not= d0 d1))) @a))
+   Keeps loading the file until the :last-modified date doesn't change
+   before vs after.  I think this is concurrent safe, in that it can't
+   give back an old version without an updated modification date."
+  (loop []
+    (let [d0 (get-last-modified file) ; side-effect - order important
+          txt (load file)             ; side-effect
+          d1 (get-last-modified file) ; side-effect
+          ]
+      (if (= d0 d1)
+        {:text txt
+         :last-modified d1}
+        (recur)))))
 
 (defn rename-timestamp!!! [^String file-old ^String file-new]
   "Renames the file OR folder, returning the new date modified.
@@ -222,10 +229,16 @@
   (let [^File f0 (File. file-old) ^File f1 (File. file-new)] (.renameTo f0 f1)
     (.get-last-modified f1)))
 
-(defn save-timestamp!!! [^String file ^String contents]
+(defn save-timestamp!!! [^String file
+                         ^String contents]
   "Keeps saving a file until it is up-to-date, and returns the modification timestamp.
-   Again, concurrancy-safe to make sure that if it can't have an up-to-date stamp without bieng the up-to-date file."
-  (let [a (atom 0)]
-    (while (let [_ (save!!! file contents)
-                 t0 (get-last-modified file) _ (reset! a t0)
-                 val (load file)] (not= val contents))) @a))
+   Again, concurrancy-safe to make sure that if it can't have an
+   up-to-date stamp without bieng the up-to-date file."
+  (loop []
+    (let [_ (save!!! file contents)
+          t0 (get-last-modified file) ;; Brent: is it required you get
+                                      ;; last-modified file before
+                                      ;; checking content match?
+          ]
+      (if (= (load file) contents)
+        t0))))
