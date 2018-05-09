@@ -107,7 +107,7 @@
                            (let [s1 (iteration/ensure-childapp-folder-init!!! s)]
                              (iteration/copy-child-to-us!!! s1) s1))
    #(ctrl-shift+? % "c") store-state!
-   #(ctrl-shift+? % "z") #(retrieve-state!)})
+   #(ctrl-shift+? % "z") (fn [_] (retrieve-state!))})
 
 ;;;;;;;;;;;;;;;; Run by symbol with evals ;;;;;;;;;;;;;;;;;;;;;
 
