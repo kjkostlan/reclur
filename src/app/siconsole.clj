@@ -28,7 +28,7 @@
   (let [max-text-ln 10000 ; performance tradeoff. Needs to increase if we get more performance in the rtexts.
         s (str (get-text console) "\n" msg)
         console1 (assoc console :scroll-top 1000000000000)
-        s1 (if (> (count s) max-text-ln) (subs s 0 max-text-ln) s)]
+        s1 (if (> (count s) max-text-ln) (subs s (- (count s) max-text-ln)) s)]
     (rtext/scroll-bound (set-text console1 s1))))
 
 (defn log [s msg]

@@ -7,7 +7,7 @@
     [app.singlecomp :as singlecomp]
     [app.codebox :as codebox]
     [app.xform :as xform]
-    [app.chfile :as chfile]
+    globals
     [javac.file :as jfile]
     [javac.warnbox :as warnbox]
     [app.multisync :as multisync]
@@ -79,16 +79,16 @@
         comps1 (dissoc (multisync/comprehensive-sync (:components s) (assoc (:components s) tmpk fb)) tmpk)]
     (assoc s :components (if reset-fullname0s? (zipmap (keys comps1) (mapv fbrowser/reset-fullname0s (vals comps1))) comps1))))
 
-(defn codebox-keys [comps fname-alias] (filterv #(and (= (first (:path (get comps %))) fname-alias) (= (:type (get comps %)) :codebox)) (keys comps)))
+(defn codebox-keys [comps fname] (filterv #(and (= (first (:path (get comps %))) fname) (= (:type (get comps %)) :codebox)) (keys comps)))
 
-(defn get-filetext [s fname-alias]
-  (let [string-pathP-tuples (multisync/string-path+ (:components s) fname-alias)]
+(defn get-filetext [s fname]
+  (let [string-pathP-tuples (multisync/string-path+ (:components s) fname)]
     (apply str (mapv first string-pathP-tuples))))
 
-(defn set-filetext [s fname-alias new-string]
-  (let [comps (:components s) string-pathP-tuples (multisync/string-path+ comps fname-alias)
+(defn set-filetext [s fname new-string]
+  (let [comps (:components s) string-pathP-tuples (multisync/string-path+ comps fname)
         
-        codeboxks (codebox-keys comps fname-alias)
+        codeboxks (codebox-keys comps fname)
         path-to-kys (reduce (fn [m k] (let [p (:path (get comps k))] ; to vector of keys.
                                         (update m p #(if % [k] (conj % k))))) codeboxks)
                                 
@@ -108,7 +108,7 @@
                                            %1 (nth editss %2) %2)) (get acc k) (range nr))]
                      (reduce acc1 acc ks))) (keys path-to-kys))]
     
-    (if (not= (get-filetext (assoc s :components comps1) fname-alias) new-string) (throw (Exception. "Bug in multicomp/set-filetext"))) ; TODO: DEBUG remove when trusted.
+    (if (not= (get-filetext (assoc s :components comps1) fname) new-string) (throw (Exception. "Bug in multicomp/set-filetext"))) ; TODO: DEBUG remove when trusted.
     (assoc s :components comps1)))
 
 ;;;;;;;;;;;;;;;;; Child expansion and contraction ;;;;;;;;;;;;
@@ -194,26 +194,23 @@
 (defn close-component [s kwd]
   "Prompts the user if there are modified files open and the last codebox of a given type is open."
   (let [comp (get (:components s) kwd) ph (:path comp)]
-    (if (not chfile/we-are-child?)
-      (do 
-        (if (and (= (:type comp) :codebox) (= (count ph) 1)
-              (= (count (multisync/twins (:components s) kwd)) 0))
-          (let [fname-alias (first (:path comp))
-                fname (if chfile/we-are-child? fname-alias (chfile/us2child fname-alias))
-                txt0 (if (jfile/exists? fname) (jfile/open fname))
-                txt1 (get-filetext s fname-alias)]
-            (if (and (not= txt0 txt1) (warnbox/yes-no? (str "Save file before closing? " fname-alias)))
-              ; Think through all the ramifications of creating and closing a file, then later saving and disk updates, etc, b4 removing this lazy thing.
-              (throw (Exception. "Ctrl+s before closing that window, stupid limitation in the program TODO.")))))  
-        (if (and (rootfbrowser? comp) (= (count (filterv rootfbrowser? (vals (:components s)))) 1))
-          (throw (Exception. "Can't close the last root fbrowser.")))))
+    (if (and (= (:type comp) :codebox) (= (count ph) 1) ; this block only generates an error if the user says yes to unsaved changes, forcing the user to save.
+          (= (count (multisync/twins (:components s) kwd)) 0))
+      (let [fname (first (:path comp))
+            txt0 (if (jfile/exists? fname) (jfile/open fname))
+            txt1 (get-filetext s fname)]
+        (if (and (not= txt0 txt1) (warnbox/yes-no? (str "Save file before closing? " fname)))
+          ; Think through all the ramifications of creating and closing a file, then later saving and disk updates, etc, b4 removing this lazy thing.
+          (throw (Exception. "Ctrl+s before closing that window, stupid limitation in the program TODO.")))))
+    (if (and (rootfbrowser? comp) (= (count (filterv rootfbrowser? (vals (:components s)))) 1))
+      (throw (Exception. "Can't close the last root fbrowser.")))
     (close-component-noprompt s kwd)))
 
 ;;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;
 
 (defn which-tool-hud [s]
   (let [tool (if-let [m (:active-tool s)] (:name m) :OOPS) typing? (:typing-mode? s)
-        g-cmd [:drawString [(str "tool = " tool " typing? = " typing? (if chfile/we-are-child? "CHILD VERSION" "")) 2 15] {:FontSize 18 :Color [0 1 1 0.7]}]]
+        g-cmd [:drawString [(str "tool = " tool " typing? = " typing? (if (globals/are-we-child?) "CHILD VERSION" "")) 2 15] {:FontSize 18 :Color [0 1 1 0.7]}]]
     [g-cmd]))
 
 (defn draw-select-box [comps k camera]

@@ -1,15 +1,12 @@
 ; A simplified abstraction interface for working with Files.
 ; Most functions work with strings here.
-; Functional files:
-   ; There is a *disk* variable which keeps track of the disk.
-   ;TODO
-; TODO: maybe get rid of the timestamp functions, if they are only called upon when we load.
- ; not sure what happens if the disk is modified during the multicomp/save file, but as long as one save is free of other changes this should correct any errors.
-; TODO: consider normalizing the api as to whether to give an error on missing files, etc.
+; TODO: not sure about concurrency.
+; TODO: is there a better way to handle disk mutations?
+; TODO: normalize the api as to whether to give an error on missing files, etc.
 
 (ns javac.file
-  (:require [clojure.java.io :as io]
-            [clojure.string :as string])
+  (:require [clojure.set :as set] [clojure.string :as string]
+            [app.chfile :as chfile])
   (:import (java.io File BufferedWriter OutputStreamWriter FileOutputStream)
            (org.apache.commons.io FileUtils)
            (java.nio.file Files Paths)
@@ -45,6 +42,23 @@
 (defn file? [^String file] (.isFile (File. file)))
 (defn exists? [^String file] (.exists (File. file)))
 
+;;;;;;;;;;;;;;;;;;;;; Trees:
+
+(defn _visible-children-file-obj1 ; an ugly fn that accepts a File obj and returns a vector of strings.
+  [^File file]
+  (->> (.listFiles file)
+       (remove #(.startsWith (.getName %) "."))
+       (remove #(.endsWith (.getName %) "~"))
+       vec))
+(defn _visible-children-file-obj [^String file] ; also ugly in the same way as above.
+  (mapv #(let [^File f %] (.getName f)) (_visible-children-file-obj1 (File. file))))   
+
+(defn visible-children [folder full-path?]
+  "Get a vector of a directory's children, if there are any.
+   Omits hidden and temporary files.
+   Works with both absolute and relative paths."
+  (mapv #(let [^File f (File. %)] (if full-path? (.getAbsolutePath f) (.getName f))) (_visible-children-file-obj folder)))
+
 ;;;;;;;;;;;;;;;;;;;;;; environment:
 
 (defn sep [] (File/separator))
@@ -53,8 +67,18 @@
   "Gets the absolute project folder, the reclur folder's full path."
   (System/getProperty "user.dir"))
 
-; gets the src directory (string) that should contain both our project and the editor's project:
-(defn src-directory [] "./src") ; we simply use locals for the old app.
+(defn absolute-path [^String file]
+  "Simplifies it as much as possible."
+  (.getCanonicalPath ^File (File. file)))
+
+(defn assert-in-our-folders [file]
+  "Safety feature to ensure we only modify our own directories, which is either our reclur directory or the child iteration thereof."
+  (let [^String fullpath (absolute-path file)
+        us-folder (absolute-path chfile/us-folder)
+        ch-folder (absolute-path chfile/child-folder)
+        contained-in? (fn [^String folder] (.startsWith fullpath folder))]
+    (if (or (contained-in? us-folder) (contained-in? ch-folder)) true
+      (throw (Exception. (str file " = " fullpath " is not in either us or the child reclur folder. Maybe it's not so safe to modify it."))))))
 
 ;;;;;;;;;;;;;;;;;;;;;; conversion functions:
 
@@ -83,10 +107,9 @@
 (defn full-to-leaf [^String file]
   (last (string/split file (str-to-regex (sep)))))
 
-
 ;;;;;;;;;;;;;;;;;;;; Saving and loading, etc:
 
-; store files in memory that we can revert:
+; store files in memory that we can revert (we currently don't use this feature but may be useful):
 (def _buffer-size 0)
 (def _max-buffer-size 50000000) ; maximum buffer size.
 (def _buffers []) ; new -> old.
@@ -112,6 +135,7 @@
     )))
 
 (defn save!!! [^String file ^String contents] ; three ! means that the disk is mutated.
+  (assert-in-our-folders file)
   (try (do
          ; check for folder: 
          (let [folder (File. (file2folder file))]
@@ -123,122 +147,49 @@
     )))
 
 (defn rename!!! [^String file-old ^String file-new]
+  (assert-in-our-folders file-old) (assert-in-our-folders file-new)
   (let [^File f0 (File. file-old) ^File f1 (File. file-new)] (.renameTo f0 f1)))
 
 (defn delete!!! [^String file]
   "File or folder, all contents in folder (if it is a folder) are also deleted just like GUI delete."
+  (assert-in-our-folders file)
   (let [^File f (File. file)]
     (cond (.isDirectory f) (FileUtils/deleteDirectory f)
       (.isFile f) (.delete f)
-      :else (throw (Exception. "File isn't a file or folder.")))))
+      :else (throw (Exception. (str "File isn't a file or folder. " file))))))
 
 (defn get-last-modified [^String file]
   (.lastModified (let [^File f (File. file)] f)))
 
 ; reverts to a buffered version, if we have one. Also returns the reverted string.
 (defn revert!!! [^String file]
+  (assert-in-our-folders file)
   (let [old (get-buffer file)]
     (if (nil? old)
       (do (println "unable to revert file, maybe it fell off the finite buffer.") "")
       (do (save!!! file old) old))))
 
-(defn copy!!! [^String orig ^String dest]
-  "Copies a file from origin to destination. Completely wipes out any file contents files/subfolders in dest."
-  (let [^File origf (File. orig) ^File destf (File. dest)]
-    (cond (.isDirectory origf) (do #_(if (exists? dest) (FileUtils/deleteDirectory destf)) (FileUtils/copyDirectory origf destf))
+(defn _delete-missing!!! [ref-folder target-folder ignore-git?]
+  "Deletes files that are in the ref-folder but not in the target-folder. Acts recursively."
+  (let [ch-ref (apply hash-set (visible-children ref-folder false))
+        ch-tgt (apply hash-set (visible-children target-folder false))
+        ff (fn [x] (if ignore-git? (filterv #(not= % ".git") x) x))
+        common (ff (set/intersection ch-ref ch-tgt))
+        deletes (ff (set/difference ch-tgt ch-ref))]
+    (mapv #(delete!!! (str target-folder (sep) %)) deletes)
+    (mapv #(let [file-ref (str ref-folder (sep) %) folder-r? (dir? file-ref)
+                 file-tgt (str target-folder (sep) %) folder-t? (dir? file-tgt)]
+             (if (and folder-r? folder-t?)
+               (_delete-missing!!! file-ref file-tgt ignore-git?))) common)))
+
+(defn copy!!! [^String orig ^String dest & dot-git-kludge]
+  "Copies a file/folder from origin to destination, overwriting any data. 
+   For folders, removes files/folders in the dest that aren't in orig.
+  dot-git-kludge fixes a strange not file-not-found error in the .git that I don't understand."
+  (assert-in-our-folders orig) (assert-in-our-folders dest)
+  (let [^File origf (File. orig) ^File destf (File. dest) ignore-git? (boolean (first dot-git-kludge))]
+    (if (and ignore-git? (not= orig chfile/us-folder))
+      (let [f1 (str orig "/.git")] (if (exists? f1) (delete!!! f1))))
+    (cond (.isDirectory origf) (do (FileUtils/copyDirectory origf destf) (_delete-missing!!! orig dest ignore-git?))
       (.isFile origf) (FileUtils/copyFile origf destf)
       :else (throw (Exception. "Original file isn't a file or folder ... somehow.")))))
-
-;;;;;;;;;;;;;;;;;;;;; Trees:
-
-(defn _visible-children-file-obj1 ; an ugly fn that accepts a File obj and returns a vector of strings.
-  [^File file]
-  (->> (.listFiles file)
-       (remove #(.startsWith (.getName %) "."))
-       (remove #(.endsWith (.getName %) "~"))
-       vec))
-(defn _visible-children-file-obj [^String file] ; also ugly in the same way as above.
-  (mapv #(let [^File f %] (.getName f)) (_visible-children-file-obj1 (File. file))))   
-
-(defn visible-children [folder full-path?]
-  "Get a vector of a directory's children, if there are any.
-   Omits hidden and temporary files.
-   Works with both absolute and relative paths."
-  (mapv #(let [^File f (File. %)] (if full-path? (.getAbsolutePath f) (.getName f))) (_visible-children-file-obj folder)))
-
-(defn _local-path [^File file]
- "converts a file object into local-path string"
- (str "." (sep) (.getPath (.relativize (.toURI (File. ".")) (.toURI file)))))
-
-(defn _filetree [^File folder filt]
-  "Makes a tree of folders/files starting from a folder, only including files with a filter function."
-  (let [ch (_visible-children-file-obj1 folder) ft (filter filt ch)] ; File objects.
-    { ; doall's so we leave java-object land asap.
-      :ch-local (mapv _local-path ft)
-      :ch-absolute (mapv #(.getAbsolutePath %) ft)
-      :ch-leaf (mapv #(.getName %) ft)
-      :children (mapv #(_filetree % filt) (filter _dir? ch)) ; recursive.
-      :full (.getAbsolutePath folder)
-      :local (_local-path folder)
-      :leaf (.getName folder)}))
-
-; TODO: this is not the most convienent format because of the leaf.
-(defn filetree [^String folder filt] (_filetree (File. folder) filt))
-
-; sets up the tree of .clj files for the current project.
-; Format: :clj (.clj files as strings), :children (more src-trees) :full full-path filename :leaf leaf-filename.
-(defn get-clj-tree [] (filetree (src-directory) _clj?))
-(defn get-texty-tree [] (filetree (src-directory) _texty?))
-
-(defn _get-file-list [grow tree local?]
-  ; grow keeps track of the growing list.
-  (let [thislevel (reduce #(conj %1 %2) grow (if local? (:ch-local tree) (:ch-absolute tree)))]
-    (concat thislevel (apply concat (map #(_get-file-list grow % local?) (:children tree))))))
-(defn get-clj-files []
-  "gets a list of src-files, local paths."
-  (into [] (_get-file-list [] (get-clj-tree) true)))
-
-(defn get-texty-files []
-  "gets a list of src-files, local paths."
-  (into [] (_get-file-list [] (get-texty-tree) true)))
-
-(defn get-all-subfiles [absolute-path]
-  "All sub-file leafs from this path, absolute paths."
-  (into [] (_get-file-list [] (filetree absolute-path (fn [_] true)) false)))
-
-;;;;;;; Timestamp functions ;;;;;;
-
-(defn load-timestamp [^String file]
-  "Loads a textfile, returning {:text :last-modified}.
-   Keeps loading the file until the :last-modified date doesn't change
-   before vs after.  I think this is concurrent safe, in that it can't
-   give back an old version without an updated modification date."
-  (loop []
-    (let [d0 (get-last-modified file) ; side-effect - order important
-          txt (load file)             ; side-effect
-          d1 (get-last-modified file) ; side-effect
-          ]
-      (if (= d0 d1)
-        {:text txt
-         :last-modified d1}
-        (recur)))))
-
-(defn rename-timestamp!!! [^String file-old ^String file-new]
-  "Renames the file OR folder, returning the new date modified.
-   TODO: how to handle concurrency ???"
-  (let [^File f0 (File. file-old) ^File f1 (File. file-new)] (.renameTo f0 f1)
-    (.get-last-modified f1)))
-
-(defn save-timestamp!!! [^String file
-                         ^String contents]
-  "Keeps saving a file until it is up-to-date, and returns the modification timestamp.
-   Again, concurrancy-safe to make sure that if it can't have an
-   up-to-date stamp without bieng the up-to-date file."
-  (loop []
-    (let [_ (save!!! file contents)
-          t0 (get-last-modified file) ;; Brent: is it required you get
-                                      ;; last-modified file before
-                                      ;; checking content match?
-          ]
-      (if (= (load file) contents)
-        t0))))

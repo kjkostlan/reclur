@@ -114,7 +114,8 @@
   
 (defn capture-out-tuple [f & args]
   "Runs f and returns a tuple of [output of f, stuff that would go to *out*].
-   Similar to with-out-str only the output of f is also returned."
+   Similar to with-out-str only the output of f is also returned.
+   If f causes an error the exception object is returned instead."
   (let [w (StringWriter.)
-        val (binding [*out* w] (apply f args))]
+        val (binding [*out* w] (try (apply f args) (catch Exception e e)))]
     [val (str w)]))

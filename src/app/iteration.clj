@@ -6,12 +6,16 @@
 
 (ns app.iteration
   (:require [javac.file :as jfile] [javac.warnbox :as warnbox]
-    [clojure.set :as set] [app.chfile :as chfile]
+    [clojure.set :as set] globals [app.chfile :as chfile]
     [app.multicomp :as multicomp] [app.fbrowser :as fbrowser] [app.orepl :as orepl] [app.siconsole :as siconsole]))
 
 (defn assert-notchild []
-  (if chfile/we-are-child?
+  (if (globals/are-we-child?)
     (throw (Exception. "Saving fns and sending children out dont work when we are the child iteration, edit files in the parent.")) true))
+
+(defn assert-canchild []
+  (if (globals/can-child?) true
+    (throw (Exception. "Copying out our folder into the child folder only works if :enable-child? is true in the conf file."))))
 
 ;;;;;;;;;;;;;; Constants ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -29,18 +33,10 @@
         ;^OutputStreamWriter app-in-writer (OutputStreamWriter. app-in)
         ;^BufferedWriter app-in-writerb (BufferedWriter. app-in-writer)
         ]
-    p)) 
+    p))
 
-(defn launch-clojure-app-given-folder!! [folder]
-  "Launches the clojure app with lein run from within the folder.
-   Unfortunately we can't get any streams easily, so instead must use files."
-  ; Most likely part that needs to be changed for windows.
+(defn launch-child-app!! [folder]
   (launch-app!! (str "cd " folder " ; lein run")))
-
-(defn launch-child-app!! []
-  "Launches the child app, returning the app handle ."
-  (assert-notchild)
-  (launch-clojure-app-given-folder!! chfile/child-folder))
 
 (defn send! [app s]
   "Sends string s to app. Doesn't wait for any kind of response from the app.
@@ -56,7 +52,7 @@
   ; TODO: use a listener instead of repeated checks. Don't know how to do this, the Watcher system still seems to require polling.
     ; i.e. calling key.pollEvents() continuously (I think).
     ; However, this only consumes at most 0.3% of a single CPU core when used with a 100ms sleep interval.
-  (if (not chfile/we-are-child?) (throw (Exception. "For now get-input is only used by the child, we have one-way communication.")))
+  (if (not (globals/are-we-child?)) (throw (Exception. "For now get-input is only used by the child, we have one-way communication.")))
   (let [iofl iofile tmp-file (str (gensym iofl))]
     (loop []
       (let [txt (if (jfile/exists? iofl)
@@ -75,7 +71,7 @@
       (str msg fname " Sent ns-update code to the child process."))
     (let [report (orepl/reload-file!! fname)] ; reload on ourselves.
       (if (:error report)
-        (str "Saved:" fname "Compile error:" (:error report)) ; no err in deleted files.
+        (str "Saved:" fname "Compile error:\n" (:error report)) ; no err in deleted files.
         (str msg fname " Namespaces updated.")))))
 
 (defn save-or-delete1!!! [child-process fname txt] ; nil txt = delete file.
@@ -93,7 +89,8 @@
   ;(println "crtl+s results: new: " new-files "changed:" changed-files "deleted if click yes: " deleted-files0 "missing: " missing-files "renamed: " renamed-map "copied: " copied-map)
   (assert-notchild)
   (let [deleted-files (if (and (> (count deleted-files0) 0) (warnbox/yes-no? (str "Delete: " deleted-files0))) deleted-files0 #{})
-        child-process (let [cp (:child-process s)] (if cp cp (throw (Exception. "No child process, should be set up by code"))))
+        child-process (let [cp (:child-process s)] 
+                        (if (or cp (not (globals/can-child?))) cp (throw (Exception. "No child process, should be set up by code"))))
         ;_ (throw (Exception. "Save disabled for safety reasons.")) ; DEBUG safety.
         _  (mapv #(do (jfile/rename!!! %1 %2)) (keys renamed-map) (vals renamed-map))
         rename-msgs1 (mapv #(update-ns1!! "Renamed from: " % child-process) (keys renamed-map))
@@ -127,7 +124,7 @@
     We only call this from the parent."
   (assert-notchild)
   (let [; disk is in "local folder space" and has ./folder/file.clj format, and is more than just clj files.
-        disk (get-disk (chfile/uptodate-folder) false)
+        disk (get-disk (globals/get-working-folder) false)
 
         comps (:components s) codeboxks (filterv #(= (:type (get comps %)) :codebox) (keys comps))
         open (apply hash-set (mapv #(first (:path (get comps %))) codeboxks))
@@ -153,29 +150,27 @@
 
 ;;;;;;;;;;;;;;;;;;;; Copying folders us->child and child->us ;;;;;;;;;;;;;;;;;;;
 
-(defn _copy-folder!!! [s to-child?]
+(defn _copy-folder!!! [s to-child? orig dest]
   "These copies don't affect the sync."
   (assert-notchild)
-  (let [orig (if to-child? chfile/us-folder chfile/child-folder)
-        dest (if to-child? chfile/child-folder chfile/us-folder)
-        files-usl (if (not to-child?) (get-disk chfile/us-folder true)) ; true = only clj fils.
+  (let [files-usl (if (not to-child?) (get-disk chfile/us-folder true)) ; true = only clj fils.
         files-chl (if (not to-child?) (get-disk chfile/child-folder true))
-        chas (if (not to-child?) (filterv #(not= (jfile/open %) (jfile/open (chfile/us2child %))) (set/intersection files-usl files-chl)))
+        changes (if (not to-child?) (filterv #(not= (jfile/open %) (jfile/open (chfile/us2child %))) (set/intersection files-usl files-chl)))
         
-        _ (jfile/copy!!! orig dest)
+        _ (jfile/copy!!! orig dest true)
         
-        ch-noyes-file (str dest "/src/app/chfile.clj")
+        ch-noyes-file (str dest "/config.txt") ; change the file to determine wether or not we are a child.
         ^String txt0 (jfile/open ch-noyes-file)
-        ^String s0 (if to-child? (str "we-are-child? " "false") (str "we-are-child? " "true"))
+        ^String s0 (if to-child? "we-are-child? false" "we-are-child? true")
         ^String s1 (if to-child? (.replace s0 "false" "true") (.replace s0 "true" "false"))
         txt1 (.replace txt0 s0 s1)]
     (jfile/save!!! ch-noyes-file txt1)
     (if (not to-child?) ; when copying back the latest cool gadgets we need to update the space.
       (let [news (set/difference files-chl files-usl)
-            dels (set/difference files-usl files-chl)]
+            deletes (set/difference files-usl files-chl)]
         (mapv #(update-ns1!! "New toy: " % nil) news)
-        (mapv #(update-ns1!! "Old junk: " % nil) dels)
-        (mapv #(update-ns1!! "Tweaks: " % nil) chas)))))
+        (mapv #(update-ns1!! "Old junk: " % nil) deletes)
+        (mapv #(update-ns1!! "Tweaks: " % nil) changes)))))
 
 (defn copy-child-to-us!!! [s]
   "This should be used for each modification of the child app once it is behaving stably. 
@@ -183,12 +178,12 @@
    However it does require updating files."
   (assert-notchild)
   (println "COPYING TO US")
-  (_copy-folder!!! s false) s)
+  (_copy-folder!!! s false chfile/child-folder chfile/us-folder) s)
 
 ;;;;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;;;;
   
 (defn ensure-childapp-folder-init!!! [s]
-  "Makes sure the child app is started."
-  (assert-notchild)
-  (if (not (jfile/exists? chfile/child-folder)) (_copy-folder!!! s true))
-  (if (:child-process s) s (assoc s :child-process (launch-child-app!!))))
+  "Makes sure the child app is started. Only call this if we allow having a child in the first place."
+  (assert-notchild) (assert-canchild)
+  (if (not (jfile/exists? chfile/child-folder)) (_copy-folder!!! s true chfile/us-folder chfile/child-folder))
+  (if (:child-process s) s (assoc s :child-process (launch-child-app!! chfile/child-folder))))

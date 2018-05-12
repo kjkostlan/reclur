@@ -5,7 +5,7 @@
   (:require [clojure.string :as string] [globals]
     [javac.gfx :as gfx] [javac.exception :as exception]
     [javac.clojurize :as clojurize]
-    [app.chfile :as chfile]
+    globals
     [app.orepl :as orepl]
     [app.iteration :as iteration])
   (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent]
@@ -152,7 +152,7 @@
     (while [true]
       (let [s (try (iteration/get-input) (catch Exception e (do (Thread/sleep 1000) (str "ERROR in iteration/get-input:\\n" (orepl/pr-error e)))))] ; waits here until the stream has stuff in it.
         (SwingUtilities/invokeLater #(do (event-queue!! {:contents s} :parent-in) (if *low-cpu?* (upkeep-loop!! true)))))))) ; all evts are launched on the edt thread.
-(if chfile/we-are-child? (add-parentin-listener!))
+(if (globals/are-we-child?) (add-parentin-listener!))
 
 (defn proxy-panel []
   (proxy [javax.swing.JPanel] [] 

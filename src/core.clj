@@ -23,8 +23,7 @@
     [app.selectmovesize :as selectmovesize]
     [app.xform :as xform]
     [app.siconsole :as siconsole]
-    [app.iteration :as iteration]
-    [app.chfile :as chfile]))
+    [app.iteration :as iteration]))
 
 (def this-ns *ns*)
 
@@ -95,7 +94,7 @@
 (defn hotkeys [] ; fn [s] => s, where s is the state.
   {#(ctrl+? % "w") close ; all these are (fn [s]).
    #(esc? %) toggle-typing
-   #(ctrl-shift+? % "r") #(if (or chfile/we-are-child? (warnbox/yes-no? "Relaunch app, losing any unsaved work? Does not affect the child app.")) 
+   #(ctrl-shift+? % "r") #(if (or (globals/are-we-child?) (warnbox/yes-no? "Relaunch app, losing any unsaved work? Does not affect the child app.")) 
                             (do (future (launch-main-app!!)) (throw (Exception. "This iteration is dead, reloading."))) %)
    #(ctrl+? % "`") swap-on-top 
    ; The saving system: 
@@ -103,9 +102,10 @@
    ; ctrl+shift+s = pull child onto ourselves (TODO: do this when we quit as well).
    ; The child is viewed as the most up-to-date at all times, and it is occasionally copied back to us.
    #(ctrl+? % "s") (fn [s] (iteration/save-state-to-disk!!! s)) ; save to the child, rapid iteration.
-   #(ctrl-shift+? % "s") (fn [s] ; copy from the child to us once we are init.
-                           (let [s1 (iteration/ensure-childapp-folder-init!!! s)]
-                             (iteration/copy-child-to-us!!! s1) s1))
+   #(ctrl-shift+? % "s") (fn [s] ; copy from child to us if we are the parent
+                           (if (and (globals/can-child?) (not (globals/are-we-child?)))
+                             (let [s1 (iteration/ensure-childapp-folder-init!!! s)]
+                               (iteration/copy-child-to-us!!! s1) s1) s))
    #(ctrl-shift+? % "c") store-state!
    #(ctrl-shift+? % "z") (fn [_] (retrieve-state!))})
 
@@ -134,9 +134,8 @@
   "Creates a new fbrowser from our own folder once per startup, otherwise just copies an existing root fbrowser (we never allow closing all root fbrowsers)."
   (let [comps (:components s)
         kys (filterv #(multicomp/rootfbrowser? (get comps %)) (keys comps))
-        new-comp (cond (> (count kys) 0) (get comps (first kys)) 
-                  chfile/we-are-child? (fbrowser/load-from-folder (chfile/uptodate-folder))
-                  :else (fbrowser/load-from-folder (chfile/uptodate-folder)))]
+        new-comp (if (> (count kys) 0) (get comps (first kys)) 
+                   (fbrowser/load-from-folder (globals/get-working-folder)))]
     (add-component s new-comp (keyword (gensym 'files)))))
 
 (defn open-repl [s] (add-component s (orepl/new-repl) (keyword (gensym 'repl))))
@@ -171,17 +170,16 @@
   (let [comp (get (:components s) compk)
         s (assoc-in s [:precompute :desync-safe-mod?] true) 
         evt (xform/xevt (xform/x-1 (singlecomp/pos-xform (:position comp))) evt-c)
-        fname-alias (if (and (= (:type evt-c) :mousePressed) (= (:type comp) :fbrowser)) 
+        fname (if (and (= (:type evt-c) :mousePressed) (= (:type comp) :fbrowser)) 
                  (fbrowser/fullfile-click evt comp))
-        fname (if chfile/we-are-child? fname-alias (chfile/us2child fname-alias))
-        ;_ (println "Opening file: " fname-alias fname)
+        ;_ (println "Opening file: " fname fname)
         non-dir? (if fname (fbrowser/non-folder-file-click? evt comp))]
     ; Add the file to the key :fname-gui, these will be used to effect changes when the fbrowser is changed:
     (if (and fname non-dir?) 
       (let [lix (fbrowser/pixel-to-line comp (:X evt) (:Y evt))
             comp1 (assoc-in comp [:pieces lix :fname-gui] fname)
             pos (:position comp) sz (:size comp)
-            cbox (assoc (if (jfile/exists? fname) (assoc (codebox/load-from-file fname) :path [fname-alias]) (assoc (codebox/new-codebox) :path [fname-alias])) 
+            cbox (assoc (if (jfile/exists? fname) (assoc (codebox/load-from-file fname) :path [fname]) (assoc (codebox/new-codebox) :path [fname])) 
                    :position (mapv + pos (mapv * sz [0.25 0.75])))
             s1 (assoc-in s [:components compk] comp1)
             s2 (update s1 :components #(multisync/spread-fname-gui % (hash-set compk)))]
@@ -332,11 +330,16 @@
   "Can't use a generic f as input b/c functions won't always get updated when that happens.
    Logs prints within the listener to si-console."
   (try (let [tuple (clojurize/capture-out-tuple dispatch-listener evt-g s kwd) ; try to get the new state.
-             s1 (first tuple) txt (second tuple)]
-         (if (= (count txt) 0) s1 (siconsole/log s1 (str txt "\\n"))))
+             s1-or-ex (first tuple) txt (second tuple)
+             _ (if (> (count txt) 0) (println txt)) ; mirror the output in the real console.
+             err? (instance? java.lang.Exception s1-or-ex)
+             s2 (if err? s s1-or-ex)
+             s3 (if (= (count txt) 0) s2 (siconsole/log s2 (str txt "\\n")))]
+         (if err? (siconsole/log s3 (orepl/pr-error s1-or-ex)) s3))
     (catch Exception e
       (let [err-report (orepl/pr-error e)]
         (println "DISPATCH EVENT ERROR")
+        (println (orepl/pr-error e))
         (siconsole/log s err-report)))))
 
 (defn low-cpu-mouse-move [evt-g s]
@@ -357,7 +360,7 @@
 (defn launch-main-app!! []
   (cpanel/stop-app!!)
   (let [s {:components {} :camera [0 0 1 1] :typing-mode? true :active-tool (first (get-tools))}
-        s1 (if (not chfile/we-are-child?) (iteration/ensure-childapp-folder-init!!! s) s)
+        s1 (if (and (globals/can-child?) (not (globals/are-we-child?))) (iteration/ensure-childapp-folder-init!!! s) s)
         s2 (-> s1 (open-console) (open-fbrowser) (open-repl))
         s3 (update s2 :components multicomp/grid-layout)
         s4 (assoc s3 :selected-comp-keys #{})]

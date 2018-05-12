@@ -115,45 +115,47 @@
    ;Fully-qualified symbols -> var for the old namespace vars. Thus we don't lose the old references.
    (atom {}))
 
-(defn _update-core!! [ns-symbol ns-object removing?]
+(defn _update-core!! [ns-symbol removing?] ; returns (not throws) an exception if the code doesn't compile.
   (let [tmp-sym (gensym 'tmp) ns-tmp (create-ns tmp-sym)]
-    (binding [*ns* ns-tmp] ; So the require we call doesn't affect the orepl ns.
-      (let [vars-dayold (ns-interns ns-object) ; symbol -> var.
-            _ (mapv #(ns-unmap ns-object %) (keys vars-dayold)) 
-            _ (if (not removing?) (require ns-symbol :reload))
-            var-at @var-atom
-            vars-new (if removing? {} (ns-interns ns-object))
-            deleted-stuff (set/difference (apply hash-set (keys vars-dayold)) (apply hash-set (keys vars-new)))]
-        #_(if (> (count deleted-stuff) 0) (println "Removed from the code: " ns-symbol deleted-stuff))
-        ; Keep the old var objects around, just set their value to the new stuff.
-        (mapv (fn [sym] 
-                (let [sym-full-qual (symbol (str ns-symbol "/" sym))
-                      var-old (if-let [v (get var-at sym-full-qual)] v (get vars-dayold sym))
-                      old-val @var-old deleted? (boolean (get deleted-stuff sym))
-                      err (Exception. (str sym-full-qual (if removing? " belongs to a .clj file that was deleted." " has been removed from it's .clj file.")))
-                      new-val (if deleted?
-                                (if (fn? old-val) (fn [& args] (throw err)) err)
-                                @(get vars-new sym))]
-                  ; Don't know which of these (or both) is necessary. They are very similar:
-                  (alter-var-root var-old (fn [_] new-val))
-                  (swap! var-atom #(assoc % sym-full-qual var-old))
-                  (if (not deleted?) (intern ns-object sym new-val))))
-          (keys vars-dayold))))
-    (remove-ns tmp-sym)))
+    (let [maybe-er (binding [*ns* ns-tmp] ; So the require we call doesn't affect the orepl ns.
+                     (let [ns-object (find-ns ns-symbol)
+                           vars-dayold (if ns-object (ns-interns ns-object) {}) ; symbol -> var.
+                           _ (mapv #(ns-unmap ns-object %) (keys vars-dayold)) 
+                           maybe-e (if removing? false ; the actual reloading part.
+                                     (try (do (require ns-symbol :reload) false)
+                                       (catch Exception e e)))
+                           ns-object (find-ns ns-symbol) ; the :reload needs this.
+                           var-at @var-atom
+                           vars-new (if removing? {} (if maybe-e vars-dayold (ns-interns ns-object))) ; compile error = don't change the namespace.
+                           deleted-stuff (set/difference (apply hash-set (keys vars-dayold)) (apply hash-set (keys vars-new)))]
+                       ;(if (> (count deleted-stuff) 0) (println "Removed from the code: " ns-symbol deleted-stuff))
+                       ; Keep the old var objects around, just set their value to the new stuff.
+                       (mapv (fn [sym] 
+                               (let [sym-full-qual (symbol (str ns-symbol "/" sym))
+                                     var-old (if-let [v (get var-at sym-full-qual)] v (get vars-dayold sym))
+                                     old-val @var-old deleted? (boolean (get deleted-stuff sym))
+                                     err (Exception. (str sym-full-qual (if removing? " belongs to a .clj file that was deleted." " has been removed from it's .clj file.")))
+                                     new-val (if deleted?
+                                               (if (fn? old-val) (fn [& args] (throw err)) err)
+                                               @(get vars-new sym))]
+                                 ; Don't know which of these (or both) is necessary. They are very similar:
+                                 (alter-var-root var-old (fn [_] new-val))
+                                 (swap! var-atom #(assoc % sym-full-qual var-old))
+                                 (intern ns-object sym new-val)))
+                         (keys vars-dayold)) maybe-e))]
+      (remove-ns tmp-sym) maybe-er)))
 
 (defn reload-file!! [cljfile]
   "Reloads a given clj file, removing the ns if the file no longer exists."
   (let [ns-symbol (symbol (jfile/file2dotpath cljfile))
-        target-ns (find-ns ns-symbol)
         file-exists? (jfile/exists? cljfile)]
     (cond 
-      (and (not target-ns) (not file-exists?)) {:error false :message "Non-existant namespace with non-existant file, no reloading needed."}
+      (and (not (find-ns ns-symbol)) (not file-exists?)) {:error false :message "Non-existant namespace with non-existant file, no reloading needed."}
       file-exists?
-      (let [report (try (do (_update-core!! ns-symbol target-ns false)
-                            {:error false :message (str cljfile " saved and updated without error.")})
-                     (catch Exception e
-                       {:error (pr-error e) :message "Compile error"}))] report)
-      :else (do (_update-core!! ns-symbol target-ns true) {:error false :message "File no longer exists, deleted ns."}))))
+      (let [maybe-e (_update-core!! ns-symbol false)
+            report (if maybe-e {:error (pr-error maybe-e) :message "Compile error"}
+                      {:error false :message (str cljfile " saved and updated without error.")})] report)
+      :else (do (_update-core!! ns-symbol true) {:error false :message "File no longer exists, deleted ns."}))))
 
 (defn save-and-update!!! [cljfile text]
   "Saves a clj file and attempts to reload the namespace, returning the error info if there is a compile error."
