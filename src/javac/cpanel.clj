@@ -18,18 +18,17 @@
 ;;;;;;;;;;;;;;;;;;;;; Settings ;;;;;;;;;;;;;;;;;;;;
 
 (def ^:dynamic *frame-time-ms* 30) ; a somewhat complex mechanism to ensure graceful degradation when the events are heavy.
-(def ^:dynamic *dispatch-patience-ms* 1000)
 (def ^:dynamic *drop-frames-queue-length-threshold* 3)
 (def ^:dynamic *low-cpu?* true) ; mousemotion and everyframe events ignored.
 (def ^:dynamic *mac-keyboard-kludge?* false) ; A huuuuuuge bug with typing involving accents stealing focus. 
-(def ^:dynamic *add-keyl-to-frame?* true) ; tab only works on the frame
+(def ^:dynamic *add-keyl-to-frame?* true) ; tab only works on the frame. False goes to panel.
 
 ;;;;;;;;;;;;;;;;;;;;; Other Support functions ;;;;;;;;;;;;;;;;;;;;;
 
 (defonce _ (println "If you are on a mac don't forget:   defaults write -g ApplePressAndHoldEnabled -bool false"))
 
 (defn empty-state []
-  {:evt-queue [] :external-state {:X0 0 :Y0 0 :X1 0 :Y1 0} :upkeep-lock 0 :dispatch-lock 0})
+  {:evt-queue [] :external-state {:X0 0 :Y0 0 :X1 0 :Y1 0}})
 
 (defn grequel [gr]
   "Black background and monospaced font, added to the beginning of graphics."
@@ -67,91 +66,87 @@
         add? (or (not (= kwd :everyFrame)) 
                (and (not= (:type (last evtq)) :everyFrame)
                  (< (count evtq) *drop-frames-queue-length-threshold*)))]
-    (if add? (assoc x :evt-queue (conj evtq e-clj)) x)))
+    ;(if add? (println "Adding: " kwd "old queue len" (count evtq) "new queue len: " (count (conj (into [] evtq) e-clj))))
+    (if add? (assoc x :evt-queue (conj (into [] evtq) e-clj)) x)))
 
-(defn dequeue1 [x]
+(defn dequeue1 [x] ; returns the modified keys only. Doesn't modify the evt queue, must do that in a swap.
   (if-let [evt (first (:evt-queue x))]
     (let [kwd (:type evt)
           extern (:external-state x)
           evt (if (or (= kwd :mouseDragged) (= kwd :mouseMoved))
                 (assoc evt :X0 (:X0 extern) :Y0 (:Y0 extern) :X1 (:X1 extern) :Y1 (:Y1 extern)) evt)
+          ;_ (println "Removing: " kwd "old queue len" (count (:evt-queue x)) "new queue len: " (count (into [] (rest (:evt-queue x)))))
           f (get-in x [:listeners kwd])
           new-external (update-external-state evt (:type evt) extern)
           new-state (try (if f (f evt (:app-state x)) (:app-state x))
                       (catch Exception e (println e) (:app-state x)))
-          new-queue (into [] (rest (:evt-queue x)))]
-     (assoc x :app-state new-state :external-state new-external :evt-queue new-queue)) x))
+          ud? (or (:needs-gfx-update? x) (not *low-cpu?*) (not= kwd :mouseMoved)) ud? true]
+     {:app-state new-state :external-state new-external :needs-gfx-update? ud?}) {}))
 
 ;;;;;;;;;;;;;;;;;;;;; Mutation ;;;;;;;;;;;;;;;;;;;;;
 
 (def one-atom globals/one-atom)
-(reset! one-atom (empty-state))
-
-(defn dispatch-attempt!! []
-  "Attempts to dispatch an event, removing it from the queue.
-   run-event won't be called multiple times per queue item (as swap! may do), so it is safe to have side-effects."
-  (if (= (:dispatch-lock @one-atom) 0) ; <- This check is probably not needed.
-    (let [x (swap! one-atom #(update % :dispatch-lock inc))]
-      ; At this point (if very lucky) multible threads may have x at different :dispatch-lock's. But only one will get :dispatch-lock = 1
-      (if (and (= (:dispatch-lock x) 1) (> (count (:evt-queue x)) 0)) 
-        (reset! one-atom (assoc (dequeue1 x) :dispatch-lock 0))))))
-
-(defn event-queue!! [e kwd]
-  (swap! one-atom #(queue1 % e kwd)))
+(defonce _ (reset! one-atom (empty-state)))
 
 (defn update-graphics!! []
   (let [x @one-atom 
-        gfx-updated-app-state ((:update-gfx-fn x) (:app-state x))
-        new-gfx ((:render-fn x) gfx-updated-app-state)]
+        gfx-updated-app-state (try ((:update-gfx-fn x) (:app-state x)) (catch Exception e (do (println "gfx update error") (:app-state x))))
+        new-gfx (try ((:render-fn x) gfx-updated-app-state) (catch Exception e (do (println "gfx render error.") {})))]
     (if-let [panel (:JPanel x)] (gfx/update-graphics! panel (:last-drawn-gfx x) new-gfx))
-    (swap! one-atom #(assoc % :last-drawn-gfx new-gfx :app-state gfx-updated-app-state))))
+    (swap! one-atom #(assoc % :last-drawn-gfx new-gfx :app-state gfx-updated-app-state :needs-gfx-update? false))))
 
-(defn upkeep-loop!! [update-graphics?]
-  "The loop stops unless *low-cpu?* is false or events trigger it."
- (let [t0 (System/nanoTime) ns (* *dispatch-patience-ms* 1e6)]
-   (while (and (< (- (System/nanoTime) t0) ns) (> (count (:evt-queue @one-atom)) 0))
-     (try (dispatch-attempt!!) (catch Exception e (println "error: " e))))
-   (if update-graphics? (update-graphics!!))
-   (if (not *low-cpu?*)
-     (let [x (swap! one-atom #(update % :upkeep-lock inc))]
-       (if (= (:upkeep-lock x) 1)
-         (future (Thread/sleep *frame-time-ms*) (swap! one-atom #(assoc % :upkeep-lock 0)) (upkeep-loop!! (not *low-cpu?*))))))))
+(defn dispatch-loop!! []
+  "Keeps dispatching events from the atom. This function is NOT thread safe, the price we pay for ensuring dequeue1 only is called once per event.
+   Note that dequeue1 will sometimes have side-effects and/or be expensive."
+  (while (> (count (:evt-queue @one-atom)) 0)
+    (let [x @one-atom xd (try (dequeue1 x) (catch Exception e (do (println "dequeue error") x)))]
+      (swap! one-atom #(let [x1 (merge % xd) evq (:evt-queue %)]
+                        (assoc x1 :evt-queue (into [] (rest evq)))))))) ; O(n) but should stay small.
+
+; Continuously polling is a tiny CPU drain, but it is way easier than a lock system that must ensure we don't get overlapping calls to dispatch-loop!!
+; The idle CPU is 0.6% of one core for the total program (tested May 19th 2018).
+(defonce _polling? (atom false)) ; only used to make sure we don't have multiple calls to this file, an extra safeguard.
+(if (not @_polling?)
+  (future (while true (do (Thread/sleep *frame-time-ms*) (dispatch-loop!!) (if (:needs-gfx-update? @one-atom) (update-graphics!!))))))
+(reset! _polling? true)
+
+(defn event-queue!! [e kwd]
+  (swap! one-atom #(queue1 % e kwd)))
 
 ;;;;;;;;;;;;;;;;;;;;; Java listeners and windowing ;;;;;;;;;;;;;;;;;;;;;
 
 (defn add-mouse-listeners! [panel]
   (.addMouseListener panel
     (proxy [MouseAdapter] []
-      (mouseClicked [e] (event-queue!! e :mouseClicked) (if *low-cpu?* (upkeep-loop!! true)))
-      (mouseEntered [e] (event-queue!! e :mouseEntered) (if *low-cpu?* (upkeep-loop!! true)))
-      (mouseExited [e] (event-queue!! e :mouseExited) (if *low-cpu?* (upkeep-loop!! true)))
+      (mouseClicked [e] (event-queue!! e :mouseClicked))
+      (mouseEntered [e] (event-queue!! e :mouseEntered))
+      (mouseExited [e] (event-queue!! e :mouseExited))
       (mousePressed [e]
         #_(.requestFocus (:JPanel @one-atom))
         #_(let [frame (.getParent (.getParent (.getParent (.getParent (.getSource e)))))]
           (.requestFocus frame)) 
-        (event-queue!! e :mousePressed) 
-        (if *low-cpu?* (upkeep-loop!! true)))
-      (mouseReleased [e] (event-queue!! e :mouseReleased) (if *low-cpu?* (upkeep-loop!! true)))))
+        (event-queue!! e :mousePressed))
+      (mouseReleased [e] (event-queue!! e :mouseReleased))))
   (.addMouseWheelListener panel
     (proxy [MouseAdapter] []
-      (mouseWheelMoved [e] (event-queue!! e :mouseWheelMoved) (if *low-cpu?* (upkeep-loop!! true)))))
+      (mouseWheelMoved [e] (event-queue!! e :mouseWheelMoved))))
   (.addMouseMotionListener panel
     (proxy [MouseAdapter] []
-      (mouseMoved [e] (event-queue!! e :mouseMoved) (if *low-cpu?* (upkeep-loop!! false)))
-      (mouseDragged [e] (event-queue!! e :mouseDragged) (if *low-cpu?* (upkeep-loop!! true))))))
+      (mouseMoved [e] (event-queue!! e :mouseMoved))
+      (mouseDragged [e] (event-queue!! e :mouseDragged)))))
 
 (defn add-key-listeners! [x]
   (.addKeyListener x
     (proxy [KeyAdapter] []
-      (keyPressed [e] (event-queue!! e :keyPressed) (if *low-cpu?* (upkeep-loop!! true)))
-      (keyReleased [e] (event-queue!! e :keyReleased) (if *low-cpu?* (upkeep-loop!! true))))))
+      (keyPressed [e] (event-queue!! e :keyPressed))
+      (keyReleased [e] (event-queue!! e :keyReleased)))))
 
 (defn add-parentin-listener! [] 
   "Adds a listener for stdin."
   (future
     (while [true]
       (let [s (try (iteration/get-input) (catch Exception e (do (Thread/sleep 1000) (str "ERROR in iteration/get-input:\\n" (orepl/pr-error e)))))] ; waits here until the stream has stuff in it.
-        (SwingUtilities/invokeLater #(do (event-queue!! {:contents s} :parent-in) (if *low-cpu?* (upkeep-loop!! true)))))))) ; all evts are launched on the edt thread.
+        (SwingUtilities/invokeLater #(event-queue!! {:contents s} :parent-in)))))) ; all evts are launched on the edt thread.
 (if (globals/are-we-child?) (add-parentin-listener!))
 
 (defn proxy-panel []
@@ -186,19 +181,15 @@
    evt-fns including :everyFrame are (f evt-clj state), we make our own every-frame event.
    update-gfx-fn is (f state-clj), returns the new state, and should cache any expensive gfx cmds.
    render-fn is (f state-clj) but some render commands are functions on the java object."
-  (if *low-cpu?* (println "Low CPU mode, less mouse moves and no animations."))
-  ;; https://nelsonmorris.net/2015/05/18/reloaded-protocol-and-no-implementation-of-method.html
-  ;; Reload the implementation of the protocol. Other languages must go here.
-  ;; This is very messy and protocols may be abandoned all together.
-  (require '[coder.lang.clojure :reload true])  
+  (if *low-cpu?* (println "Low CPU mode, less mouse moves and no animations.")) 
   (swing-or-kludge
-   (fn [& args]
-     ;; https://stackoverflow.com/questions/1234912/how-to-programmatically-close-a-jframe
-     (if-let [old-frame (:JFrame @one-atom)]
-       (do (.dispatchEvent old-frame (WindowEvent. old-frame WindowEvent/WINDOW_CLOSING)))
-       (swap! one-atom #(dissoc % :JFrame)))
-     (let [[frame panel] (new-window)]
-       (reset! one-atom
+    (fn [& args]
+      ;; https://stackoverflow.com/questions/1234912/how-to-programmatically-close-a-jframe
+      (if-let [old-frame (:JFrame @one-atom)]
+        (do (.dispatchEvent old-frame (WindowEvent. old-frame WindowEvent/WINDOW_CLOSING)))
+        (swap! one-atom #(dissoc % :JFrame)))
+      (let [[frame panel] (new-window)]
+        (reset! one-atom
                (assoc (empty-state)
                       :app-state init-state
                       :listeners evt-fns :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn 

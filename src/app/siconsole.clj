@@ -32,7 +32,7 @@
     (rtext/scroll-bound (set-text console1 s1))))
 
 (defn log [s msg]
-  "Logs msg to all consoles in s."
+  "Logs msg to all consoles in s. Includes the newline."
   (let [comps (:components s)
         comps1 (zipmap (keys comps) (mapv #(if (= (:type %) :siconsole) (log1 % msg) %) (vals comps)))]
     (assoc s :components comps1)))

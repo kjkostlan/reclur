@@ -28,7 +28,7 @@
 (defn colorize [box s piece-ix char-ix0 char-ix1]
   "levels and sp?s are one element per character. 
     non-white chars in sp?s are rendered the same as comments." ; 380 ms.
-  (let [box1 (codebox/update-precompute (update box :pieces #(vector (first %))) nil)
+  (let [box1 (codebox/set-precompute (update box :pieces #(vector (first %))))
         t1 (:text (first (:pieces box1))) n1 (+ (count (:text (second (:pieces box)))) (count (:text (nth (:pieces box) 2))))]
     (subvec (into [] (concat (codebox/colorize box1 t1 (into [] (repeat (count t1) 0)) 0 (count t1))
                      (repeat n1 [1 1 1 1])))

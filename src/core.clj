@@ -272,8 +272,22 @@
         
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
 
+(defn globalize-gfx [comps cam local-comp-renders selected-comp-keys tool-sprite sel-move-sz-sprite tool-hud-sprite]
+  "Takes the local gfx of components as well as tool information to make the global gfx"
+  (let [sel-keys (apply hash-set selected-comp-keys)
+        
+        comp-sprites (zipmap (keys comps) 
+                       (mapv (fn [k] 
+                               (let [c (get comps k)
+                                     cam1 (xform/xx cam (singlecomp/pos-xform (:position c)))]
+                                 {:camera cam1 :gfx (get local-comp-renders k) :z (:z c)})) (keys comps)))
+            
+        sel-sprite {:no-sprite? true :camera cam :z 2e10
+                    :gfx (into [] (apply concat (mapv #(multicomp/draw-select-box comps % [0 0 1 1]) sel-keys)))}]
+    (assoc comp-sprites :TOOL-SPRITE-CORE tool-sprite :TOOL-SMS-SPRITE sel-move-sz-sprite :TOOL-SEL-SPRITE sel-sprite :TOOL-WHICH-MODE tool-hud-sprite)))
+
 (defn update-gfx [s]
-  "Creates the gfx commands in the :precompute that are returned in app-render, see javac/gfx for format details."
+  "Returns s with updated graphics information. app-render will then use the updated graphics to return a sprite map."
   (let [precompute (if-let [x (:gfx (:precompute s))] x {})
         comps (:components s)
         cam (:camera s)
@@ -286,37 +300,25 @@
                                   g0 (singlecomp/draw-component-l c true))))
         gfx-comps-l (zipmap (keys comps) (mapv draw-or-reuse (keys comps)))
         
-        precompute1 (assoc precompute :comps-at-render comps :comp-renders gfx-comps-l)]
-    (assoc-in s [:precompute :gfx] precompute1)))
-
-(defn app-render [s]
-  (let [pre-gfx (:comp-renders (:gfx (:precompute s)))
-        ;_ (println "RENDERGFX: " pre-gfx)
-        cam (:camera s) comps (:components s)
-
-        sel-kys (apply hash-set (:selected-comp-keys s))
+        precompute1 (assoc precompute :comps-at-render comps :comp-renders gfx-comps-l)
+        s1 (assoc-in s [:precompute :gfx] precompute1)
         
-        comp-sprites (zipmap (keys comps) 
-                       (mapv (fn [k] 
-                               (let [c (get comps k)
-                                     cam1 (xform/xx cam (singlecomp/pos-xform (:position c)))]
-                                 {:camera cam1 :gfx (get pre-gfx k) :z (:z c)})) (keys comps)))
         tool (:active-tool s) ; don't precompute the tools, not necessary, at least for now.
         ; TODO: use the cam or use no cam?
         tool-sprite {:camera cam :gfx (if-let [rf (:render tool)] (rf s) []) :no-sprite? true}
         
-        sms-sprite (if (:typing-mode? s) {:camera [0 0 1 1] :gfx []} 
-                     {:camera cam :gfx ((:render (selectmovesize/get-tool)) s) :z 1e10 :no-sprite? true})
-        
-        ;_ (println "tool gfx: " tool-sprite)
-        
-        sel-keys (apply hash-set (:selected-comp-keys s))
-    
-        sel-sprite {:no-sprite? true :camera cam :z 2e10
-                    :gfx (into [] (apply concat (mapv #(multicomp/draw-select-box comps % [0 0 1 1]) sel-keys)))}
-        which-tool {:no-sprite? true :camera [0 0 1 1] :z 1e100
-                    :gfx (multicomp/which-tool-hud s)}]
-    (assoc comp-sprites :TOOL-SPRITE-CORE tool-sprite :TOOL-SMS-SPRITE sms-sprite :TOOL-SEL-SPRITE sel-sprite :TOOL-WHICH-MODE which-tool)))
+        sel-move-sz-sprite (if (:typing-mode? s) {:camera [0 0 1 1] :gfx []} 
+                             {:camera cam :gfx ((:render (selectmovesize/get-tool)) s) :z 1e10 :no-sprite? true})
+        tool-hud-sprite {:no-sprite? true :camera [0 0 1 1] :z 1e100
+                         :gfx (multicomp/which-tool-hud s)}
+        global-gfx (globalize-gfx (:components s) (:camera s) gfx-comps-l (:selected-comp-keys s) tool-sprite sel-move-sz-sprite tool-hud-sprite)]
+    (assoc-in s1 [:precompute :gfx :global] global-gfx)))
+
+(defn app-render [s]
+  "Creates a map of kys to sprites. Each sprite has a :camera that renders it's :gfx,
+   a :z value, and an optional :no-sprite? value.
+   This function itself should be minimal since no logging is possible, thus we only pull precomputed stuff out."
+   (get-in s [:precompute :gfx :global]))
 
 ;;;;;;;;;;;;;;;; The setup ;;;;;;;;;;;;;;;;;;;;;
 
@@ -326,21 +328,22 @@
   "Non-common tools that are interactive versions of commands."
   [{:name :no-tool}])
 
+(defn logged-function-run [f s & args]
+  "(apply f s args), logging printlns within f as well as exceptions to s.
+   f returns the new value of s. If f throws an exception s isn't changed apart from logging."
+  (let [tuple (apply clojurize/capture-out-tuple f s args)
+        s1-or-ex (first tuple)
+        txt (second tuple)
+        _ (if (> (count txt) 0) (println txt)) ; mirror the output in the real console.
+        err? (instance? java.lang.Exception s1-or-ex) 
+        s2 (if err? s s1-or-ex)
+        s3 (if (= (count txt) 0) s2 (siconsole/log s2 (str txt "\n")))]
+     (if err? (siconsole/log s3 (orepl/pr-error s1-or-ex)) s3)))
+
 (defn try-dispatch-listener [evt-g s kwd]
   "Can't use a generic f as input b/c functions won't always get updated when that happens.
    Logs prints within the listener to si-console."
-  (try (let [tuple (clojurize/capture-out-tuple dispatch-listener evt-g s kwd) ; try to get the new state.
-             s1-or-ex (first tuple) txt (second tuple)
-             _ (if (> (count txt) 0) (println txt)) ; mirror the output in the real console.
-             err? (instance? java.lang.Exception s1-or-ex)
-             s2 (if err? s s1-or-ex)
-             s3 (if (= (count txt) 0) s2 (siconsole/log s2 (str txt "\\n")))]
-         (if err? (siconsole/log s3 (orepl/pr-error s1-or-ex)) s3))
-    (catch Exception e
-      (let [err-report (orepl/pr-error e)]
-        (println "DISPATCH EVENT ERROR")
-        (println (orepl/pr-error e))
-        (siconsole/log s err-report)))))
+  (logged-function-run #(dispatch-listener %2 %1 %3) s evt-g kwd))
 
 (defn low-cpu-mouse-move [evt-g s]
   (let [evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g)]
@@ -365,10 +368,9 @@
         s3 (update s2 :components multicomp/grid-layout)
         s4 (assoc s3 :selected-comp-keys #{})]
     (cpanel/launch-app!! (update s4 :components multicomp/unique-z) (listener-fns)
-      (fn [& args] (try (apply update-gfx args)
-                     (catch Exception e (do (println "error: " e)))))
-      (fn [& args] (try (apply app-render args)
-                     (catch Exception e (do (println "error: " e))))))))
+      (fn [s] (logged-function-run update-gfx s))
+      app-render))) ; keep app-render minimal, no logging is allowed here.
+
 
 ; DONT call save-file, we can't run swing stuff from shutdown hooks reliably.
 ; Instead we do this on the exit-if-close function.

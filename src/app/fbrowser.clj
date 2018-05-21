@@ -112,8 +112,6 @@
 (defn colorize-file-vs-folder [box s piece-ix char-ix0 char-ix1]
   "File = white, folder = yellow. Exported folder = a little darker. Bad levels trigger red/brown coloring."
   (let [pieces (:pieces box)
-        piece-ix (subvec piece-ix char-ix0 char-ix1) s (subs s char-ix0 char-ix1)
-        
         folder?s (mapv folder? pieces)
         levels (mapv level-of pieces)
         expanded?s (mapv expanded? pieces)

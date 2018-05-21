@@ -110,7 +110,7 @@
 
 (defn default-colorize [s pieces piece-ix char-ix0 char-ix1]
   "Simple alternating colors."
-  (mapv #(if (even? %) [1 1 1 1] [0.7 0.7 1 1]) (subvec piece-ix char-ix0 char-ix1)))
+  (mapv #(if (even? %) [1 1 1 1] [0.7 0.7 1 1]) piece-ix))
 
 (defn pieces-digest [pieces]
   "Piece-based version of string digest.
@@ -243,7 +243,7 @@
 (defn string-digest [^String s]
   "Newline analysis of a given string s.
     :counts = # chars/line. :num-b4[i] = # chars before line[i], it has one more element than length of lines."
-  (let [lines (into [] (.split (str s " ") "\n")) ;each line.
+  (let [lines (into [] (.split ^String (str s " ") "\n")) ;each line.
         lines (update lines (dec (count lines)) #(subs % 0 (dec (count %)))) ; remove the extra space
         line-counts (mapv count lines)]
     {:counts line-counts :nlines (count lines)
@@ -251,7 +251,7 @@
      :nchars (count s)})); [0 123 456, etc], inc to include line feeds.
 
 (defn gran2 [box]
-  "[horizontal vertical] size needed per character.
+  "[horizontal vertical] size needed per character in pixels.
    This determinies the grid size, the actual character size depends on the 
    graphic's rendering and *text-params* that scale it for a fit."
   (if (nil? (:font-size box)) (throw (Exception. (str "you gave us: " (keys box) " instead of the box."))))
@@ -270,7 +270,7 @@
 
 (defn view-range [box]
   "gets the ix of [top bottom left right] of a node based on it's size, inclusive range of chars that are visible.
-   It's size may be larger than the text."
+   It's size may be larger than that of the text."
   (let [wh (view-wh box)
         top (:scroll-top box) left (:scroll-left box)
         bottom (max 0 (dec (long (Math/floor (+ top (second wh)))))) right (max 0 (dec (long (Math/floor (+ left (first wh))))))]
@@ -666,10 +666,7 @@
     (render-cursor-by-color box col [0 0 0.5 1])))
 
 (defn render-text [box]
-  "Renders the characters of a node and the line numbers.
-     s is the rendered string, all pieces mashed together (visible and invisible).
-     grid is the string-grid.
-     piece-ix is which piece each character on the string belongs to."
+  "Renders the characters of box with the line numbers, using :line-num-start and :hidden-nlines to have line nums be properly calculated."
   (let [gr (string-grid box false false) ; [ix iy] => i.
         
         x (pieces-digest (:pieces box)) s (rendered-string box) ft-pts (:font-size box)
@@ -677,11 +674,15 @@
         vals-gr (into [] (vals gr))
         grid-chars (mapv #(subs s % (inc %)) vals-gr)
         min-c (if (= (count vals-gr) 0) 0 (apply min vals-gr)) max-c (inc (apply max -1 (vals gr)))
-        cols ((:colorize-fn box) box s piece-ix min-c max-c) gcols (mapv #(get cols (- % min-c)) (vals gr))
+        cols ((:colorize-fn box) box (subs s min-c max-c) (subvec piece-ix min-c max-c) min-c max-c) gcols (mapv #(get cols (- % min-c)) (vals gr))
         ;_ (if (not= (count cols) (count s))
         ;    (throw (Exception. (str "Colorize fn returns colors of the wrong length, " (count cols) " instead of " (count s)))))
         gchar-locations (mapv #(cursor-ugrid-to-pixel box (first %) (second %)) (keys gr))
-        char-gfx (mapv #(vector :drawString [(str %2) (first %1) (second %1)] {:Color %3 :FontSize ft-pts}) gchar-locations grid-chars gcols)]
+        new-way? true
+        char-gfx (if new-way?
+                   [[:grid-string [ft-pts (apply str grid-chars) (mapv first gchar-locations) (mapv second gchar-locations) 
+                                (mapv first gcols) (mapv second gcols) (mapv #(nth % 2) gcols) (mapv #(nth % 3) gcols)] {}]]
+                   (mapv #(vector :drawString [(str %2) (first %1) (second %1)] {:Color %3 :FontSize ft-pts}) gchar-locations grid-chars gcols))]
      (if (:show-line-nums? box)
        (let [ladd (:line-no-standoff-chars *text-params*)
              _line-xsm (reduce (fn [acc xy] (update acc (second xy) #(max (if % % 0) (first xy)))) 

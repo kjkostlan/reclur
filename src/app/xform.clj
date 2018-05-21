@@ -1,7 +1,8 @@
 ; transforms are [x y scalex scaley] with scale applied first.
 ; WARNING: the java interop is very incomplete.
 
-(ns app.xform)
+(ns app.xform
+  (:require [javac.gfxcustom :as gfxcustom]))
 
 ;;;;;;;;;;;;;;;;; Transform multiplication ;;;;;;;;;;;;;;;;;;
 
@@ -109,17 +110,21 @@
         kpy (conj (into [] (apply concat (mapv second kpts))) 0)]
     [(apply min kpx) (apply max kpx) (apply min kpy) (apply max kpy)]))
 
+(def custom-gfxf gfxcustom/custom-xforms)
+
 (defn xgfx [xform g-cmd keep-width?]
   "Transforms a single graphics command.
    xform is how the component is transformed; use this to draw transformed components.
    TODO: implement this keep-width? false mean lines get thinner/thicker (using transparancy when < 1 pixel).
    true will keep lines at the same width, so a 1-pixel line stays 1 pixel."
-  (if (= (first g-cmd) :java) g-cmd ; custom commands, no way to try to parse them.
-    (let [g-cmdl (assoc g-cmd 1 (new-location xform (first g-cmd) (second g-cmd)))]
-      (cond (= (first g-cmd) :drawString)
-        (let [sz (* (if-let [sz (:FontSize (get g-cmdl 2))] sz 11) (nth xform 2))]
-          (assoc-in g-cmdl [2 :FontSize] sz))
-        :else g-cmdl))))
+  (let [kwd (first g-cmd) cf (get custom-gfxf kwd)]
+    (if cf (cf xform g-cmd keep-width?)
+      (if (= kwd :java) g-cmd ; custom commands, no way to try to parse them.
+        (let [g-cmdl (assoc g-cmd 1 (new-location xform (first g-cmd) (second g-cmd)))]
+          (cond (= kwd :drawString)
+            (let [sz (* (if-let [sz (:FontSize (get g-cmdl 2))] sz 11) (nth xform 2))]
+              (assoc-in g-cmdl [2 :FontSize] sz))
+            :else g-cmdl))))))
 
 (defn xlisten-map [lfns]
   "Convience fn to work on a map of listener fns."

@@ -2,10 +2,9 @@
 ; Note: export-markers pasted in identical to copying.
 (ns app.codebox
  (:require [clojure.string :as string]
-   [coder.rcode :as rcode]
    [app.rtext :as rtext]
    [app.fbrowser :as fbrowser]
-   [coder.lang.clojure :as clojurelang]
+   [coder.fsmparse :as fsmparse]
    [app.colorful :as colorful]
    [javac.file :as jfile]
    [clojure.string :as string]
@@ -32,96 +31,28 @@
 (defn _rml [pieces] 
   (rtext/remove-empty (_merge-leaf-pieces pieces)))
 
-;;;;;;;;;;;;;;;;;;;;;;; The clojure language ;;;;;;;;;;;;;;;;;;;
-
-(defmacro with-lang-reload [body kwd-code]
-  `(try ~body (catch Exception e# (do (reload-lang ~kwd-code) ~body))))
-
-(defn _get-lang [kwd]
-  "Switchyard for languages."
-  (cond (not (keyword? kwd)) (throw (Exception. "get-lang must be given a keyword such as :clojure :java, etc"))
-  (= kwd :clojure) (clojurelang/clang)
-  (= kwd :java) (throw (Exception. "TODO: java support"))
-  (= kwd :python) (throw (Exception. "TODO: python support"))
-  (= kwd :matlab) (throw (Exception. "TODO: matlab support"))
-  (= kwd :haskell) (throw (Exception. "TODO: haskell support (no, we won't be an enemy of haskell's type system)."))
-  (= kwd :c) (throw (Exception. "TODO: C support (C++ may be too complex to reasonably support)."))
-  :else (throw (Exception. (str "Lang not supported now or planned to in near future:" kwd)))))
-
-(defn reload-lang [kwd]
-  (println "Reload request for:" kwd)
-  (cond (not (keyword? kwd)) (throw (Exception. "reload-lang must be given a keyword such as :clojure :java, etc"))
-  (= kwd :clojure) (require '[coder.lang.clojure :as clojurelang])
-  :else (throw (Exception. (str "Not supported yet: " kwd)))))
-
-(defn tokenize [txt lang-kwd]
-  (with-lang-reload 
-    (let [pipeline (rcode/fn-pipeline (_get-lang lang-kwd) identity)]
-      (-> txt ((first pipeline)) ((second pipeline)))) lang-kwd))
-
-(defn vis-levels [tokens]
-  "Visual levels of the char, which include () 
-   tokens as being the same level as the stuff inside."
-  (let [n (count tokens) types (mapv :type tokens)
-        strs (mapv #(apply str (:strings %)) tokens)]
-    (loop [levels [] ix 0 lev 0]
-      (if (= ix n) (into [] (apply concat levels))
-        (let [ty (nth types ix) k (count (nth strs ix)) 
-              r #(repeat k %) ix1 (inc ix)]
-          (cond (= ty 4) (recur (conj levels (r (inc lev))) ix1 (inc lev))
-            (= ty 5) (recur (conj levels (r lev)) ix1 (dec lev))
-            :else (recur (conj levels (r lev)) ix1 lev)))))))
-
-(defn vis-sp?s [tokens]
-  (let [out (mapv #(repeat (count (apply str (:strings %))) (= (:type %) 0)) tokens)]
-    (into [] (apply concat out))))
-
 ;;;;;;;;;;;;;;;;;;;;;;; Updating the precomputation ;;;;;;;;;;;;;;;;;;;
 
-(defn inter-levels [tokens]
-  "Indentation at cursor locations, interstitial to the text.
-   The array is one longer than the length of the total rendered string.
-   For ()-like tokens longer than 1 char, the level doesn't increase partway inside."
-  (let [n (count tokens) types (mapv :type tokens)
-        strs (mapv #(apply str (:strings %)) tokens)]
-    (loop [levels [] ix 0 lev 0]
-      (if (= ix n) (conj (into [] (apply concat levels)) 1)
-        (let [ty (nth types ix) k (count (nth strs ix)) 
-              r #(repeat k %) ix1 (inc ix)]
-          (cond (= ty 4) (recur (conj levels (r lev)) ix1 (inc lev))
-            (= ty 5) (recur (conj levels (r lev)) ix1 (dec lev))
-            :else (recur (conj levels (r lev)) ix1 lev)))))))
+(defn set-precompute [box]
+  (let [inter-levels (cond (= (:lang box) :clojure)
+                       (fsmparse/depth-clojure (rtext/rendered-string box))
+                        :else (throw (Exception. ":lang wasn't set to a useful thing.")))
+        ; Inclusive indents.
+        levels (mapv max (butlast inter-levels) (rest inter-levels))]
+    (assoc box :precompute {:levels levels :inter-levels inter-levels})))
 
-(defn _tapply-edit [tokens edit lang] ; some edits don't do anything.
-  (let [ty (:type edit)]
-    (if (or (= ty :copy) (= ty :save) (= ty :ignore) (= ty :arrow) (= ty :select-all)) tokens ; nothing.
-      (rcode/parse-string-diff tokens (:ix0 edit) (:ix1 edit) 
-        (rtext/inserted-string (:value edit)) lang))))
-(defn update-precompute [box edit]
-  ; Updates the tokens. A nil edit means calculate tokens from scratch.
-  (let [lk (:lang box)]
-    (with-lang-reload 
-      (let [ts1 (if edit (_tapply-edit (:tokens (:precompute box)) edit (_get-lang lk)) 
-                  (rcode/parse-string (rtext/rendered-string box) (_get-lang lk)))
-            levs (vis-levels ts1) sp?s (vis-sp?s ts1)]
-        ;(if edit (println "edit: " edit "counts: " (rtext/rendered-string box)
-        ;           (apply str (mapv rcode/_tok2str ts1))))
-        (assoc box :precompute {:tokens ts1 :levels levs :sp?s sp?s})) lk)))
-
-(defn complete-update [box box1 edits]
+(defn edits-update [box box1 edits]
+  ; For now we don't implement editing.
   (rtext/cursor-scroll-update box
-    (if (< (count edits) 50) (reduce update-precompute box1 edits)
-      (update-precompute (update box1 :pieces _rml) nil))
-    edits))
+    (set-precompute (update box1 :pieces _rml)) edits))
 
 (defn generic-update [box box1]
   "Updates the precompute, making the best attempt to drag the cursor along.
    If the edits are easy to compute by hand it's better do that instead."
   (let [edits (stringdiff/edits-between (rtext/rendered-string box) (rtext/rendered-string box1))]
-    (complete-update box box1 edits)))
+    (edits-update box box1 edits)))
 
 ;;;;;;;;;;;;;;;;;;;;;;; Piece-handling and paths ;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
 
 (defn folded? [piece]
   "true for folded and not exported to a child."
@@ -166,11 +97,9 @@
   grab the string using an inclusive, exclusive pattern to select the internal region and the brackets. 
   rtext/cursor-ix-to-piece can get the piece index.
   Used for cold-folding, etc."
-  (let [tokens (:tokens (:precompute box)) ; all tokens mashed together. 
-        levels (inter-levels tokens)
+  (let [levels (:inter-levels (:precompute box))
         n (dec (count levels)) cur-ix (max 0 (min cur-ix n))
         lev (nth levels cur-ix)
-        dbgStrs (mapv #(apply str (:strings %)) tokens)
         lo (loop [ix cur-ix]
              (if (or (= ix 0) (< (nth levels ix) lev)) ix
                (recur (dec ix))))
@@ -185,17 +114,15 @@
     (dec (count (string/split (:text piece) #"\n")))))    
 
 (defn colorize [box s piece-ix char-ix0 char-ix1]
-  "levels and sp?s are one element per character. 
-    non-white chars in sp?s are rendered the same as comments."
+  "Level based colorization, with exported pieces counting differently."
   (let [levels (subvec (:levels (:precompute box)) char-ix0 char-ix1)
-              piece-ix (subvec piece-ix char-ix0 char-ix1)
-              exported?s (mapv exported? (:pieces box))
-              mx (apply max 0 levels) cols (mapv #(conj (colorful/level2rgb %) 1) (range (inc mx)))]
+        exported?s (mapv exported? (:pieces box))
+        mx (apply max 0 levels) cols (mapv #(conj (colorful/level2rgb %) 1) (range (inc mx)))]
     (mapv #(if (nth exported?s %2) [1 1 1 0.3] (nth cols (if (>= %1 0) %1 0))) levels piece-ix)))
 
 (defn new-codebox []
   (assoc rtext/empty-text :interact-fns (interact-fns) :outline-color [0.3 0.5 0.9 1] :path []
-    :type :codebox :lang :clojure :precompute {:tokens [] :levels []} :colorize-fn (fn [& args] (apply colorize args))))
+    :type :codebox :lang :clojure :precompute {:inter-levels [0]} :colorize-fn (fn [& args] (apply colorize args))))
 
 (defn code-fold-toggle [cur-pieceix folding? ixs export-marker box]
   "Both (un)exporting and code (un)folding."
@@ -210,10 +137,10 @@
         boxy1 #(assoc box :pieces (_rml (into [] %)))
         num-nlines (if folding? (apply + (mapv num-newlines (:in stats))))
         folded-piece (if folding? {:text insert :children (:in stats) :hidden-nlines num-nlines})
-        cud #(complete-update box %1 [edit])]
+        cud #(edits-update box %1 [edit])]
    (cond (and export-marker folding?) ; fold it up, but put it it into the exported child.
      (let [box1 (boxy1 (concat (:b4 stats) [(dissoc (assoc folded-piece :export-marker export-marker) :children)] (:afr stats)))
-           child (update-precompute (assoc (new-codebox) :pieces (:children folded-piece) :path (get (child-paths box1) export-marker)) nil)
+           child (set-precompute (assoc (new-codebox) :pieces (:children folded-piece) :path (get (child-paths box1) export-marker)))
            ; Calculate total line nums before:
            box1p (splay-out box1)
            n-linesb4 (loop [acc 0 ix 0] 
@@ -268,12 +195,11 @@
         ooo? #(or (folded? %) (exported? %))
         pieces1 (mapv #(if (ooo? %) (assoc % :text txt) %) pieces0)]
     (if (= pieces0 pieces1) box
-      (let [ccf (fn [p0 p1 jx0] jx0) cix (:cursor-ix box)
-            edit (diff-edit (apply str (mapv :text pieces0)) (apply str (mapv :text pieces1)))]
+      (let [ccf (fn [p0 p1 jx0] jx0) cix (:cursor-ix box)]
         ; the spacers count as an e either way, so don't factor into the edit we use:
-        (update-precompute
+        (set-precompute
           (assoc box :pieces (mapv (fn [p] (if (ooo? p) p (update p :text #(string/replace % (str spacer) "e")))) pieces1)
-            :cursor-ix (rtext/carry-cursor pieces0 pieces1 cix ccf)) edit)))))
+            :cursor-ix (rtext/carry-cursor pieces0 pieces1 cix ccf)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -282,8 +208,8 @@
 
 (defn from-text [txt lang-kwd]
   "Sets up a text-editor from a given text and language keyword."
-  (update-precompute (assoc (new-codebox) :pieces [{:text txt}]
-                   :lang lang-kwd) nil))
+  (set-precompute (assoc (new-codebox) :pieces [{:text txt}]
+                   :lang lang-kwd)))
 
 (defn load-from-file [fname]
   (let [txt (jfile/open fname)]
@@ -350,14 +276,12 @@
             box2 (assoc box1 :cursor-ix 
                    (rtext/cursor-ugrid-to-ix box1 
                      (max 0 (+ (first xy0) (if shifting? -4 4))) (second xy0)))]
-         (update-precompute box2 nil)) ; for now at least recalc everything.
-      (rtext/key-press key-evt (update-precompute box ed))))))
+         (set-precompute box2))
+      (set-precompute (rtext/key-press key-evt box))))))
 
 (defn mouse-press [m-evt box] ; double click = code folding.
   (if (= (:ClickCount m-evt) 2)
-    (let [cur-ix (rtext/cursor-pixel-to-ix box (:X m-evt) (:Y m-evt))
-          vis-sp?s (vis-sp?s (:tokens (:precompute box)))
-          
+    (let [cur-ix (rtext/cursor-pixel-to-ix box (:X m-evt) (:Y m-evt))          
           cur-pieceix (first (rtext/cursor-ix-to-piece (assoc box :cursor-ix cur-ix)))
           cur-pieceix1 (first (rtext/cursor-ix-to-piece (assoc box :cursor-ix (inc cur-ix))))
           folding? (and (not (folded? (nth (:pieces box) cur-pieceix)))
@@ -473,7 +397,7 @@
     (generic-update box (update box2 :pieces _rml))))
 
 (defn implement-diffs [box diffs]
-  (throw (Exception. "Codebox doesn't have a traditional diff system, use ")))
+  (throw (Exception. "Codebox doesn't have a traditional diff system, use generic-update.")))
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

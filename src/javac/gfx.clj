@@ -28,7 +28,10 @@
     [java.awt.geom AffineTransform])
   (:require [clojure.set :as set]
     [app.xform :as xform]
+    [javac.gfxcustom :as gfxcustom]
     [clojure.string :as string]))
+
+(def ^:dynamic *sprite-cache-ms* 500) ; render components as sprites when we aren't actively using them, unless the no-sprite flag is used.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;; Specific code.
@@ -65,10 +68,6 @@
       (= n "getFont") false (= n "setFont") false ; Font is also wierd.
       (and (= (first cls) java.text.AttributedCharacterIterator) (= (count cls) 3) (= n "drawString")) false
       :else true)))
-
-(def custom-cmds ; Custom commands for the java argument.
-  {:FontSize (fn [^java.awt.Graphics2D g sz] (.setFont g (.deriveFont (.getFont g) (float sz))))
-   :getFontSize (fn [^java.awt.Graphics2D g] (.getSize2D (.getFont g)))})
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;; Code generation command bank ;;;;;;;;;;;;;
@@ -169,8 +168,8 @@
 (def cmd-bank ; command bank with type-hinted functions, calculated from _cmd-bank with eval.
               ; same anem as java fns except keywords and setters i.e. setColor is replaced with :Color.
               ; and getters are :defaultColor, etc since they only apply on defaults.
-  (zipmap (concat (keys _cmd-bank) (keys custom-cmds)) 
-          (concat (mapv eval (vals _cmd-bank)) (vals custom-cmds))))
+  (zipmap (concat (keys _cmd-bank) (keys gfxcustom/custom-cmds)) 
+          (concat (mapv eval (vals _cmd-bank)) (vals gfxcustom/custom-cmds))))
 
 ;(require '[clojure.pprint]) (binding [*print-meta* true] (println (clojure.pprint/pprint _cmd-bank)))
 ; Cmd bank is of the format (with the fns evaled and type cast/hints)
@@ -227,7 +226,6 @@
 
 (defn update-graphics! [java-ob old-clj-gfx new-clj-gfx & force-repaint]
   "Updates the graphics, calling a .repaint if needed. See doc at top of this file for the format of clj-gfx."
-  ; using invoke-later seems to break things.
   (if (or (not= old-clj-gfx new-clj-gfx) (first force-repaint)) ; change detected or forced. 
     (SwingUtilities/invokeLater
       (fn [& args] (do (.putClientProperty java-ob "repaintCmds" new-clj-gfx)
@@ -300,7 +298,7 @@
     (fixed-width-font! g)
     (paint-gfx! g cmds-xformed) [img xf]))
   
-(defn add-image! [^Graphics2D g ^BufferedImage sprite im-xform camera]
+(defn add-image! [^Graphics2D g ^BufferedImage sprite-im im-xform camera]
   "Adds the image to g with the xform applied from the camera."
   ; TODO: only draw images that partially or fully fit on the screen [not needed if the gfx does this optimization for us].
   (let [^AffineTransform affineXform (AffineTransform.)
@@ -310,24 +308,28 @@
         _ (.translate affineXform (double (nth xf 0)) (double (nth xf 1)))
         _ (.scale affineXform (double (nth xf 2)) (double (nth xf 3)))
         ^ImageObserver null-observer nil]       
-    (.drawImage g sprite affineXform null-observer)))
+    (.drawImage g sprite-im affineXform null-observer)))
 
 (defn global-paint! [^Graphics2D g sprites-oldp cmds-old cmds]
-  "Cmds is a map of vectors, each vector is passed to an image. Cam determines how to position everything.
+  "Cmds-old and cmds are maps of sprite, each sprite is a map with vectors and other information. Cam determines how to position everything.
    cmds-old and sprites are for precomputation, set to {} to recalculate everything.
    Returns the map of sprites to use for the precompute."
-  (fixed-width-font! g)
-  (interpolate-img! g)
+  (fixed-width-font! g) (interpolate-img! g)
   (let [kys (sort-by #(:z (get cmds %)) (keys cmds)) vls (mapv #(get cmds %) kys) ; z-sort
         ; code here a bit messy...
         cameras (zipmap kys (mapv :camera vls))
         gfx-cmds (zipmap kys (mapv :gfx vls))
-        gfx-cmds-old (zipmap kys (mapv #(:gfx (get cmds-old %)) kys)) ;may be nil.
+        wait-ns (* *sprite-cache-ms* 1e6)
+        t-now (System/nanoTime)
         ; TODO: does flushing when deleting help with memory?
         sprites1p (zipmap kys
-                    (mapv #(let [sp? (not (:no-sprite? %2)) gc-old (get gfx-cmds-old %1)
-                                 gc (get gfx-cmds %1) sp-old (get sprites-oldp %1)]
-                             (if (and sp? (= gc-old gc)) sp-old
+                    (mapv #(let [cmd-old (get cmds-old %1) cmd (get cmds %1)
+                                 gc-old (:gfx cmd-old) gc (:gfx cmd)
+                                 sp-old (get sprites-oldp %1)
+                                 t-old (if-let [t (::paint-time cmd)] t t-now) ; no ::paint-time = fresh.
+                                 enough-for-sprite? (> (- t-now t-old) wait-ns)
+                                 sp? (and (not (:no-sprite? %2)) enough-for-sprite?)]
+                             (if (and sp? sp-old (= gc-old gc)) sp-old
                                (if sp? (make-imagep gc)))) kys vls))
         camg (fn [cm] #(xform/xgfx cm %1 true))]
     (mapv #(let [sp (get sprites1p %) cam (get cameras %)]
@@ -348,6 +350,13 @@
           _ (.fillRect g (int 0) (int 0) (int 2000) (int 2000))
           old-spritesp (if-let [x (.getClientProperty this-obj "precomputeGfxSpritesp")] x {})
           old-cmds (if-let [x (.getClientProperty this-obj "precomputeGfxCmds")] x {})
+          ; Put the timestamps on the new commands, restamping those that change:
+          now (System/nanoTime)
+          cmds (zipmap (keys cmds) 
+                 (mapv (fn [k cmd]
+                         (let [cmd-old (get old-cmds k) ptime-old (::paint-time cmd-old)
+                               ptime (if (and ptime-old (= (:gfx cmd) (:gfx cmd-old))) ptime-old now)] ; use the old cmd ptime if things havent changed.
+                           (assoc cmd ::paint-time ptime))) (keys cmds) (vals cmds)))
           new-spritesp (if cmds (global-paint! g old-spritesp old-cmds cmds) {})]
       (.putClientProperty this-obj "precomputeGfxCmds" cmds)
       (.putClientProperty this-obj "precomputeGfxSpritesp" new-spritesp))))
