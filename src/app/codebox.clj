@@ -121,7 +121,7 @@
     (mapv #(if (nth exported?s %2) [1 1 1 0.3] (nth cols (if (>= %1 0) %1 0))) levels piece-ix)))
 
 (defn new-codebox []
-  (assoc rtext/empty-text :interact-fns (interact-fns) :outline-color [0.3 0.5 0.9 1] :path []
+  (assoc rtext/empty-text :interact-fns (interact-fns) :outline-color [0.8 0 0 1] :path []
     :type :codebox :lang :clojure :precompute {:inter-levels [0]} :colorize-fn (fn [& args] (apply colorize args))))
 
 (defn code-fold-toggle [cur-pieceix folding? ixs export-marker box]
@@ -203,7 +203,6 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-
 ;;;;; string -> tokens -> either vis-levels or inter-levels.
 
 (defn from-text [txt lang-kwd]
@@ -279,8 +278,8 @@
          (set-precompute box2))
       (set-precompute (rtext/key-press key-evt box))))))
 
-(defn mouse-press [m-evt box] ; double click = code folding.
-  (if (= (:ClickCount m-evt) 2)
+(defn mouse-press [m-evt box] ; shift+double click = code folding.
+  (if (and (= (:ClickCount m-evt) 2) (:ShiftDown m-evt))
     (let [cur-ix (rtext/cursor-pixel-to-ix box (:X m-evt) (:Y m-evt))          
           cur-pieceix (first (rtext/cursor-ix-to-piece (assoc box :cursor-ix cur-ix)))
           cur-pieceix1 (first (rtext/cursor-ix-to-piece (assoc box :cursor-ix (inc cur-ix))))

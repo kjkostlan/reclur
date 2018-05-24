@@ -16,37 +16,6 @@
 
 (defn rootfbrowser? [box] (and (= (:type box) :fbrowser) (= (count (:path box)) 0)))
 
-;;;;;;;;;;;;;;;;; Layouts ;;;;;;;;;;;;;;;;;
-; the :position of the top-left corner and the :size.
-; TODO: refactor layouts to another folder and improve it.
-
-(defn unique-z [components]
-  "Assigns each component a unique z-value."
-  (loop [acc (zipmap (keys components) (mapv #(if (:z %) % (assoc % :z 1)) (vals components)))]
-    (if (= (count (apply hash-set (mapv :z (vals acc)))) (count acc)) acc
-      (recur (zipmap (keys acc) (mapv (fn [c] (update c :z #(+ (* % (+ 1 (* (Math/random) 1e-10))) 1e-100))) (vals acc)))))))
-
-(defn grid-layout [components]
-  (let [components (unique-z components) ; just in case.
-        vs (vals components) n (count vs)
-        sizexs (mapv #(first (:size %)) vs)
-        sizeys (mapv #(second (:size %)) vs)
-        margin 3 wrap (max 2 (Math/round (Math/sqrt n)))
-        setpos (fn [comp x y] (assoc comp :position [x y]))
-        xinit 2 yinit 17]
-    (loop [acc [] ix 0 xused xinit ymax yinit y0 yinit]
-      (if (= ix n) (zipmap (keys components) acc)
-        (let [nxtw? (= (mod (dec ix) wrap) 0)
-              sx (nth sizexs ix) sy (nth sizeys ix)]
-          (recur (conj acc (setpos (nth vs ix) xused y0))
-            (inc ix) (if nxtw? 0 (+ xused margin sx))
-            (if nxtw? 0 (max ymax (+ margin sy)))
-            (if nxtw? (+ ymax y0) y0)))))))
-
-(defn new-position [components pos sz]
-  ; It should try to find room. This can be improved quite a bit.
-  [(+ (first pos) 610) (+ (second pos) 510)])
-
 ;;;;;;;;;;;;;;;;;;;; Getting and setting files, based on s NOT the disk ;;;;;;;;;;;;;;;
 
 (defn _wrap-tree [paths]
@@ -133,7 +102,6 @@
                          (let [ix (first (filterv #(= (:export-marker (get-in new-parent [:pieces %])) marker) (range (count (:pieces new-parent)))))]
                            (assoc-in new-parent [:pieces ix :fname-gui] (:path new-child))) new-parent)
             comps (:components s)
-            ;pos1 (new-position comps (:position comp0) (:size new-child))
             pos1 (mapv #(+ %1 (* %2 0.75)) (:position comp0) (:size comp0))
             s1 (if (= (:type (get comps k-parent)) :codebox)
                  (let [sibs (multisync/twins comps k-parent)
@@ -143,12 +111,28 @@
                        new-strs (codebox/real-strings new-parent)
                        afr-split0 (nth new-strs export-ix) afr-split1 (nth new-strs (inc export-ix))
                        jx0 (count afr-split0) jx1 (- (count str-b4-split) (count afr-split1)) ; indexes on the new string.
-                       s1 (assoc s :components ; all parents modified.
+                       
+                       ; Expanding stuff that contains expanded stuff means that descendents paths get one longer:
+                       nexport0 (count (filterv codebox/exported? (:pieces comp0)))
+                       nexport1 (count (filterv codebox/exported? (:pieces new-parent)))
+                       n-embed-ch (inc (- nexport0 nexport1))
+                       p2k (zipmap (mapv #(let [c (get comps %)] (if (= (:type c) :codebox) (:path c) false)) (keys comps)) (keys comps))
+                       comps (reduce (fn [cs ix]  
+                                       (let [k (p2k (conj (:path comp0) ix))
+                                             ksi (apply hash-set (concat [k] (multisync/twins cs k) (multisync/descendents cs k)))]
+                                         (reduce (fn [csj kj] (update-in csj [kj :path] #(conj (into [] (butlast %)) export-ix (- ix export-ix)))) cs ksi))) 
+                               comps (range export-ix (+ export-ix n-embed-ch)))
+                       
+                       ; Siblings of the parents must change in concordance for codeboxes.
+                       s1 (assoc s :components 
                             (reduce (fn [acc k] (update acc k #(codebox-sibling-exchild % export-ix jx0 jx1))) comps sibs))
+                       
+                       ; Expanding above already expanded territory means child paths may need to be changed to make room or due to expanding stuff containing expanded stuff:
                        desc (multisync/descendents (:components s1) k-parent)
-                       bump-ix (count (:path (get comps k-parent)))]
+                       bump-ix (count (:path (get comps k-parent)))
+                       shift (- 1 n-embed-ch)]
                  (reduce (fn [acc k] (update-in acc [:components k :path bump-ix]
-                                       #(if (>= % export-ix) (inc %) %))) s1 desc)) s)]
+                                       #(if (>= % (+ export-ix n-embed-ch)) (+ % shift) %))) s1 desc)) s)]
         (-> s1 (assoc-in [:components k-parent] (assoc new-parent :position (:position comp0)))
           (assoc-in [:components k-child] (assoc new-child :position pos1 :z (inc (:z new-parent)))))) s)))
 
@@ -156,30 +140,40 @@
   (assoc ((:contract-child (:interact-fns parent)) (dissoc parent :position) (dissoc child :position)) :position (:position parent)))
 
 (defn contract-child-cb [comps parent-k child-k]
-  "Like contract child but if the component is a codebox, also contracts into the twins."
+  "Like contract child but if the component is a codebox, also contracts into the twins and adjusts the numbers of remaining children."
   (let [parent (get comps parent-k) child (get comps child-k) comps1 (dissoc comps child-k)]
     (if (= (:type parent) :codebox)
-      (let [sibs (multisync/twins comps parent-k)]
+      (let [sibs (apply hash-set (concat [parent-k] (multisync/twins comps parent-k)))]
         (reduce (fn [acc k] (update acc k #(contract-child % child))) comps1 sibs))
-      (assoc comps1 parent-k (contract-child parent-k child-k)))))
+      (assoc comps1 parent-k (contract-child (get comps1 parent-k) (get comps1 child-k))))))
 
-(defn contract-descendents [comps k]
+(defn contract-all-descendents [comps k]
+  "leaf-first contraction."
+  (let [ch (filterv #(= (:type (get comps %)) (:type (get comps k))) (multisync/children comps k))
+        comps1 (reduce #(contract-all-descendents %1 %2) comps ch)
+        ; Remove twins:
+        ch-u (filterv #(get comps1 %) (vals (zipmap (mapv #(:path (get comps1 %)) ch) ch)))
+        ch-x (set/difference (apply hash-set ch) (apply hash-set ch-u))
+        ; Needed for codeboxes: sort high to low so contracting multiple children works properly:
+        ch-u (sort-by #(- (last (:path (get comps1 %)))) ch-u)]
+    (reduce #(contract-child-cb %1 k %2) (reduce dissoc comps1 ch-x) ch-u)))
+
+(defn contract-descendents-if-twinless [comps k]
   "leaf-first contraction, if we don't have twins."
   (if (> (count (multisync/twins comps k)) 0) comps
-    (let [ch (filterv #(= (:type (get comps %)) (:type (get comps k))) (multisync/children comps k))
-          comps1 (reduce #(contract-descendents %1 %2) comps ch)]
-      (reduce #(contract-child-cb %1 k %2) comps1 ch))))
+    (contract-all-descendents comps k)))
 
 (defn close-component-noprompt [s kwd]
   "Contracts into the parent(s) if it has parents."
   (let [cs0 (:components s) ty (get-in cs0 [kwd :type])]
     (if (or (= ty :fbrowser) (= ty :codebox)) 
-      (let [cs (contract-descendents cs0 kwd)
+      (let [cs (contract-descendents-if-twinless cs0 kwd)
             doomed (get cs kwd)
             s (assoc-in s [:precompute :desync-safe-mod?] true)
-        
-            cs1 (dissoc cs kwd)
             twins? (> (count (multisync/twins cs kwd)) 0)
+            
+            cs1 (dissoc cs kwd)
+            
             s (assoc s :components cs1) 
             parent-ks (filterv #(= ty (:type (get cs %))) (multisync/padres cs kwd))] ; fbrowser -> codebox connections not handled here, they are handled elsewhere.
         (if (or twins? (= (count parent-ks) 0)) s ; don't contract the child unless it is the last one remaining.

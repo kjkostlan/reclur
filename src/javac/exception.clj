@@ -2,14 +2,14 @@
 
 (ns javac.exception)
 
-(defn clj-stack-elem [sti]
+(defn clj-stack-elem [^java.lang.StackTraceElement sti]
   {:ClassName (.getClassName sti)
    :FileName (.getFileName sti)
    :LineNumber (.getLineNumber sti)
    :MethodName (.getMethodName sti)})
 
-(defn clje [e]
+(defn clje [^Exception e]
   "Turns a java exception into a cloujure datastructure."
-  (let [st (.getStackTrace e)]
+  (let [^"[Ljava.lang.StackTraceElement;" st (.getStackTrace e)]
     {:Message (.getMessage e)
-     :StackTrace (mapv clj-stack-elem st)}))
+     :StackTrace (mapv clj-stack-elem (into [] st))}))

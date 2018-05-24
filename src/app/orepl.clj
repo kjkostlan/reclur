@@ -23,7 +23,7 @@
   (let [e-clj (jexc/clje e)]
     (apply str (:Message e-clj) " (" (subs (str (type e)) 6) ")" "\n"
       (let [st (:StackTrace e-clj)]
-        (interpose "\n" (mapv #(str "  " (:FileName %) " " (:LineNumber %)) st))))))
+        (interpose "\n" (mapv #(str  "  " (:ClassName %) " " (:LineNumber %)) st))))))
 
 (defn colorize [box s piece-ix char-ix0 char-ix1]
   "levels and sp?s are one element per character. 
@@ -36,6 +36,7 @@
 
 (defn new-repl []
   (assoc rtext/empty-text :type :orepl :lang :clojure :pieces [{:text "(+ 1 2)"} {:text "\n"} {:text "3"}]
+   :outline-color [0.2 0.2 1 1]
    :interact-fns (interact-fns) :path "repl" :show-line-nums? false :colorize-fn colorize))
 
 (defn cmd?-parse [s gaucmds-recognized-cmd?] 

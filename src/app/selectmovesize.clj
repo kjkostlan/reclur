@@ -7,7 +7,7 @@
     [clojure.string :as string]))
 ; has been required by the multicomp.
 
-(def ^:dynamic *handle-size* 15)
+(def ^:dynamic *handle-size* 25)
 
 (defn add-defaults [tool-state] ; nil check. ;TODO: code can be simplified with collections.
   (let [addy (fn [def x] (reduce #(if (get x %2) (assoc %1 %2 (get x %2)) %1) def (keys x)))
@@ -39,9 +39,9 @@
           box [[:fillRect [x0 y0 (- x1 x0) (- y1 y0)] {:Color [0.7 1 0.9 (if (= ctest :miss) 0.05 0.2)]}]
                [:drawRect [x0 y0 (- x1 x0) (- y1 y0)] {:Color [0.7 1 0.9 a]}]
                [:drawRect [(dec x0) (dec y0) (+ (- x1 x0) 2) (+ (- y1 y0) 2)] {:Color [0.4 1 0.5 a]}]]
-          sz handle-sz x00 (- x0 sz) y00 (- y0 sz)
-          handles (mapv #(vector :drawRect [(first %) (second %) sz sz] {:Color [0.4 0.4 0.4 a]})
-                    [[x00 y00] [x00 y1] [x1 y00] [x1 y1]])] 
+          -h #(- % handle-sz)
+          handles (mapv #(vector :drawRect [(first %) (second %) handle-sz handle-sz] {:Color [0.4 0.7 0.4 a]})
+                    [[x0 y0] [x0 (-h y1)] [(-h x1) y0] [(-h x1) (-h y1)]])] 
         (into [] (concat box handles))) []))
 
 (defn click-test [mevt-c ts zoom]
@@ -49,11 +49,12 @@
   (let [x (:X mevt-c) y (:Y mevt-c) sz (/ *handle-size* zoom)
         xxyy (apply order (:xxyy ts))
         x0 (first xxyy) x1 (second xxyy) y0 (nth xxyy 2) y1 (nth xxyy 3)]
-    (cond (hit-rect? x y x0 x1 y0 y1) :main-rect
-      (hit-rect? x y (- x0 sz) x0 (- y0 sz) y0) :corner-nw
-      (hit-rect? x y x1 (+ x1 sz) (- y0 sz) y0) :corner-ne
-      (hit-rect? x y x1 (+ x1 sz) y1 (+ y1 sz)) :corner-se
-      (hit-rect? x y (- x0 sz) x0 y1 (+ y1 sz)) :corner-sw
+    (cond
+      (hit-rect? x y x0 (+ x0 sz) y0 (+ y0 sz)) :corner-nw
+      (hit-rect? x y (- x1 sz) x1 y0 (+ y0 sz)) :corner-ne
+      (hit-rect? x y (- x1 sz) x1 (- y1 sz) y1) :corner-se
+      (hit-rect? x y x0 (+ x0 sz) (- y1 sz) y1) :corner-sw
+      (hit-rect? x y x0 x1 y0 y1) :main-rect
       :else :miss)))
 
 (defn _sel-hit? [x0 y0 x1 y1 comp]
@@ -175,6 +176,26 @@
         s1 (mr (assoc {} :X 0 :Y 0) s) ; not the best code here...
         s2 (mp (assoc {} :X 1e100 :Y 1e100) s1)
         s3 (mr (assoc {} :X 1e100 :Y 1e100) s2)] s3))
+
+(defn swap-on-top [s] 
+  "Rotates the :z of components under the cursor. Also clears the selection (that was confusing)."
+  (let [s (assoc-in s [:precompute :desync-safe-mod?] true)
+        x (first (:mouse-pos s)) y (second (:mouse-pos s))
+        comps (:components s)
+        kys (unders-cursor x y comps)
+      
+        zs (mapv #(double (if-let [z (:z (get comps %1))] z %2)) kys (range))
+        min-z (apply min 1e100 zs)
+        ix-min (first (filter #(= (nth zs %) min-z) (range (count zs)))) ; non-unique min is uniquieified.
+
+        zs (mapv #(if (and (= %1 min-z) (not= %2 ix-min)) (+ %1 1e-9) %1) zs (range))
+        max-z (apply max -1e100 zs)
+        second-min-z (apply min 1e50 (filter #(not= % min-z) zs))
+        drop (- second-min-z min-z)
+        zs1 (mapv #(if (= % min-z) max-z (- % drop)) zs)
+        comps1 (reduce #(assoc-in %1 [(nth kys %2) :z] (nth zs1 %2)) comps (range (count kys)))]
+    (assoc (clear-selecion s) :components comps1)))
+
 
 ; Why not put moving and sizing of the camera here as well?
 (defn get-camera-tool []

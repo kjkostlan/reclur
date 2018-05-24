@@ -14,6 +14,7 @@
     [javac.file :as jfile]
     [javac.warnbox :as warnbox]
     [javac.clojurize :as clojurize]
+    [layout.onecode :as onecode]
     [app.multicomp :as multicomp] 
     [app.multisync :as multisync] 
     [app.orepl :as orepl]
@@ -59,24 +60,6 @@
             [:precompute :desync-safe-mod?]
             true))
 
-(defn swap-on-top [s] ; all selected comps.
-  (let [s (assoc-in s [:precompute :desync-safe-mod?] true)
-        x (first (:mouse-pos s)) y (second (:mouse-pos s))
-        comps (:components s)
-        kys (selectmovesize/unders-cursor x y comps)
-      
-        zs (mapv #(double (if-let [z (:z (get comps %1))] z %2)) kys (range))
-        min-z (apply min 1e100 zs)
-        ix-min (first (filter #(= (nth zs %) min-z) (range (count zs)))) ; non-unique min is uniquieified.
-
-        zs (mapv #(if (and (= %1 min-z) (not= %2 ix-min)) (+ %1 1e-9) %1) zs (range))
-        max-z (apply max -1e100 zs)
-        second-min-z (apply min 1e50 (filter #(not= % min-z) zs))
-        drop (- second-min-z min-z)
-        zs1 (mapv #(if (= % min-z) max-z (- % drop)) zs)
-        comps1 (reduce #(assoc-in %1 [(nth kys %2) :z] (nth zs1 %2)) comps (range (count kys)))]
-    (assoc s :components comps1)))
-
 ;;;;;;;;;;;;;;;; Keyboard interaction with hotkeys ;;;;;;;;;;;;;;;;;;;;;
 
 (defn shift-enter? [key-evt] (and (:ShiftDown key-evt) (= (:KeyCode key-evt) 10)))
@@ -96,7 +79,7 @@
    #(esc? %) toggle-typing
    #(ctrl-shift+? % "r") #(if (or (globals/are-we-child?) (warnbox/yes-no? "Relaunch app, losing any unsaved work? Does not affect the child app.")) 
                             (do (future (launch-main-app!!)) (throw (Exception. "This iteration is dead, reloading."))) %)
-   #(ctrl+? % "`") swap-on-top 
+   #(ctrl+? % "`") selectmovesize/swap-on-top 
    ; The saving system: 
    ; ctrl+s = save onto child generation.
    ; ctrl+shift+s = pull child onto ourselves (TODO: do this when we quit as well).
@@ -123,24 +106,14 @@
 
 ;;;;;;;;;;;;;;;; Adding a component on the top of the z-stack ;;;;;;;;;;;;;;;;;;;;;
 
-(defn _max-z [s] (apply max 0 (mapv #(if (:z %) (:z %) 0) (vals (:components s)))))
+(defn add-component [s box kwd] ((:add-component (:layout s)) s box kwd))
 
-(defn add-component [s comp kwd]
-  (let [z (+ (_max-z s) 1.0)]
-    (update (assoc-in s [:precompute :desync-safe-mod?] true) 
-      :components #(assoc % kwd (assoc comp :z z)))))
-
-(defn open-fbrowser [s] 
+(defn root-fbrowser [s] 
   "Creates a new fbrowser from our own folder once per startup, otherwise just copies an existing root fbrowser (we never allow closing all root fbrowsers)."
   (let [comps (:components s)
         kys (filterv #(multicomp/rootfbrowser? (get comps %)) (keys comps))
         new-comp (if (> (count kys) 0) (get comps (first kys)) 
-                   (fbrowser/load-from-folder (globals/get-working-folder)))]
-    (add-component s new-comp (keyword (gensym 'files)))))
-
-(defn open-repl [s] (add-component s (orepl/new-repl) (keyword (gensym 'repl))))
-
-(defn open-console [s] (add-component s (siconsole/new-console) (keyword (gensym 'repl))))
+                   (fbrowser/load-from-folder (globals/get-working-folder)))] new-comp))
 
 ;;;;;;;;;;;;;;;; Mid level control flow ;;;;;;;;;;;;;;;;;;;;;
 
@@ -215,7 +188,7 @@
 (defn maybe-hotkey [evt-g evt-c s k]
   (let [hotkey-map (hotkeys)
         hk (if (= k :keyPressed) (first (filter #(% evt-g) (keys hotkey-map))))]
-    (if hk ((get hotkey-map hk) s) s)))
+    (assoc (if hk ((get hotkey-map hk) s) s) :tmp-hotkey-triggered? (boolean hk))))
 
 (defn maybe-use-tool [evt-c s tool]
   (let [k (:type evt-c)] (if (not tool) (throw (Exception. "nil tool.")))
@@ -260,16 +233,19 @@
         s (update-mouse evt-g evt-c s k)
         
         s (diff-checkpoint s #(maybe-hotkey evt-g evt-c % k))
-        s (diff-checkpoint s #(maybe-run-repl evt-g evt-c % k))
+        hk? (boolean (:tmp-hotkey-triggered? s))
+        s (dissoc s :tmp-hotkey-triggered?)]
+    (if hk? s ; hotkeys block other actions.
+      (let [s (diff-checkpoint s #(maybe-run-repl evt-g evt-c % k))
         
-        ; Typing mode forces single component use.
-        s (if (and (:typing-mode? s) (= k :mousePressed)) (single-select evt-c s) s)
-        s (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c))) 
-            (maybe-use-tool evt-c s (selectmovesize/get-camera-tool))
-            (:typing-mode? s) (diff-checkpoint s #(single-comp-dispatches evt-c %))
-            :else (maybe-common-tools evt-c s))        
-        ] s))
-        
+            ; Typing mode forces single component use.
+            s (if (and (:typing-mode? s) (= k :mousePressed)) (single-select evt-c s) s)
+            s (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c))) 
+                (maybe-use-tool evt-c s (selectmovesize/get-camera-tool))
+                (:typing-mode? s) (diff-checkpoint s #(single-comp-dispatches evt-c %))
+                :else (maybe-common-tools evt-c s))        
+            ] s))))
+
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
 
 (defn globalize-gfx [comps cam local-comp-renders selected-comp-keys tool-sprite sel-move-sz-sprite tool-hud-sprite]
@@ -362,12 +338,14 @@
 
 (defn launch-main-app!! []
   (cpanel/stop-app!!)
-  (let [s {:components {} :camera [0 0 1 1] :typing-mode? true :active-tool (first (get-tools))}
+  (let [layout (onecode/layout)
+        s {:layout layout :components {} :camera [0 0 1 1] :typing-mode? true :active-tool (first (get-tools))}
         s1 (if (and (globals/can-child?) (not (globals/are-we-child?))) (iteration/ensure-childapp-folder-init!!! s) s)
-        s2 (-> s1 (open-console) (open-fbrowser) (open-repl))
-        s3 (update s2 :components multicomp/grid-layout)
-        s4 (assoc s3 :selected-comp-keys #{})]
-    (cpanel/launch-app!! (update s4 :components multicomp/unique-z) (listener-fns)
+            
+        s2 ((:initial-position layout) s1 (root-fbrowser s1) (orepl/new-repl) (siconsole/new-console))
+        
+        s3 (assoc s2 :selected-comp-keys #{})]
+    (cpanel/launch-app!! s3 (listener-fns)
       (fn [s] (logged-function-run update-gfx s))
       app-render))) ; keep app-render minimal, no logging is allowed here.
 

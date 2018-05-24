@@ -8,7 +8,6 @@
 
 (ns app.rtext
   (:require [javac.clipboard :as clipboard]
-    [globals] ; a slight kludge using the state.
     [clojure.string :as string]
     [app.stringdiff :as stringdiff]))
 
@@ -54,6 +53,7 @@
    :font-xshift-to-size 0 ; Don't know where this comes from.
    :font-yshift-to-size 0.25 ; center the text vertically.
    :line-no-standoff-chars 2.5
+   :lines-above-top-allowed 1 ; free up space for rendering the path.
    :line-fontsz-mult 0.8
    :fit-to-text-margin 1}) ; extra space so that the text doesn't get cutoff. Only used in the fit-to-text fn.
 
@@ -203,7 +203,7 @@
 
 (def empty-text ; default values for the text editor.
   {:cursor-ix 0 :font-size 14 :selection-start 0 :selection-end 0
-   :scroll-top 0 :scroll-left 0 :pieces [{:text ""}] :size [600 400] :read-only? #{}
+   :scroll-top (- (:lines-above-top-allowed *text-params*)) :scroll-left 0 :pieces [{:text ""}] :size [600 400] :read-only? #{}
    :partial-grab-fn default-partial-grab
    :selection-color [0.5 0.8 1 1]
    :outline-color [0 0 1 1] :background-color [0 0 0 0.5] 
@@ -456,8 +456,9 @@
         y1 (:nlines d)
         box (cond (> (nth vr 3) x1) (update box :scroll-left #(max 0 (- % (- (nth vr 3) x1))))
                (< (:scroll-left box) 0) (assoc box :scroll-left 0) :else box)
-        box (cond (> (nth vr 1) y1) (update box :scroll-top #(max 0 (- % (- (nth vr 1) y1))))
-               (< (:scroll-top box) 0) (assoc box :scroll-top 0) :else box)] box))
+        l>top (:lines-above-top-allowed *text-params*)
+        box (cond (> (nth vr 1) y1) (update box :scroll-top #(cond (< % (- l>top)) (- l>top) (< % 0) % :else (max 0 (- % (- (nth vr 1) y1)))))
+               (< (:scroll-top box) (- l>top)) (assoc box :scroll-top (- l>top)) :else box)] box))
 
 (defn scroll [box d-ix d-iy]
  "Scrolls the text inside a node, by an integer amount."
@@ -537,7 +538,7 @@
       (= ck \v) {:type :paste :ix0 ix0 :ix1 ix1 :value (clipboard-read false)}
       (= ck \s) {:type :save :ix0 0 :ix1 0 :value ""} ; :ix0 and :ix1 have less meaning.
       ck {:type :ignore :ix1 ix1 :value ""}
-      ak {:type :arrow :value ak :ix0 ix0 :ix1 ix1}
+      ak {:type :arrow :value ak :ix0 ix0 :ix1 ix1 :ShiftDown (:ShiftDown key-evt)}
       (= tk (str \backspace)) {:type :backspace :value "" :ix0 (if (= ix0 ix1) (max 0 (dec ix0)) ix0) :ix1 ix1}
       tk {:type :type :value (string/replace tk #"\t" "    ") :ix0 ix0 :ix1 ix1}
       :else {:type :ignore})))
@@ -577,7 +578,7 @@
 (defn mouse-press [mouse-evt box]
   "Mouse :X and :Y are local points and not necessarily integers."
   (let [box (v box) x (:X mouse-evt) y (:Y mouse-evt)
-        sh? (:ShiftDown (:external-state @globals/one-atom))
+        sh? (:ShiftDown mouse-evt)
         i1 (:cursor-ix box) i2 (cursor-pixel-to-ix box x y)]
     (if (= (:ClickCount mouse-evt) 2) ; double-click select.
       (let [ij (ixjx-pieces (:pieces box) i2 i2)]
@@ -617,7 +618,7 @@
                       (edit box (:ix0 ed) (:ix1 ed)
                         x (if agree? (:ixs (meta x)) [])))
       (= ty :save) box; We don't handle saves here, just do nothing.
-      (= ty :arrow) (arrow-cursor box (:value ed) (:ShiftDown (:external-state @globals/one-atom)))
+      (= ty :arrow) (arrow-cursor box (:value ed) (:ShiftDown ed))
       (= ty :type) (edit box (:ix0 ed) (:ix1 ed) (:value ed) [])
       :else box)))
 
@@ -704,12 +705,12 @@
                                 (recur (apply conj acc (mapv #(+ % xtra line-ix) (range nfeed)))
                                   (inc ix) (+ line-ix nfeed xtra)))))
              ;_ (println "lnum-vis2rel long: "  lnum-vis2rel)
-             line-strs (mapv #(str (max 0 (nth lnum-vis2rel (+ (:scroll-top box) %)))) (range n))
-             max-visible-x (+ (:scroll-left box) (first (view-wh box)))
+             line-strs (mapv #(let [l (+ (:scroll-top box) %)] 
+                                (if (>= l 0) (str (nth lnum-vis2rel l)) "0")) (range n))
+             max-visible-x (first (view-wh box))
              lft-pts (* ft-pts (:line-fontsz-mult *text-params*))
-             cute-overflow? false
              lineno-gfx (filterv identity 
-                          (mapv #(if (<= (+ %3 ladd (count %2) (if cute-overflow? -1e100 0)) max-visible-x) 
+                          (mapv #(if (<= (+ %3 (count %2)) max-visible-x) 
                                    (vector :drawString [%2 (first %1) (second %1)] {:Color [1 1 1 0.5] :FontSize lft-pts}))
                             line-locations line-strs line-xs))]
          (into [] (concat char-gfx lineno-gfx)))
@@ -724,7 +725,7 @@
         m (:margin *text-params*) 
         tc (mapv #(+ (* % 0.5) 0.5) bc) width (+ (* m 2) (* (first g2) n))
         height (+ (* m 2) (second g2)) ft-pts (:font-size box1)
-        put-above? true
+        put-above? false
         x0 (- (* (first sz) 0.5) (* width 0.5)) y0 (if put-above? (- height) 0)]
     (into [] (concat 
       [[:drawRect [x0 y0 width height] {:Color (:outline-color box1)}]]
@@ -736,6 +737,6 @@
 (defn render [box & show-cursor?]
   (if (nil? box) (throw (Exception. "Somewhere in the guts of the render loop the box got lost.")))
   (let [box (v box)]
-    (concat (render-background box) (render-border box) (render-path box)
-      (render-scroll box) (render-selection box) (render-text box)
+    (concat (render-background box) (render-border box)
+      (render-scroll box) (render-selection box) (render-text box) (render-path box)
         (if (= (first show-cursor?) false) [] (render-cursor box)))))

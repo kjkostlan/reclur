@@ -8,7 +8,7 @@
     globals
     [app.orepl :as orepl]
     [app.iteration :as iteration])
-  (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent]
+  (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent ComponentAdapter]
     [javax.swing SwingUtilities]
     [java.awt FlowLayout] 
     [javax.swing JFrame JPanel])
@@ -113,9 +113,14 @@
 (defn event-queue!! [e kwd]
   (swap! one-atom #(queue1 % e kwd)))
 
+(defn store-window-size!! [^JFrame frame]
+  (swap! one-atom #(assoc-in % [:external-state :window-size] 
+                     (let [^java.awt.Dimension sz (.getSize (.getContentPane frame))]
+                       [(.getWidth sz) (.getHeight sz)]))))
+
 ;;;;;;;;;;;;;;;;;;;;; Java listeners and windowing ;;;;;;;;;;;;;;;;;;;;;
 
-(defn add-mouse-listeners! [panel]
+(defn add-mouse-listeners! [^JPanel panel]
   (.addMouseListener panel
     (proxy [MouseAdapter] []
       (mouseClicked [e] (event-queue!! e :mouseClicked))
@@ -141,12 +146,18 @@
       (keyPressed [e] (event-queue!! e :keyPressed))
       (keyReleased [e] (event-queue!! e :keyReleased)))))
 
+(defn add-resize-listener! [^JFrame frame]
+   (.addComponentListener frame
+     (proxy [ComponentAdapter] []
+       (componentShown [e] (store-window-size!! frame))
+       (componentResized [e] (store-window-size!! frame)))))
+
 (defn add-parentin-listener! [] 
   "Adds a listener for stdin."
   (future
     (while [true]
       (let [s (try (iteration/get-input) (catch Exception e (do (Thread/sleep 1000) (str "ERROR in iteration/get-input:\\n" (orepl/pr-error e)))))] ; waits here until the stream has stuff in it.
-        (SwingUtilities/invokeLater #(event-queue!! {:contents s} :parent-in)))))) ; all evts are launched on the edt thread.
+        (SwingUtilities/invokeLater #(event-queue!! {:contents s} :parent-in)))))) ; all evts are queued on the edt thread, not sure if this is ideal.
 (if (globals/are-we-child?) (add-parentin-listener!))
 
 (defn proxy-panel []
@@ -157,15 +168,16 @@
 
 (defn new-window []
   "Sets up all listeners and atoms. EDT thread only."
-  (let [frame (JFrame.);(JFrame. "The app")
-        panel (proxy-panel)]
+  (let [^JFrame frame (JFrame.);(JFrame. "The app")
+        ^JPanel panel (proxy-panel)]
     ; Example from: https://www.javatpoint.com/java-jframe
     (.setLayout panel (FlowLayout.))
     (add-mouse-listeners! panel)
     ; Gets tab working: http://www.java2s.com/Code/Java/Event/KeyEventDemo.htm
     (.setFocusTraversalKeysEnabled frame false) 
     (.add frame panel)
-    (.setSize frame 1600 1200)
+    (add-resize-listener! frame)
+    (.setSize frame 1440 877)
     (.setLocationRelativeTo frame nil)
     (.setVisible frame true)
     (if *add-keyl-to-frame?* (add-key-listeners! frame)

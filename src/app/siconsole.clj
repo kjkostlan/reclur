@@ -8,7 +8,7 @@
 
 (defn new-console []
   (assoc rtext/empty-text :interact-fns (interact-fns) 
-  :outline-color [0.5 0.3 0.2 1] :path "console" :type :siconsole :show-line-nums? false))
+  :outline-color [0 0.75 0 1] :path "console" :type :siconsole :show-line-nums? false))
 
 (defn get-text [box]
   (:text (first (:pieces box))))
