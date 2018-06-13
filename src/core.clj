@@ -24,7 +24,8 @@
     [app.selectmovesize :as selectmovesize]
     [app.xform :as xform]
     [app.siconsole :as siconsole]
-    [app.iteration :as iteration]))
+    [app.iteration :as iteration]
+    [search.strfind :as strfind]))
 
 (def this-ns *ns*)
 
@@ -53,11 +54,11 @@
          :reclur.state-snapshot
          s
          #_ (dissoc s :reclur.state-snapshot) ;; this version prevents chaining
-         ))
+         ) s)
 
 (defn retrieve-state! []
   (assoc-in (:reclur.state-snapshot @cpanel/one-atom)
-            [:precompute :desync-safe-mod?]
+            [:precompute :desync-supersafe-mod?]
             true))
 
 ;;;;;;;;;;;;;;;; Keyboard interaction with hotkeys ;;;;;;;;;;;;;;;;;;;;;
@@ -80,6 +81,7 @@
    #(ctrl-shift+? % "r") #(if (or (globals/are-we-child?) (warnbox/yes-no? "Relaunch app, losing any unsaved work? Does not affect the child app.")) 
                             (do (future (launch-main-app!!)) (throw (Exception. "This iteration is dead, reloading."))) %)
    #(ctrl+? % "`") selectmovesize/swap-on-top 
+   #(ctrl+? % "f") (fn [s] (strfind/add-search-box s)) 
    ; The saving system: 
    ; ctrl+s = save onto child generation.
    ; ctrl+shift+s = pull child onto ourselves (TODO: do this when we quit as well).
@@ -118,16 +120,25 @@
 ;;;;;;;;;;;;;;;; Mid level control flow ;;;;;;;;;;;;;;;;;;;;;
 
 (defn diff-checkpoint [s f] 
-  "Runs f on s, syncing the components unless f doesn't change the components or flags [:precompute :desync-safe-mod?] to true."
-  (let [s (assoc-in s [:precompute :desync-safe-mod?] false) ; safe until "proven" fast.
-        s1 (f s)] ; f has a chance to set :desync-safe-mod? for optimization.
-    (if (or (get-in s1 [:precompute :desync-safe-mod?]) 
-          (multisync/comps-eq? (:components s) (:components s1))) s1 
-      ; update-open-file-paths can't create a desync nor can it (I think) can the lack of updated paths make the resync fn fail.
-      ; update-line-nos is, of course, safe to do after. 
-      (assoc s1 :components (multisync/comprehensive-sync (:components s) (:components s1))))))
+  "Runs f on s, syncing the components unless f doesn't change the components or flags [:precompute :desync-safe-mod?] to true.
+   Also updates the tags in all cases."
+  (let [s (assoc-in (assoc-in s [:precompute :desync-supersafe-mod?] false)
+                    [:precompute :desync-safe-mod?] false) ; safe until "proven" fast.
+        s1 (f s) ; f has a chance to set :desync-safe-mod? for optimization.
+        sync-f (cond (or (get-in s1 [:precompute :desync-supersafe-mod?]) 
+                       (multisync/comps-eq? (:components s) (:components s1)))
+                     (fn [comps0 comps1] comps1)
+                     (get-in s1 [:precompute :desync-safe-mod?])
+                     multisync/update-keytags 
+                     :else multisync/comprehensive-sync)] ; the comprehensive sync comes with update-keytags.
+    (assoc s1 :components (sync-f (:components s) (:components s1)))))
 
 (defn single-comp-dispatches [evt-c s]
+  ; TODO: something. if (:operate-on-global? comp) but better.
+  ; Easy mode: Just the event to the target component.
+  ; Med mode: give the events.
+  ; Hard mode: give the state as well.
+  ; Harder mode: Give events and the state to all components, with information, but can ignore.
   (let [sel (set/intersection (apply hash-set (keys (:components s))) (apply hash-set (:selected-comp-keys s)))] ; normalize this.
     (reduce 
       (fn [s k]
@@ -145,18 +156,15 @@
         evt (xform/xevt (xform/x-1 (singlecomp/pos-xform (:position comp))) evt-c)
         fname (if (and (= (:type evt-c) :mousePressed) (= (:type comp) :fbrowser)) 
                  (fbrowser/fullfile-click evt comp))
-        ;_ (println "Opening file: " fname fname)
         non-dir? (if fname (fbrowser/non-folder-file-click? evt comp))]
-    ; Add the file to the key :fname-gui, these will be used to effect changes when the fbrowser is changed:
     (if (and fname non-dir?) 
       (let [lix (fbrowser/pixel-to-line comp (:X evt) (:Y evt))
-            comp1 (assoc-in comp [:pieces lix :fname-gui] fname)
             pos (:position comp) sz (:size comp)
-            cbox (assoc (if (jfile/exists? fname) (assoc (codebox/load-from-file fname) :path [fname]) (assoc (codebox/new-codebox) :path [fname])) 
+            cbox (assoc (if (jfile/exists? fname) (assoc (multicomp/load-from-file (:components s) fname) :path [fname]) 
+                          (assoc (codebox/new-codebox) :path [fname])) 
                    :position (mapv + pos (mapv * sz [0.25 0.75])))
-            s1 (assoc-in s [:components compk] comp1)
-            s2 (update s1 :components #(multisync/spread-fname-gui % (hash-set compk)))]
-        (add-component s2 cbox (gensym 'codebox))) s)))
+            s1 (assoc-in s [:components compk] comp)]
+        (add-component s1 cbox (gensym 'codebox))) s)))
 
 (defn maybe-run-repl [evt-g evt-c s k]
   (if (and (= k :keyPressed) (shift-enter? evt-c))
@@ -176,7 +184,8 @@
   {:mousePressed expand-child})
 
 (defn open-file-tool []
-  {:mousePressed (fn [mevt-c s] #_(println "open file tool ") (maybe-open-file mevt-c s (first (:selected-comp-keys s))))})
+  {:mousePressed (fn [mevt-c s]
+                   (diff-checkpoint s #(maybe-open-file mevt-c % (first (:selected-comp-keys s)))))})
 
 (defn single-select [mevt-c s] 
   (let [mp (:mousePressed (selectmovesize/get-tool))
@@ -223,7 +232,7 @@
   "Transforms and dispatches an event (that doesn't change :typing-mode? and :active-tool).
    Only certain changes to f need diff checking."
   (let [s0 s evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g) 
-
+        
         x (if (= k :parent-in) ; only used to update namespaces for now.
             (let [txt (:contents evt-g)]
               (try (eval (read-string txt))
@@ -243,7 +252,7 @@
             s (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c))) 
                 (maybe-use-tool evt-c s (selectmovesize/get-camera-tool))
                 (:typing-mode? s) (diff-checkpoint s #(single-comp-dispatches evt-c %))
-                :else (maybe-common-tools evt-c s))        
+                :else (diff-checkpoint s #(maybe-common-tools evt-c %)))        
             ] s))))
 
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
@@ -256,7 +265,8 @@
                        (mapv (fn [k] 
                                (let [c (get comps k)
                                      cam1 (xform/xx cam (singlecomp/pos-xform (:position c)))]
-                                 {:camera cam1 :gfx (get local-comp-renders k) :z (:z c)})) (keys comps)))
+                                 {:camera cam1 :gfx (get local-comp-renders k) :z (:z c)}))
+                             (keys comps)))
             
         sel-sprite {:no-sprite? true :camera cam :z 2e10
                     :gfx (into [] (apply concat (mapv #(multicomp/draw-select-box comps % [0 0 1 1]) sel-keys)))}]
@@ -316,7 +326,7 @@
         s3 (if (= (count txt) 0) s2 (siconsole/log s2 (str txt "\n")))]
      (if err? (siconsole/log s3 (orepl/pr-error s1-or-ex)) s3)))
 
-(defn try-dispatch-listener [evt-g s kwd]
+(defn try-dispatch-listener [evt-g s kwd] ; TODO: superfulus level.
   "Can't use a generic f as input b/c functions won't always get updated when that happens.
    Logs prints within the listener to si-console."
   (logged-function-run #(dispatch-listener %2 %1 %3) s evt-g kwd))
@@ -344,8 +354,9 @@
             
         s2 ((:initial-position layout) s1 (root-fbrowser s1) (orepl/new-repl) (siconsole/new-console))
         
-        s3 (assoc s2 :selected-comp-keys #{})]
-    (cpanel/launch-app!! s3 (listener-fns)
+        s3 (assoc s2 :selected-comp-keys #{})
+        s4 (update s3 :components #(multisync/update-keytags {} %))]
+    (cpanel/launch-app!! s4 (listener-fns)
       (fn [s] (logged-function-run update-gfx s))
       app-render))) ; keep app-render minimal, no logging is allowed here.
 

@@ -13,7 +13,7 @@
                  [slamhound "1.2.0"]           ; spec-ulation rich hickey (recent note).
                  [com.cemerick/pomegranate "0.0.11"]
                  [com.fifesoft/rsyntaxtextarea "2.5.0"]
-                 [org.clojure/tools.nrepl "0.2.3"]
+                 [org.clojure/tools.nrepl "0.2.12"]
                  ;[org.clojars.charles-stain/lwjgl "3.0"]
                  ;[jogl2 "0.1.0"]
                  ;[net.java.dev.jogl/jogl "1.1.1a"]
@@ -29,5 +29,6 @@
    ;                 "jogl/gluegen-rt.jar"
    ;                 "jogl/jogl-all-natives-macosx-universal.jar"
    ;                 "jogl/jogl-all.jar"]
-;:plugins [[lein-nodisassemble "0.1.3"]] ; this slows us down on startup quite a bit.
+                                        ;:plugins [[lein-nodisassemble "0.1.3"]] ; this slows us down on startup quite a bit.
+  :plugins [[cider/cider-nrepl "0.18.0-SNAPSHOT"]]
 )

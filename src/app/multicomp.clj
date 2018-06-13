@@ -16,7 +16,28 @@
 
 (defn rootfbrowser? [box] (and (= (:type box) :fbrowser) (= (count (:path box)) 0)))
 
-;;;;;;;;;;;;;;;;;;;; Getting and setting files, based on s NOT the disk ;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Searching ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn who-has [s filename real-char-ix]
+  "Returns [keys real-ix-within-component char-ix-within-piece].
+   The real-ix and char-ix are based on exported pieces, not on folded pieces,
+   so they are the same for all components and we only return one.
+   Rounds right."
+  (let [comps (:components s) boxes (filterv #(= (:type (get comps %)) :codebox) (keys comps))
+        boxes1 (filterv #(= (first (:path (get comps %))) filename) boxes)
+        sp-tuples (multisync/string-path+ comps filename) ; ordered.
+        n (count sp-tuples) ; Look for paths that are in our range:
+        ix-p (loop [nb4 0 ix 0]
+               (if (= ix n) false
+                   (let [s-p (nth sp-tuples ix) nc (count (first s-p))]
+                     (if (> (+ nb4 nc) real-char-ix) [(- real-char-ix nb4) (second s-p)]
+                         (recur (+ nb4 nc) (inc ix))))))]
+    (if ix-p
+      (let [path (into [] (butlast (second ix-p)))
+            boxes2 (filterv #(= (:path (get comps %)) path) boxes1)]
+        [boxes2 (last (second ix-p)) (first ix-p)]) [[] 0 0])))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Getting and setting files, based on s NOT the disk ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn _wrap-tree [paths]
   "Only used for updating the filetree, it would be nice to refactor this away."
@@ -50,11 +71,13 @@
 
 (defn codebox-keys [comps fname] (filterv #(and (= (first (:path (get comps %))) fname) (= (:type (get comps %)) :codebox)) (keys comps)))
 
-(defn get-filetext [s fname]
+(defn open-cache [s fname]
+  "Loads fname from s, not the disk."
   (let [string-pathP-tuples (multisync/string-path+ (:components s) fname)]
     (apply str (mapv first string-pathP-tuples))))
 
-(defn set-filetext [s fname new-string]
+(defn save-cache [s fname new-string]
+  "Saves new-string to the file fname, but not within the disk, instead returns new state."
   (let [comps (:components s) string-pathP-tuples (multisync/string-path+ comps fname)
         
         codeboxks (codebox-keys comps fname)
@@ -77,10 +100,25 @@
                                            %1 (nth editss %2) %2)) (get acc k) (range nr))]
                      (reduce acc1 acc ks))) (keys path-to-kys))]
     
-    (if (not= (get-filetext (assoc s :components comps1) fname) new-string) (throw (Exception. "Bug in multicomp/set-filetext"))) ; TODO: DEBUG remove when trusted.
+    (if (not= (open-cache (assoc s :components comps1) fname) new-string) (throw (Exception. "Bug in multicomp/save-cache"))) ; TODO: DEBUG remove when trusted.
     (assoc s :components comps1)))
 
-;;;;;;;;;;;;;;;;; Child expansion and contraction ;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; DISK based file handling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn load-from-file [comps filename]
+  "Returns a component. It will copy a component if one is already open, to ensure agreement in exported stuff.
+   This means be careful with external modifications to the disk."
+  (let [kys (filterv #(= (first (:path (get comps %))) filename) (keys comps))]
+    (if (= (count kys) 0) ; first component.
+      (let [txt (jfile/open filename)]
+        (if (not txt) (throw (Exception. (str  "Attempted to load non-existant file: " filename))))
+        ; The entire fname goes into one path:
+        (assoc (codebox/from-text txt :clojure) :path [filename]))
+      (let [ky (first (filterv #(= (count (:path (get comps %))) 1) kys))]
+        (if ky (assoc (get comps ky) :position [0 0] :size [512 512])
+          (throw (Exception. "Missing root component.")))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Child expansion and contraction ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn codebox-sibling-exchild [parent-sib export-ix jx0 jx1]
   (codebox/split-real-string parent-sib export-ix jx0 jx1))
@@ -93,20 +131,15 @@
 
         expandable? (:expandable? int-fns)
         mevt (xform/xevt (xform/x-1 (singlecomp/pos-xform (:position comp0))) mevt-c)
-        marker (gensym "xyz")
         x (if (expandable? mevt comp) 
-            ((:expand-child int-fns) mevt marker comp))]
+            ((:expand-child int-fns) mevt comp))]
     (if x 
       (let [new-parent (first x) new-child (second x)
-            new-parent (if (= (:type new-parent) :fbrowser) ; add :fname-gui to know to change the children's path upon change.
-                         (let [ix (first (filterv #(= (:export-marker (get-in new-parent [:pieces %])) marker) (range (count (:pieces new-parent)))))]
-                           (assoc-in new-parent [:pieces ix :fname-gui] (:path new-child))) new-parent)
             comps (:components s)
             pos1 (mapv #(+ %1 (* %2 0.75)) (:position comp0) (:size comp0))
             s1 (if (= (:type (get comps k-parent)) :codebox)
                  (let [sibs (multisync/twins comps k-parent)
-                       export-markers1 (mapv #(get-in new-parent (conj % :export-marker)) (codebox/uspaths-with-export new-parent))
-                       export-ix (first (filter #(= (nth export-markers1 %) marker) (range (count export-markers1)))) ; ix on the new parent = last of path of child.
+                       export-ix (last (:path new-child)) ; ix on the new parent = last of path of child.
                        str-b4-split (nth (codebox/real-strings comp) export-ix) ; on the old parent.
                        new-strs (codebox/real-strings new-parent)
                        afr-split0 (nth new-strs export-ix) afr-split1 (nth new-strs (inc export-ix))
@@ -119,7 +152,7 @@
                        p2k (zipmap (mapv #(let [c (get comps %)] (if (= (:type c) :codebox) (:path c) false)) (keys comps)) (keys comps))
                        comps (reduce (fn [cs ix]  
                                        (let [k (p2k (conj (:path comp0) ix))
-                                             ksi (apply hash-set (concat [k] (multisync/twins cs k) (multisync/descendents cs k)))]
+                                             ksi (apply hash-set (concat [k] (multisync/twins cs k) (multisync/codebox-descendents cs k)))]
                                          (reduce (fn [csj kj] (update-in csj [kj :path] #(conj (into [] (butlast %)) export-ix (- ix export-ix)))) cs ksi))) 
                                comps (range export-ix (+ export-ix n-embed-ch)))
                        
@@ -128,7 +161,7 @@
                             (reduce (fn [acc k] (update acc k #(codebox-sibling-exchild % export-ix jx0 jx1))) comps sibs))
                        
                        ; Expanding above already expanded territory means child paths may need to be changed to make room or due to expanding stuff containing expanded stuff:
-                       desc (multisync/descendents (:components s1) k-parent)
+                       desc (multisync/codebox-descendents (:components s1) k-parent)
                        bump-ix (count (:path (get comps k-parent)))
                        shift (- 1 n-embed-ch)]
                  (reduce (fn [acc k] (update-in acc [:components k :path bump-ix]
@@ -149,7 +182,10 @@
 
 (defn contract-all-descendents [comps k]
   "leaf-first contraction."
-  (let [ch (filterv #(= (:type (get comps %)) (:type (get comps k))) (multisync/children comps k))
+  (let [ty (:type (get comps k))
+        ch (filterv #(= (:type (get comps %)) ty) 
+             (if (= ty :codebox) (multisync/codebox-children comps k)
+               (multisync/fbrowser-children comps k)))
         comps1 (reduce #(contract-all-descendents %1 %2) comps ch)
         ; Remove twins:
         ch-u (filterv #(get comps1 %) (vals (zipmap (mapv #(:path (get comps1 %)) ch) ch)))
@@ -175,12 +211,14 @@
             cs1 (dissoc cs kwd)
             
             s (assoc s :components cs1) 
-            parent-ks (filterv #(= ty (:type (get cs %))) (multisync/padres cs kwd))] ; fbrowser -> codebox connections not handled here, they are handled elsewhere.
+            parent-ks (filterv #(= ty (:type (get cs %))) 
+                        (cond (= ty :codebox) (multisync/codebox-padres cs kwd)
+                          (= ty :fbrowser) (multisync/fbrowser-padres cs kwd) :else []))]
         (if (or twins? (= (count parent-ks) 0)) s ; don't contract the child unless it is the last one remaining.
           (let [s1 (reduce #(assoc-in %1 [:components %2] (contract-child (get cs %2) doomed)) s parent-ks)
                 s2 (if (= (:type doomed) :codebox)
                      (let [ph (:path doomed)
-                           leaf-ix (last ph) desc (multisync/descendents cs1 (first parent-ks))
+                           leaf-ix (last ph) desc (multisync/codebox-descendents cs1 (first parent-ks))
                            p-ix (dec (count ph))]
                        (reduce (fn [acc k] (update-in acc [:components k :path p-ix] #(if (> % leaf-ix) (dec %) %))) s1 desc)) s1)]
             s2))) (assoc s :components (dissoc cs0 kwd)))))
@@ -192,7 +230,7 @@
           (= (count (multisync/twins (:components s) kwd)) 0))
       (let [fname (first (:path comp))
             txt0 (if (jfile/exists? fname) (jfile/open fname))
-            txt1 (get-filetext s fname)]
+            txt1 (open-cache s fname)]
         (if (and (not= txt0 txt1) (warnbox/yes-no? (str "Save file before closing? " fname)))
           ; Think through all the ramifications of creating and closing a file, then later saving and disk updates, etc, b4 removing this lazy thing.
           (throw (Exception. "Ctrl+s before closing that window, stupid limitation in the program TODO.")))))
@@ -200,7 +238,8 @@
       (throw (Exception. "Can't close the last root fbrowser.")))
     (close-component-noprompt s kwd)))
 
-;;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 
 (defn which-tool-hud [s]
   (let [tool (if-let [m (:active-tool s)] (:name m) :OOPS) typing? (:typing-mode? s)

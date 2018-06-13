@@ -1,5 +1,5 @@
 ; Browse files and folders with a text-editor interface.
-; 
+; :path is always treated as a vector to the file, even if just given the string.
 (ns app.fbrowser
  (:require [javac.file :as jfile]
    [app.rtext :as rtext]
@@ -11,7 +11,7 @@
  ; :fullname0 = original name loaded from disk or last name saved to disk. false for new filders.
  ; :folder? = we show folders differently. Trying to make a file a child of a file will TODO.
  ; :children (if not expanded). If we are expanded we infer the hierarchy from the indentation.
- ; :export-marker = used to track changes.
+ ; :exported? = are we exported.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -64,10 +64,10 @@
 
 (defn expanded? [line]
   "Children expanded out into some other component DONT count."
-  (and (folder? line) (not (:export-marker line)) #_(not (:children line))
+  (and (folder? line) (not (:exported? line)) #_(not (:children line))
     (.contains ^String (:text line) ^String (str folder-open))))
 
-(defn exported? [line] (boolean (:export-marker line)))
+(defn exported? [line] (:exported? line))
 
 (defn _cursor-advect [box new-lines lix old-cursor]
   (let [cij (rtext/cursor-ix-to-piece (assoc box :cursor-ix (inc old-cursor)))
@@ -177,7 +177,7 @@
         names (mapv #(rm-decor (:text %)) lines) 
         open?s (mapv #(< %1 %2) levels (conj (into [] (rest levels)) -1))
         va #(if (= %2 (count %1)) (conj %1 %3) (assoc %1 %2 %3))]
-    (mapv #(into [] (concat (:path box) %))
+    (mapv #(into [] (concat (vec-file (:path box)) %))
       (loop [acc [] ix 0 last-opens []]
         (if (= ix n) acc
           (recur (conj acc (conj (subvec last-opens 0 (min (max 0 (nth levels ix)) (count last-opens))) (nth names ix))) (inc ix)
@@ -192,12 +192,12 @@
     (apply merge (concat [out1] outrs))))
 (defn all-paths [box]
   "All file paths. Map from path within box (path to a piece) to filename."
-  (_all-paths [:pieces] (:path box) (:pieces box)))
+  (_all-paths [:pieces] (vec-file (:path box)) (:pieces box)))
 
 (defn exported-paths [box]
   "like all-paths but restricted to only the paths with exported children."
   (let [us2disk (all-paths box)
-        us-export-only (filterv identity (mapv #(if (get-in box (conj % :export-marker)) %) (keys us2disk)))]
+        us-export-only (filterv identity (mapv #(if (get-in box (conj % :exported?)) %) (keys us2disk)))]
     (zipmap us-export-only (mapv #(get us2disk %) us-export-only))))
 
 (defn _text-to-leaf0 [x level] ; recursively sets :text to the leaf of the :fullname0 based on it's level. All folders start closed.
@@ -229,6 +229,11 @@
 (defn _recursive-dedent [x] ; any :children are also dedented. Does nothing if can't dedent.
   (update (if-let [ch (:children x)] (assoc x :children (mapv _recursive-dedent ch)) x) 
     :text #(if (= (first %) spacer) (subs % 1) %)))
+
+(defn recursive-unwrap [folder]
+  "Recursively lists and unwraps all files in folder."
+  (mapv #(devec-file (second %))
+    (all-paths (load-from-folder folder))))
 
 ;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Interactions beyond the usual rtext interactions.
@@ -300,7 +305,7 @@
               (_folder-open-toggle box lix) box)] 
     (and (> (count (:pieces box)) 1) (boolean (:children (get (:pieces box) lix))))))
 
-(defn expand-child [mouse-evt marker box]
+(defn expand-child [mouse-evt box]
  (let [x (:X mouse-evt) y (:Y mouse-evt)
        lix (pixel-to-line box x y)
        ; make sure the folder is contracted:
@@ -308,18 +313,31 @@
        path (nth (paths-of-lines box) lix)
        line (get-in box [:pieces lix])
        new-children (shift-levels (:children line) (dec (- (level-of line))))]
-   [(update-in box [:pieces lix] #(dissoc (assoc % :export-marker marker) :children))
-    (assoc (new-fbrowser new-children) :path path)]))
+   [(update-in box [:pieces lix] #(dissoc (assoc % :exported? true) :children))
+    (assoc (new-fbrowser new-children) :path (vec-file path))]))
+
+(defn parent? [box child]
+  (and (= (:type box) :fbrowser)
+       (= (:type child) :fbrowser)
+       (let [p0 (vec-file (:path box))
+             p1 (vec-file (:path child))]
+         (and (> (count p1) (count p0))
+              (= (subvec p1 0 (count p0)) p0)))
+       (let [us2disk-ex (exported-paths box)
+             disk2us-ex (zipmap (vals us2disk-ex) (keys us2disk-ex))]
+         (boolean (get disk2us-ex (vec-file (:path child)))))))
 
 (defn contract-child [box child]
   "Returns the modified box."
   (let [;the count prevents an infinite loop when you try to acces an id that isn't there.
-        us2disk-ex (exported-paths box) disk2us-ex (zipmap (vals us2disk-ex) (keys us2disk-ex))
-        ks (get disk2us-ex (:path child))
+        us2disk-ex (exported-paths box)
+        disk2us-ex (zipmap (vals us2disk-ex) (keys us2disk-ex))
+        ks (get disk2us-ex (vec-file (:path child)))
         _ (if (not ks) (throw (Exception. "Can't find the child path, it may have been deleted in the parent and the child should have gotten deleted.")))
         ch-contract (if (expanded? (first (:pieces child))) (_folder-open-toggle child 0) child)
         ch-pieces (:pieces ch-contract)]
-    (update-in box ks #(assoc (dissoc % :export-marker) :children (shift-levels ch-pieces (inc (level-of %)))))))
+    (update-in box ks #(assoc (dissoc % :exported?)
+                              :children (shift-levels ch-pieces (inc (level-of %)))))))
 
 (defn unwrapped-tree [box]
   "Map from disk path to an element, for now the element is simply {:folder? :fullname0}."
@@ -343,7 +361,6 @@
             (= i (dec n)) (assoc-in acc ks v) :else acc))) 
       m (range (count ks)))))
 
-
 (defn _inc-last [p] (update p (dec (count p)) inc))
 (defn _push-ixs [box usstub]
   ;clears the way for (assoc-in box (_inc-last usstub)), putting a nil here.
@@ -358,8 +375,8 @@
   (let [ty (first diff) diskpath (second diff)]
     (cond
       (= ty :add) ; convert val and add by taking a bunch of closed folders.
-        (let [val (nth diff 2)]
-          (if (and (= (:path box) (subvec diskpath 0 (min (count (:path box)) (count diskpath)))) 
+        (let [val (nth diff 2) ph (vec-file (:path box))]
+          (if (and (= ph (subvec diskpath 0 (min (count ph) (count diskpath)))) 
                 (not (get disk2us diskpath))) ; make sure the edit is even relevant.
             ; i.e. stub goes to [:pieces 8 :children 2]
             (let [nstub (last (filter #(get disk2us (subvec diskpath 0 %)) (range (count diskpath))))]
@@ -410,11 +427,13 @@
 (defn implement-diffs [box diffs]
   "Only implement diffs if they havent already been implemented and the children aren't exported
    (if the children are exported the changes will be implemented there).
+   the path is in vectorized form.
    [:add path val] (val may be a tree).
    [:remove path] (removes all children, grandchildren, etc).
    [:change path newval]"
-  ;(println "Diff time: " diffs)
-  (let [_d0 (first diffs) _d1 (second diffs)
+  ;(if (> (count diffs) 0) (println "Diffs applies: " (:path box) diffs))
+  (let [diffs (filterv #(> (count (second %)) (count (vec-file (:path box)))) diffs) ; only diffs that are deeper than our path do anything.
+        _d0 (first diffs) _d1 (second diffs)
         d0 (if (= (first _d0) :remove) _d1 _d0) d1 (if (= d0 _d0) _d1 _d0)
         n (count diffs) us2disk (all-paths box) 
         disk2us (zipmap (vals us2disk) (keys us2disk))
@@ -449,5 +468,4 @@
    :mouseMoved (fn [_ box] box)
    :expandable? expandable?
    :expand-child expand-child :contract-child contract-child
-   :is-child? (fn [box] (> (count (:path box)) 1))
-   :unwrapped-tree unwrapped-tree :implement-diffs implement-diffs}))
+   :is-child? (fn [box] (> (count (vec-file (:path box))) 1))}))

@@ -13,11 +13,7 @@
 
 (declare interact-fns) ; Possible dependency cycle with the new function being used by some interact fns.
 
-; Allows us to view and change the gui state from the repl.
-(def state-atom (atom {})) 
-(defn get-state [] @state-atom) ; TODO: remove this.
-(defn set-state [s-new] (reset! state-atom s-new))
-(defn swap-state [f] (swap! state-atom f))
+;;;;;;;;;;;;;;;;;;;;;;;;; Look and feel ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn pr-error [e] ; shows the stack trace.
   (let [e-clj (jexc/clje e)]
@@ -34,32 +30,52 @@
                      (repeat n1 [1 1 1 1])))
       char-ix0 char-ix1))) ; lazy way.
 
+(defn limit-length [s]
+  (let [max-len 10000 tmp "...<too long to show>"]
+    (if (> (count s) max-len) (str (subs s 0 (- max-len (count tmp))) tmp) s)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;; Setting up a repl ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defn new-repl []
   (assoc rtext/empty-text :type :orepl :lang :clojure :pieces [{:text "(+ 1 2)"} {:text "\n"} {:text "3"}]
    :outline-color [0.2 0.2 1 1]
    :interact-fns (interact-fns) :path "repl" :show-line-nums? false :colorize-fn colorize))
 
+(defn command-wrapped-repl [app-state-symbol code cursor-ix0]
+  "Generates a fresh repl that is set up to run command code applied to the overall state, encoded as app-state-symbol.
+   Code should be a pprinted string since we care about cursor index."
+  (let [b4 (str "(let [" app-state-symbol " @_state-atom\n"
+                       "result\n")
+        afr "] \n (reset! _state-atom result) [])"
+        
+        cursor-ix (+ (count b4) cursor-ix0)
+        code (str b4 code afr)]
+    (assoc (new-repl) :cursor-ix cursor-ix
+      :pieces [{:text code} {:text "\n"} {:text ""}])))
+
+;;;;;;;;;;;;;;;;;;;;;;;;; Running the repl ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def _state-atom (atom {})) ; only used locally for the mutation-free run-standard-repl function.
+(defn set-state [s-new] "No effect outside of repl." (reset! _state-atom s-new))
+(defn swap-state [f] "No effect outside of repl." (swap! _state-atom f))
+
+(def this-ns *ns*)
+
 (defn cmd?-parse [s gaucmds-recognized-cmd?] 
-  "Returns [cmd-sym, [arg symbols]] if a valid cmd shorthand, otherwise returns nil."
+  "Sugar. Returns [cmd-sym, [arg symbols]] if a valid cmd shorthand, otherwise returns nil."
   (let [tokens (string/split s #"[, ;]+")
         sym (if (> (count tokens) 0) (symbol (first tokens)))]
     (if (and sym (gaucmds-recognized-cmd? sym))
       [sym (mapv read-string (rest tokens))])))
 
-(defn limit-length [s]
-  (let [max-len 10000 tmp "...<too long to show>"]
-    (if (> (count s) max-len) (str (subs s 0 (- max-len (count tmp))) tmp) s)))
-
-(def this-ns *ns*)
-
 (defn run-standard-repl [s repl-k txt]
-    (reset! state-atom s)
-    (let [result (try (let [code (read-string txt)]
+    (reset! _state-atom s)
+    (let [result (try (let [code (read-string txt)] ; internal mutation of _state-atom possible.
                         (try (let [y (str (binding [*ns* this-ns] (eval code)))]
                                (limit-length y))
-                          (catch Exception e (limit-length (str "Runtime error:" e)))))
+                             (catch Exception e (limit-length (str "Runtime error:\n" (pr-error e))))))
                      (catch Exception e (limit-length (str "Syntax error: " e))))]
-      (assoc-in @state-atom [:components repl-k :pieces 2 :text] result)))
+      (assoc-in @_state-atom [:components repl-k :pieces 2 :text] result)))
 
 (defn run-cmd [s cmd-sym arg-symbols repl-k gaucmds-run-cmd]
   "Special cmd sequence that is more like shell scripting."
@@ -108,6 +124,8 @@
         (let [txt (clipboard/get-as-string)]
           (update-in box [:pieces 0 :text] #(str (subs % 0 (:ix0 ed)) txt (subs % (:ix1 ed)))))
           (rtext/dispatch-edit-event box ed)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;; Namespace reloading et al ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn _resolve [sym]
   (try (resolve sym) (catch Exception e)))
@@ -166,12 +184,12 @@
 (defn delete-and-update!!! [cljfile]
   (jfile/delete!!! cljfile) (reload-file!! cljfile) {:error false :message (str "Deleted" cljfile)})
 
+;;;;;;;;;;;;;;;;;;;;;;;;; Component interface ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 ; No child UI is planned in the near future.
 (defn expandable? [mouse-evt box] false)
-(defn expand-child [mouse-evt marker box] (throw (Exception. "No plans to implement orepl child-UI.")))
+(defn expand-child [mouse-evt box] (throw (Exception. "No plans to implement orepl child-UI.")))
 (defn contract-child [box child] (throw (Exception. "No plans to implement orepl child-UI.")))
-(defn unwrapped-tree [box] [])
-(defn implement-diffs [box diffs] box)
 
 (defmacro updaty-fns [code] 
   (let [a1 (gensym 'args)] 
@@ -188,5 +206,4 @@
    :mouseMoved (fn [_ box] box)
    :expandable? expandable?
    :is-child? (fn [box] false)
-   :expand-child expand-child :contract-child contract-child
-   :unwrapped-tree unwrapped-tree :implement-diffs implement-diffs}))
+   :expand-child expand-child :contract-child contract-child}))

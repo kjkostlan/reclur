@@ -100,11 +100,7 @@
      (apply max (mapv #(+ (second (:position %)) (second (:size %))) comps))]))
 
 (defn derive-key [kwd]
-  (let [s (subs (str kwd) 1) r #"copy\d+"
-        cn (re-find r s)
-        n (if cn (Integer. (string/replace cn #"copy" "")))]
-    (keyword
-      (if cn (str (string/replace s r "") "copy" (inc n)) (str s "copy1")))))
+  (keyword (gensym 'copy)))
 
 (defn gts [s] (add-defaults (:selectmovesize (:tool-state s))))
 (defn sts [s ts] (assoc-in s [:tool-state :selectmovesize] ts))
@@ -112,28 +108,31 @@
 
 ; Inkscape-like tool:
 (defn get-tool []
- {:render (fn [s] (let [ts (gts s) zoom (last (:camera s))] 
+  {:render (fn [s] (let [ts (gts s) zoom (last (:camera s))] 
                     (apply draw-box-handle (/ *handle-size* zoom) (:corner-mode s) (:xxyy ts))))
-  :mousePressed (fn [mevt-c s] 
-                  (let [ts (gts s) x (:X mevt-c) y (:Y mevt-c)
+   :mousePressed (fn [mevt-c s]
+                   (let [ts (gts s) x (:X mevt-c) y (:Y mevt-c)
                         comps (:components s) target (click-test mevt-c ts (last (:camera s)))
                         khit (under-cursor x y comps)
                         insta-drag? (and (= target :miss) khit)   
-                        ts (assoc ts :corner-mode (if insta-drag? :main-rect target))]
+                        ts (assoc ts :fresh-press? true :corner-mode (if insta-drag? :main-rect target))]
                     (cond insta-drag?
                       (let [comp (get comps khit) pos (:position comp) sz (:size comp)
                             ts (assoc ts :xxyy [(first pos) (+ (first pos) (first sz)) (second pos) (+ (second pos) (second sz))])] 
                         (assoc (sts s ts) :selected-comp-keys (hash-set khit)))
-                      (= target :miss) (uts (assoc s :selected-comp-keys #{}) #(assoc % :xxyy [x x y y] :corner-mode :miss)) ; zero-size rectangle.
+                      (= target :miss) (sts (assoc s :selected-comp-keys #{}) (assoc ts :xxyy [x x y y] :corner-mode :miss)) ; zero-size rectangle.
                       :else (sts s ts))))
   ; Snap to whatever is selected.
   :mouseReleased (fn [mevt-c s] 
-                   (let [ts (gts s) xxyy-loose (:xxyy ts)
-                         sel-kys (if (= (:corner-mode ts) :miss) (apply selected-comp-keys (:components s) xxyy-loose)
+                   (let [ts (gts s)]
+                     (if (:fresh-press? ts) 
+                       (let [xxyy-loose (:xxyy ts)
+                             sel-kys (if (= (:corner-mode ts) :miss) (apply selected-comp-keys (:components s) xxyy-loose)
                                    (:selected-comp-keys s))
-                         xxyy-tight (bounding-xxyy (mapv #(get (:components s) %) sel-kys))
-                         ts (assoc ts :xxyy xxyy-tight :corner-mode :miss)] 
-                     (assoc (sts s ts) :selected-comp-keys sel-kys)))
+                             xxyy-tight (bounding-xxyy (mapv #(get (:components s) %) sel-kys))
+                             ts (assoc ts :fresh-press? false :xxyy xxyy-tight :corner-mode :miss)] 
+                         (assoc (sts s ts) :selected-comp-keys sel-kys))
+                       s)))
   :mouseDragged (fn [mevt-c s] 
                   (let [ts (gts s)
                         xxyy (:xxyy ts) mx1 (:X1 mevt-c) my1 (:Y1 mevt-c) 

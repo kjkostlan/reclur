@@ -1,6 +1,6 @@
-; Syncs multiple components
-; TODO: there is a rare bug that happens when codebox piece(s) are exported and then
-  ; an enclosing piece around them is also exported. May need to edit multicomp to fix or just disable this behavior.
+; Syncs multible components.
+; There is slightly more codebox-fbrowser duplicate or near duplicate code then necessary, but
+; it may make it easier to handle case-specific bugs and easier to read as the individual fns don't have as many branches in them.
 (ns app.multisync
   (:require 
     [clojure.set :as set] [clojure.string :as string]
@@ -13,308 +13,129 @@
 
 ;;;;;;;;;;;;;;;;; Simple collection stuff ;;;;;;;;;;;;;;;;;
 
-(defn ?conj [v x] (if v (conj v x) [x]))
-
-(defn nil-assert [comps msg] 
-  (filterv #(if (not (get comps %)) (throw (Exception. (str msg)))) (keys comps)))
-
 (defn comp-eq? [c0 c1]
   (= (:pieces c0) (:pieces c1)))
+
 (defn comps-eq? [cs0 cs1]
   (or (= cs0 cs1)
     (= (mapv :pieces (vals cs0))
        (mapv :pieces (vals cs1)))))
 
-(defn ty? [comp]
-  (or (= (:type comp) :fbrowser) (= (:type comp) :codebox)))
+(defn map-filter [m f]
+  (reduce #(assoc %1 %2 (get m %2)) {} (filterv #(f (get m %)) (keys m))))
 
-(defn filterk [comps kys]
-  "Keeps kys that are in comps"
-  (let [kys (if (set? kys) kys (apply hash-set kys))]
-    (reduce #(if (contains? comps %2) %1 (disj %1 %2)) kys kys)))
+(defn ?conj [v x] (if v (conj v x) [x]))
 
-;;;;;;;;;;;;;;;;; Family functions ;;;;;;;;;;;;;
+(defn nil-assert [comps msg] 
+  (filterv #(if (not (get comps %)) (throw (Exception. (str msg)))) (keys comps)))
 
-(defn get-uspaths [comp exported-only?] "In order for codebox. Includes the :fname-gui fbrowser codebox linkage."
-  (cond (and exported-only? (= (:type comp) :codebox))
-    (codebox/uspaths-with-export comp)  
-    (= (:type comp) :codebox)
-    (codebox/splay-out comp)
-    (and exported-only? (= (:type comp) :fbrowser))
-    (let [all-p (keys (fbrowser/all-paths comp))] 
-      (filterv #(let [piece (get-in comp %)] (or (:export-marker piece) (:fname-gui piece))) all-p))
-    (= (:type comp) :fbrowser)
-    (into [] (keys (fbrowser/all-paths comp))
-    :else (throw (Exception. "Only :fbrowser and :codebox is supported or needed for synching.")))))
+;;;;;;;;;;;;;;;;; More specific collection stuff ;;;;;;;;;;;;;;;;;
 
-(defn export-markers [comp] "same order as (get-uspaths comp true). Includes the :fname-gui"
-  (mapv #(let [p (get-in comp %)]
-           (if-let [m (:export-marker p)] m (:fname-gui p))) (get-uspaths comp true)))
+(defn getty [ty comps] (let [kys (filterv #(= (:type (get comps %)) ty) (keys comps))]
+                                  (zipmap kys (mapv #(get comps %) kys))))
 
-(defn export-paths [comp] "Same order as export-markers."
-  (cond (= (:type comp) :codebox)
-    (let [n (count (export-markers comp)) ph (:path comp)]
-      (mapv #(conj ph %) (range n)))
-    (= (:type comp) :fbrowser)
-    (let [us2disk (fbrowser/all-paths comp) usp (get-uspaths comp true)] 
-      ; devec connections:
-      (mapv #(let [disk-vec (get us2disk %)]
-               (if (:export-marker (get-in comp %)) disk-vec [(fbrowser/devec-file disk-vec)])) usp))
-    :else (throw (Exception. "Only :fbrowser and :codebox is supported or needed for synching."))))
+(defn uspath2chpath [comp]
+  "Map from internal paths within comp (i.e. for use with assoc-in and get-in)
+   To the path that a child component would have."
+  (let [ty (:type comp)]
+    (cond (= ty :fbrowser) (fbrowser/all-paths comp)
+      (= ty :codebox) (let [ph (:path comp) usphs (codebox/uspaths-with-export comp)]
+                        (zipmap usphs (mapv #(conj ph %) (range (count usphs)))))
+      :else (throw (Exception. "uspath2chpath only for fbrowsers and codeboxes.")))))
 
-(defn children [comps k]
-  "Only one level. Includes fbrowser -> codebox connections, where the path devectorizes."
-  (let [c (get comps k) ty (:type c) 
-        chpaths (apply hash-set (export-paths c))]
-    (filterv #(let [ci (get comps %)]
-                (or (and (= (:type ci) ty)
-                      (get chpaths (:path ci)))
-                  (and (= (:type c) :fbrowser)
-                    (= (:type ci) :codebox)
-                    (= (count (:path ci)) 1)
-                    (= (first (:path ci)) (fbrowser/devec-file (:path c))))))
-     (keys comps))))
+(defn chpath2uspath [comp]
+  (let [us2ch (uspath2chpath comp)]
+    (zipmap (vals us2ch) (keys us2ch)))) ; shouldn't have any duplicates.
 
-(defn descendents [comps k]
-  "Multible levels."
-  (let [ch (children comps k)]
-    (into [] (apply concat ch (mapv #(descendents comps %) ch)))))
+(defn uspath2chtag [comp]
+  (let [u2c (uspath2chpath comp)]
+    (map-filter (zipmap (keys u2c) (mapv #(::childtag (get-in comp %)) (keys u2c))) 
+      #(and % (> (count %) 0)))))
 
-(defn padres [comps k]
-  "Only one level, multiple parents when they are copied around, etc. Included fbrowser -> codebox connections."
-  (let [c (get comps k) ty (:type c) ph (:path c)]
-    (if (not c) (throw (Exception. (str "nil component for key:" k))))
-    (if (not (:type c)) (throw (Exception. "Somewhere the :type was vanished.")))
-    (filterv #(let [ci (get comps %) phi (:path ci)]
-                (or
-                  (and (= (:type ci) ty :fbrowser) ; fbrowser -> fbrowser
-                    (< (count phi) (count ph))
-                    (= phi (subvec ph 0 (count phi)))
-                    (let [exp-paths (apply hash-set (export-paths ci))]
-                      (contains? exp-paths ph)))
-                  (and (= (:type ci) ty :codebox) ; codebox -> codebox.
-                    (= (count phi) (dec (count ph))) 
-                    (= phi (subvec ph 0 (count phi))))
-                  (and (= (:type ci) :fbrowser) ; codebox -> fbrowser
-                    (= (:type c) :codebox)
-                    (= (count (:path c)) 1)
-                    (= (first (:path c)) (fbrowser/devec-file (:path ci))))))
-     (keys comps))))
+(defn chk2chpath [comp multi?]
+  "Mapping from child keys to child paths, used to update child paths.
+   Multi false: If a child key is mapped to multible paths this fn will only return one of them.
+   Multi true: Always returns a vector of paths."
+  (let [us2ch (uspath2chpath comp) 
+        us2ch-kvecs (uspath2chtag comp)
+        
+        chk2us (reduce (fn [a uspath] ; map from children's keys to the uspaths (for the ix'th component).
+                         (let [cks (get us2ch-kvecs uspath)
+                               inner-fn (if multi? (fn [acc k] (update acc k #(?conj % uspath))) #(assoc %1 %2 uspath))]
+                           (reduce inner-fn a cks)))
+                       {} (keys us2ch-kvecs))        
+        chk2ch (if multi? (zipmap (keys chk2us) (mapv (fn [k] (mapv #(get us2ch %) (get chk2us k))) (keys chk2us)))
+                 (zipmap (keys chk2us) (mapv #(get us2ch (get chk2us %)) (keys chk2us))))
+        chk2ch (map-filter chk2ch #(and % (> (count %) 0)))] chk2ch))
+
+(defn update-paths [comps ck2ch-last ck2ch]
+  "Also deletes components if they are found in the old and not the new.
+   ck2ch-last and ck2ch are the old and new child -> paths maps."
+  (reduce (fn [acc k]
+            (let [ch-path (get ck2ch k)] ; if the link is still there make sure the path is up-to-date.
+              (cond (and (not ch-path) (not (get ck2ch-last k))) ; our path is not in a changed component.
+                acc
+                (not ch-path) ; our path is no more.
+                (dissoc acc k)
+                (not= (get-in acc [k :path]) ch-path) ; changed path.
+                (assoc-in acc [k :path] ch-path) 
+                :else acc)))
+    comps (keys comps)))
 
 (defn twins [comps k]
-  "Twins have the same :type and :path. Does not include ourselves."
+  "Twins have the same :type and :path. Does not include ourselves.
+   These family fns are NOT based on the ::childtag, they are inferred
+   from the paths and structure within a component."
   (let [c (get comps k) ty (:type c) ph (:path c)]
     (filterv #(and (= (:path (get comps %)) ph) (= (:type (get comps %)) ty) (not= % k)) (keys comps))))
 
-;;;;;;;;;;;;;;;;; :export-marker handling ;;;;;;;;;;;;;;;
-; I tried simply setting the export marker to the key of components, it didn't work well when components were copied, so this extra complexity seems hard to avoid.
+(defn fbrowser-children [comps k]
+  "The parent fbrowser must contain an exported child to count,
+   just bieng up the hierarchy is not enough."
+  (let [c (get comps k) ph (:path c)]
+    (filterv #(fbrowser/parent? c (get comps %))
+             (keys comps))))
 
-(defn path-old2paths-new [comp-old comp-new]
-  "Multiple paths in case of pasted text, or [] if the path is deleted."
-  (let [path2marker-old (zipmap (export-paths comp-old) (export-markers comp-old)) ; export-markers for the OLD should be unique.
-        expm-new (export-markers comp-new) expp-new (export-paths comp-new)
-        marker2paths-new (reduce (fn [acc ix] (update acc (nth expm-new ix) #(?conj % (nth expp-new ix)))) {} 
-                           (range (count expm-new)))]
-    (reduce #(if-let [phs (get marker2paths-new (get path2marker-old %2))] 
-               (assoc %1 %2 phs) (assoc %1 %2 [])) {} (keys path2marker-old))))
+(defn codebox-children [comps k]
+  "Only one level for codeboxes."
+  (let [c (get comps k) ph (:path c)]
+    (filterv #(let [ci (get comps %) phi (:path ci)]
+                (and (= (:type ci) :codebox)
+                  (= (count phi) (inc (count ph)))
+                  (= (subvec phi 0 (count ph)) ph))) 
+      (keys comps))))
 
-(defn unique-markers [comp]
-  "Run this AFTER updating any children. Only :export-markers are uniqueified, not the :fname-gui pieces."
-  (let [uspaths (get-uspaths comp true) markers (export-markers comp)
-        markers1 (first (reduce (fn [acc m] [(conj (first acc) (if (get (second acc) m) (gensym "pastetext") m))
-                                             (conj (second acc) m)]) [[] #{}] markers))]
-    (if (= markers markers1) comp              
-      (reduce #(let [uspath (nth uspaths %2)]
-                 (if (:export-marker (get-in %1 uspath))
-                   (assoc-in %1 (conj (nth uspaths %2) :export-marker) (nth markers1 %2)) %1))
-        comp (range (count uspaths))))))
+(defn codebox-padres [comps k]
+  "Same rules as children but what we are a child of."
+  (let [c (get comps k) ph (:path c)]
+    (filterv #(let [ci (get comps %) phi (:path ci)]
+                (and (= (:type ci) :codebox)
+                  (= (count ph) (inc (count phi)))
+                  (= (subvec ph 0 (count phi)) phi))) 
+      (keys comps))))
+      
+(defn fbrowser-padres [comps k]
+  "Same rules as children but what we are a child of."
+  (let [c (get comps k) ph (:path c)]
+    (filterv #(fbrowser/parent? (get comps %) c)
+             (keys comps))))
 
-(defn reset-fname-gui [box codebox-files]
-  "Run this AFTER updating any children, Resets the fnamegui to match the path."
-  (if (= (:type box) :fbrowser)
-    (let [us2disk (fbrowser/all-paths box)]
-      (reduce #(if (:fname-gui (get-in %1 %2)) 
-                 (let [file (fbrowser/devec-file (get us2disk %2))]
-                   (if (not (get codebox-files file)) ; we no longer have the codebox open, so remove :fname-gui
-                     (assoc-in %1 %2 (dissoc (get-in %1 %2) :fname-gui))
-                     (assoc-in %1 (conj %2 :fname-gui) file))) %1) box (keys us2disk))) box))
+(defn codebox-descendents [comps k]
+  "Multible levels."
+  (let [ch (codebox-children comps k)]
+    (into [] (apply concat ch (mapv #(codebox-descendents comps %) ch)))))
 
-;;;;;;;;;;;;;;;;; Twin codebox and partially-twin fbrowser updating ;;;;;;;;;;;;;
-
-(defn filepath2export?-1 [box]
-  "Map of filepaths to whether the comp is exported"
-  (if (= (:type box) :fbrowser) 
-    (let [us2disk (fbrowser/all-paths box)]
-      (zipmap (vals us2disk) (mapv #(:exported? (get-in box %)) (keys us2disk))))
-    {}))
-
-(defn filepath2export? [comps kys] "Multi version, where all have to be exported."
-  (let [paths2exs (mapv #(filepath2export?-1 (get comps %)) kys)]
-    (reduce (fn [acc p2e] (reduce (fn [acci p] (update acci p #(and % (get p2e p)))) acc (keys p2e))) {} paths2exs)))
-
-(defn _hard-miss? [fpath2export? p]
-  "Non-exported deleted p."
-  (and (not (contains? fpath2export? p))
-    (let [pr (reductions conj [] p) ; stubs of increasing sizes.
-          p0 (last (filterv #(contains? fpath2export? %) pr))]
-      (and p0 (not (get fpath2export? p0))))))
-
-(defn compute-fbrowser-diffs [box fpath2export?]
-  "fpath2export? is on across all components that may have changed."
-  (let [disk (apply hash-set (vals (fbrowser/all-paths box)))
-        us2disk (fbrowser/all-paths box) ;disk2us (zipmap (vals us2disk) (keys us2disk))
-        disk2val (zipmap (vals us2disk) (mapv #(let [x (get-in box %)] {:folder? (fbrowser/folder? x) :fullname0 (:fullname0 x)}) (keys us2disk)))
-        ; fbrowser automatically ignores additions that happen to exported paths, so extra additions here wouldn't hurt us.
-          ; But their removal makes it easier to reason about and debug.
-
-        us-fpath2export? (filepath2export?-1 box)
-
-        news (mapv #(vector :add % (get disk2val %))
-               (filterv #(_hard-miss? us-fpath2export? %)
-                 (reduce (fn [acc p]
-                           (if (contains? disk p) acc (conj acc p))) [] (keys fpath2export?))))
-        dels (mapv #(vector :remove %) 
-               (reduce (fn [acc p]
-                         (if (_hard-miss? fpath2export? p) (conj acc p) acc)) [] disk))]
-    (into [] (concat dels news))))
-
-(defn sync-fbrowsers [comps-new kys-diff]
-  (if (= (count (filterv #(= (:type (get comps-new %) :fbrowser)) kys-diff)) 0) comps-new
-    (let [gttr #(if (and % (= (:type %) :codebox)) ((:unwrapped-tree (:interact-fns %)) %) [])
-
-          path2ex?-from-diffs (filepath2export? comps-new kys-diff)]
-      (reduce (fn [acc k]
-                (let [box (get acc k)]
-                  (if (= (:type box) :fbrowser)
-                    (let [diffs (compute-fbrowser-diffs box path2ex?-from-diffs)
-                          box1 ((:implement-diffs (:interact-fns box)) box diffs)]
-                      (assoc acc k box1)) acc))) comps-new (keys comps-new)))))
-(defn _fnameguifiles [box]
-  (let [us2disk (fbrowser/all-paths box) disk2us (zipmap (vals us2disk) (keys us2disk))]
-    (filterv #(:fname-gui (get-in box (get disk2us %))) (keys disk2us))))
-(defn spread-fname-gui [comps-new kys-diff]
-  "Makes sure all fbrowsers have the :fname-gui key."
-  (let [fb? #(= (:type (get comps-new %)) :fbrowser) fbks (filterv fb? kys-diff)
-        fname-guis (apply hash-set (apply concat (mapv #(_fnameguifiles (get comps-new %)) fbks)))]
-    (if (= (count fbks) 0) comps-new
-      (reduce (fn [acc k] 
-                (let [box (get acc k) us2disk (fbrowser/all-paths box) disk2us (zipmap (vals us2disk) (keys us2disk))
-                      box1 (reduce #(if-let [usp (get disk2us %2)] (do #_(println "spread fname-gui: " usp %2) (assoc-in %1 (conj usp :fname-gui) %2)) %1) 
-                             box fname-guis)] 
-                  (assoc acc k box1)))
-        comps-new (filterv fb? (keys comps-new))))))
-
-(defn single-codebox-sync [leader-twin follower-twin]
-  "Codeboxes are a bit easier than fbrowsers since only twins will need synching."
-  (if (comp-eq? leader-twin follower-twin) follower-twin
-    (let [rs-gold (codebox/real-strings leader-twin)
-          rs (codebox/real-strings follower-twin) n (count rs)]
-      (if (= n (count rs-gold))
-        (reduce #(let [eds (stringdiff/edits-between (nth rs %2) (nth rs-gold %2))]
-                   (codebox/apply-edits-to-real-string %1 eds %2)) follower-twin (range n))
-        ; Less common, occurs when the user copies removes a child piece,
-        ; Not ideal just to steamroll everything, TODO: improve this.
-        (let [follower1 (assoc follower-twin :pieces (:pieces leader-twin) :precompute (:precompute leader-twin))
-              vis-edits (stringdiff/edits-between (rtext/rendered-string follower-twin) (rtext/rendered-string follower1))]
-          (rtext/cursor-scroll-update follower-twin follower1 vis-edits))))))
-
-(defn sync-codeboxes [comps-new kys-diff]
-  (let [comps-new1 (reduce (fn [acc k]
-                             (let [twns (twins acc k) c (get acc k)]
-                               (reduce #(assoc %1 %2 (single-codebox-sync c (get %1 %2))) acc twns))) 
-                     comps-new (filterk comps-new kys-diff))] comps-new1))
-
-(defn total-sibling-update [comps-new kys-diff]
-  "Makes sure comps-new is self-consistent, i.e. twins have the same content."
-  (let [getty (fn [ty comps] (let [kys (filterv #(= (:type (get comps %)) ty) (keys comps))]
-                               (zipmap kys (mapv #(get comps %) kys))))
-        tys (apply hash-set (mapv :type (vals comps-new)))]
-        ; Only the fbrowser syncs, the codebox has a seperate sync:
-   (apply merge 
-     (mapv #(cond (= % :fbrowser) (sync-fbrowsers (getty % comps-new) kys-diff)
-              (= % :codebox) (sync-codeboxes (getty % comps-new) kys-diff)
-              :else (getty % comps-new)) tys))))
-
-;;;;;;;;;;;;;;;;; Descendent updating (only changes the :path, or copies or deletes comps) ;;;;;;;;;;;;;;;;
-
-(defn also-delete-descendents [comps k-gone]
-  "Comps must NOT have k-gone removed just yet."
-  (reduce dissoc (dissoc comps k-gone) (descendents comps k-gone)))
-
-(defn also-repath-descendents [comps k-changedpath new-path]
-  "Comps must NOT have the path changed just yet."
-  (let [comp (get comps k-changedpath) ph (:path comp) n (count ph)
-        fb? (= (:type comp) :fbrowser)
-        
-        repath (fn [box] (update box :path #(if (and fb? (= (:type box) :codebox)) (into [] (fbrowser/devec-file new-path) (rest %)) 
-                                              (into [] (concat new-path (subvec % n))))))]
-    (reduce (fn [acc k] (update acc k repath)) 
-      (assoc-in comps [k-changedpath :path] new-path)
-      (descendents comps k-changedpath))))
-
-(defn shift-copies [comps target-ks]
-  "Shifts so they arent perfectly on top of eachother. The first copy isnt a copy"
-  (let [target-ks (sort-by #(:path (get comps %)) target-ks) ; some reasonable sort.
-        pos0 (:position (get comps (first target-ks))) pix 20 n (count target-ks)]
-    (reduce (fn [acc ix] (update acc (nth target-ks ix) 
-                           #(assoc % :position [(+ (first pos0) (* pix ix)) (+ (second pos0) (* pix ix))])))
-      comps (range n))))
-
-(defn make-copies-with-descendents [comps target-k new-paths]
-  "Only adds copies when (count new-paths) > 1"
-  (let [packets (mapv (fn [new-ph]
-                        (let [comps1 (also-repath-descendents comps target-k new-ph)
-                              ofks1 (conj (descendents comps1 target-k) target-k)]
-                          (zipmap ofks1 (mapv #(get comps1 %) ofks1)))) new-paths)
-        n (count packets)
-        kys (keys (first packets))
-        groups (mapv (fn [k] (let [k1s (conj (mapv (fn [_] (gensym "rabbit")) (range (dec n))) k)]
-                               (shift-copies (zipmap k1s (mapv #(get % k) packets)) k1s))) kys)]
-    (apply merge comps groups)))
-
-(defn update-descendents [comps-old comps-new k]
-  "The effects of changing the comp assoc with k from comps-old to comps-new. k must be in both comps-old and comps-new"
-  (let [comp-old (get comps-old k) comp-new (get comps-new k)]
-    (if (comp-eq? comp-old comp-new) comps-new
-      (let [path-old2news (path-old2paths-new comp-old comp-new)
-            ; not sure if can-del? is needed, but seems safer given unique-markers changes the markers in the copy-paste case.
-            can-del? (= (count (set/difference (apply hash-set (export-markers comp-new)) (apply hash-set (export-markers comp-old)))) 0)]
-        ; Dont use descendents, use path-old2news, since the comps-new can break the descendents path. 
-        (reduce (fn [acc ki]
-                  (let [comp-new (get acc ki)]
-                    (if comp-new ; sometimes the comp is deleted by an earlier change.
-                      (let [new-paths (get path-old2news (:path comp-new))
-                            np (if new-paths (count new-paths) 0)]
-                        (cond (and can-del? new-paths (= np 0)) ; empty means delete, nil means leave alone.
-                          (also-delete-descendents acc ki)
-                          (= np 0) acc
-                          :else (make-copies-with-descendents acc ki new-paths)))
-                       acc)))
-          comps-new (filterv #(ty? (get comps-new %)) (keys comps-new)))))))
-
-(defn total-descendent-update [comps-old comps-new kys-diff]
-  "kys-diff is a superset of changed, added, and deleted elements."
-  (if (comps-eq? comps-old comps-new) comps-new
-    (let [kys-mod-del (apply hash-set (filterv #(let [old (get comps-old %) new (get comps-new %)]
-                                                  (and (not (comp-eq? old new))
-                                                    (or (= (:type new) :fbrowser) (= (:type new) :codebox))))
-                                        (keys comps-old)))
-          comps-new1 (reduce (fn [acc k]
-                       (if (get acc k) (update-descendents comps-old acc k)
-                         (also-delete-descendents (assoc acc k (get comps-old k)) k))) comps-new kys-mod-del)
-          codebox-files (apply hash-set (reduce #(if (= (:type %2) :codebox) (conj %1 (first (:path %2))) %1) [] (vals comps-new1)))
-          comps-new2 (reduce (fn [acc k] (update acc k #(reset-fname-gui % codebox-files)))
-                       comps-new1 (filterk comps-new1 kys-diff))
-          comps-new3 (reduce (fn [acc k] (update acc k #(unique-markers %)))
-                       comps-new2 (filterk comps-new2 kys-diff))]
-      comps-new3)))
+(defn fbrowser-descendents [comps k]
+  "Multible levels."
+  (let [ch (fbrowser-children comps k)]
+    (into [] (apply concat ch (mapv #(fbrowser-descendents comps %) ch)))))
 
 ;;;;;;;;;;;;;;;;; Line number sync ;;;;;;;;;;;;;;;;;
 
-(defn string-path+ [comps fname-alias]
-   "Ordered [string path], where path extends one beyond the :path with an indexed of 0,1,2,... number of real strings-1
-    If multible codeboxes have the same path one is chosen arbitrarily, the choice doesn't matter if we are in a consistant state."
-   (let [codeboxks (filterv #(and (= (first (:path (get comps %))) fname-alias) (= (:type (get comps %)) :codebox)) (keys comps))
+(defn string-path+ [comps fname]
+   "Ordered [string path] tuples, where path extends one beyond the :path with an indexed of 0,1,2,... number of real strings-1
+    If multible codeboxes have the same path one is chosen arbitrarily; the choice doesn't matter if we are in a consistant state."
+   (let [codeboxks (filterv #(and (= (first (:path (get comps %))) fname) (= (:type (get comps %)) :codebox)) (keys comps))
          n (count codeboxks)
          ; only one ky per path:
          codeboxks (loop [acc [] paths #{} ix 0]
@@ -328,9 +149,9 @@
          formats (fn [p] (apply str (mapv #(if (number? %) (format "%09d" %) %) p)))]
      (into [] (sort-by #(formats (second %)) spath+)))) ; alphabetical order if numbers are padded with zeros.
 
-(defn compute-linenums [comps fname-alias]
-  (let [s-pathP-tuples (string-path+ comps fname-alias)
-        codeboxks (filterv #(and (= (first (:path (get comps %))) fname-alias) (= (:type (get comps %)) :codebox)) (keys comps))
+(defn compute-linenums [comps fname]
+  (let [s-pathP-tuples (string-path+ comps fname)
+        codeboxks (filterv #(and (= (first (:path (get comps %))) fname) (= (:type (get comps %)) :codebox)) (keys comps))
         path-to-kys (reduce (fn [m k] (let [p (:path (get comps k))] ; to vector of keys.
                                         (update m p #(if % [k] (conj % k))))) {} codeboxks)
         countnl (fn [s] (count (string/split (str "_" s "_") #"\n")))
@@ -348,20 +169,268 @@
   (let [kys (keys comps-new)
         kdiffs (filterv #(let [c0 (get comps-old %) c1 (get comps-new %)] 
                            (and (= (:type c1) :codebox) (not (comp-eq? c0 c1)))) kys)
-        fnames (apply hash-set (mapv #(first (:path (get comps-new %))) kys))]
+        fnames (apply hash-set (mapv #(first (:path (get comps-new %))) kdiffs))]
     (reduce compute-linenums comps-new fnames)))
 
-;;;;;;;;;;;;;;;;; The global update function ;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;; Updating fns ;;;;;;;;;;;;;;;;;;;;;;;;
+; Be careful with which thing is used for the old one, it is explained in the docstring.
+
+(defn copy-with-descendents [components k-copy-me new-kys new-paths]
+  "Copies all descendents of comp into comp-copies, adjusting the child id and path."
+  (let [comp (get components k-copy-me)
+        desc (if (= (:type comp) :codebox) (codebox-descendents components k-copy-me) (fbrowser-descendents comp))
+        ;_ (println "desc is:" desc)
+        shft #(assoc %1 :position (mapv + (:position %1) [(* 15 %2) (* 15 %2)])
+                     :z (+ (:z %1) %2))
+        n (count new-kys) nd (count desc)
+        old-path-n (count (:path comp))
+        components1 (reduce (fn [acc ix] ; outer loop through all new keys.
+                              (let [new-k (nth new-kys ix) new-toppath (nth new-paths ix) ; new-toppath is the path at the top.
+                                    desc-old2new-ks (zipmap desc (mapv (fn [_] (gensym "src")) (range nd))) ; the desc get these keys.
+                                    nus (into [] (vals desc-old2new-ks))
+                                    upd-chtag (fn [c] (let [us2t (uspath2chtag c)] ; update ::childtag to reflect the new keys.
+                                                        (reduce (fn [ci usph] (update-in ci (conj usph ::childtag)
+                                                                                     #(get desc-old2new-ks %)))
+                                                                c (keys us2t))))
+                                    upd-path #(assoc % :path (into [] (concat new-toppath (subvec (:path %) old-path-n))))
+                                    upd-comp #(shft (upd-path (upd-chtag %)) ix) ; all updating needed.
+                                    acc1 (assoc acc new-k (upd-comp comp))] ; top level comp.
+                                (reduce #(assoc %1 (nth nus %2) (upd-comp (get %1 (nth desc %2))))
+                                        acc1 (range nd)))) ;all descendents.
+                            components (range n))]
+    components1))
+
+(defn copy-export-realize [components kys-diff]
+  "If there was a copy of an exported piece in one or more components, then apply the changes to kys-diff."
+  (reduce
+   (fn [acc kdiff]
+     (let [comp (get acc kdiff)
+           chk2chpaths (chk2chpath comp true) ; will keys map to multible paths?
+           ; Only unique paths:
+           chk2chpaths (zipmap (keys chk2chpaths) (mapv #(into [] (apply hash-set %)) (vals chk2chpaths)))
+           ch2us (chpath2uspath comp)
+           n (count chk2chpaths) kys (into [] (keys chk2chpaths))]
+       (loop [acci acc compi comp ix 0] ; modify both the comp's ::childtag and add stuff to comps.
+         (if (= ix n) (assoc acci kdiff comp)
+             (let [k (nth kys ix) phs (get chk2chpaths k)
+                   phs (into [] (sort-by (fn [p] (apply + (filterv number? p))) phs))] ; sorting for aesthetics.
+               (if (= (count phs) 1) ; only one path => no need to copy.
+                 (recur acci compi (inc ix))
+                 (let [ni (count phs)
+                       new-ks (conj (mapv #(keyword (gensym (str "pop" %)))
+                                          (range (dec ni))) k)
+                       ch-comp (get acci k)
+                       compi1 (reduce #(assoc-in %1 (conj (get ch2us (nth phs %2)) ::childtag) (nth new-ks %2)) compi (range ni))
+
+                       ;acci1 (reduce #(assoc %1 (nth new-ks %2) (assoc ch-comp :path (nth phs %2))) acci (range ni))
+                       acci1 (copy-with-descendents acci k new-ks phs)] ; copy us and all descendents.
+                   (recur acci1 compi1 (inc ix)))))))))
+   components kys-diff))
+
+(defn single-codebox-sync [leader-twin follower-twin]
+  "Twins are codeboxes with the same :path."
+  (if (comp-eq? leader-twin follower-twin) follower-twin
+    (let [rs-gold (codebox/real-strings leader-twin)
+          rs (codebox/real-strings follower-twin) n (count rs)]
+      (if (= n (count rs-gold))
+        (reduce #(let [eds (stringdiff/edits-between (nth rs %2) (nth rs-gold %2))]
+                   (codebox/apply-edits-to-real-string %1 eds %2)) follower-twin (range n))
+        ; Less common, occurs when the user copies removes a child piece,
+        ; Not ideal just to steamroll everything, TODO: improve this.
+        (let [follower1 (assoc follower-twin :pieces (:pieces leader-twin) :precompute (:precompute leader-twin))
+              vis-edits (stringdiff/edits-between (rtext/rendered-string follower-twin) (rtext/rendered-string follower1))]
+          (rtext/cursor-scroll-update follower-twin follower1 vis-edits))))))
+
+(defn update-fbrowser-step [fbrowsers-last fbrowsers]
+  "One step update on fbrowsers.
+   fbrowsers-last is the fbrowsers from one step earlier, either before the state modification or before the last call of this fn.
+   Call this until convergence, as descendents may be modified and in turn modify their descendents.
+   Use this as the first update step."
+  (let [kys0 (apply hash-set (keys fbrowsers-last)) 
+        kys1 (apply hash-set (keys fbrowsers))
+        kys-new (set/difference kys1 kys0) kys-del (set/difference kys0 kys1)
+        kys-diff (apply hash-set (filterv #(not (comp-eq? (get fbrowsers-last %) (get fbrowsers %))) (set/intersection kys0 kys1)))
+        
+        ; Changed parents causing update paths of children or deleting children:
+        ck2ch-last (apply merge (mapv #(chk2chpath (get fbrowsers-last %) false) kys-diff))  
+        ck2ch (apply merge (mapv #(chk2chpath (get fbrowsers %) false) kys-diff))          
+        fbrowsers1 (update-paths fbrowsers ck2ch-last ck2ch)
+        
+        ; Deleted parents causing deleted children (must check to ensure the filepath is not in some other component).
+        ; Not the most efficient code since we have to check everything but only invokes when stuff is deleted.
+        delete-these (if (= (count kys-del) 0) #{}
+                       (let [keep-tags (apply hash-set 
+                                         (apply concat (apply concat (mapv #(vals (uspath2chtag %)) (vals fbrowsers1)))))]
+                         (set/difference (keys fbrowsers1) keep-tags)))
+        fbrowsers2 (reduce dissoc fbrowsers1 delete-these)
+       
+        ; Calculate diffs due to changed components:
+        ; A deleted component won't actively delete any files, and we have it set up that closing a component retracts back into the parent.
+        ; However, deleting stuff within a changed component WILL cause changes.
+        
+        ; Changed components imposing diffs (only uses old changes, but this is iterative so should propagate through):
+        kys-diff2 (apply hash-set (filterv #(get fbrowsers2 %) kys-diff))
+        files-old (apply hash-set (apply concat (mapv #(vals (fbrowser/all-paths (get fbrowsers-last %))) kys-diff2)))
+        files-new (apply hash-set (apply concat (mapv #(vals (fbrowser/all-paths (get fbrowsers2 %))) kys-diff2)))
+        files-add (set/difference files-new files-old)
+        fname2folder? (apply merge
+                        (mapv (fn [k] (let [comp (get fbrowsers2 k) us2fl (fbrowser/all-paths comp)]
+                                        (zipmap (vals us2fl) 
+                                          (mapv #(fbrowser/folder? (get-in comp %)) (keys us2fl))))) kys-diff2))
+        folder?s-add (mapv #(get fname2folder? %) files-add)
+        files-del (set/difference files-old files-new)
+        
+        ; Delete b4 add:
+        diffs (into [] (concat (mapv #(vector :remove (fbrowser/vec-file %)) files-del)
+                         (mapv #(vector :add (fbrowser/vec-file %1) {:folder? %2}) files-add folder?s-add)))
+        
+        fbrowsers3 (if (= (count diffs) 0) fbrowsers2 ; applying diffs everywhere is not the fastest... 
+                      (reduce (fn [acc k] (update acc k #(fbrowser/implement-diffs % diffs))) 
+                              fbrowsers2 (keys fbrowsers2)))
+
+        ; Copy children when there are multible paths mapping to the same ::chtag. This occurs when i.e. you copy a section of code with an expanded child in it:
+        fbrowsers4 (copy-export-realize fbrowsers3 kys-diff)
+        ]
+    fbrowsers4))
+
+(defn codebox-topk2kys [codeboxes0 kys]
+ "Map from top-level keys to child keys."
+  (let [kys (filterv #(get codeboxes0 %) kys)
+        get-pA #(first (:path (get %1 %2)))
+        all-kys (keys codeboxes0)]
+    (zipmap kys
+      (mapv (fn [k]
+              (let [p (get-pA codeboxes0 k)]
+                (filterv #(and (not= % k) (= (get-pA codeboxes0 %) p)) all-kys)))
+            kys))))
+
+(defn update-fbrowser-codebox [fbrowsers0 fbrowsers codeboxes0 codeboxes]
+  "Updates the fbrowsers -> codeboxes linkages, changing paths or deleting when necessary.
+   fbrowser0 and codeboxes0 is before the modification.
+   Call this after updating fbrowsers.
+   Returns the updated codeboxes."
+  (let [kys0 (apply hash-set (keys fbrowsers0)) 
+        kys1 (apply hash-set (keys fbrowsers))
+        kys-new (set/difference kys1 kys0) kys-del (set/difference kys0 kys1)
+        kys-diff (apply hash-set (filterv #(not (comp-eq? (get fbrowsers0 %) (get fbrowsers %))) (set/intersection kys0 kys1)))
+        
+        ck2ch0 (apply merge (mapv #(chk2chpath (get fbrowsers0 %) false) (set/union kys-del kys-diff)))  
+        ck2ch (apply merge (mapv #(chk2chpath (get fbrowsers %) false) kys-diff))
+        
+        ;_ (if (= (count kys-diff) 1) (println "ck2ch stuff:" kys-del kys-diff ck2ch0 ck2ch "guess stuff:" (chk2chpath (get fbrowsers0 (first kys-diff)) false)))
+        
+        ; Change these to deveced paths to drag codebox paths along:
+        dv (fn [m] (zipmap (keys m) (mapv #(vector (fbrowser/devec-file %)) (vals m))))
+        ck2ch0 (dv ck2ch0) ck2ch (dv ck2ch)
+
+        ; Also change children:
+        kys0-codebox (keys codeboxes0) kys1-codebox (keys codeboxes)
+        ;topk2kys0 (codebox-topk2kys codeboxes0 (keys ck2ch0))
+        topk2kys (codebox-topk2kys codeboxes (keys ck2ch))
+
+        ck2ch0 (reduce (fn [acc k] (let [kys (if-let [x (get topk2kys k)] x [])
+                                         p0 (get ck2ch0 k)]
+                                     (merge acc (zipmap kys (mapv #(into [] (concat p0 (rest (:path (get codeboxes %))))) kys)))))
+                       ck2ch0 (keys ck2ch0))
+        ck2ch (reduce (fn [acc k] (let [kys (if-let [x (get topk2kys k)] x [])
+                                        p0 (get ck2ch k)]
+                                     (merge acc (zipmap kys (mapv #(into [] (concat p0 (rest (:path (get codeboxes %))))) kys)))))
+                       ck2ch (keys ck2ch))
+        
+        codeboxes1 (update-paths codeboxes ck2ch0 ck2ch)]
+    codeboxes1))
+
+(defn update-codebox-step [codeboxes-last codeboxes]
+  "One step update on codeboxes.
+   codeboxes-last is the codeboxes from one step earlier, either before the state modification or before the last call of this fn.
+   Call this until convergence, as descendents may be modified and in turn modify their descendents.
+   Use this after update-fbrowser-codebox."
+  (let [kys0 (apply hash-set (keys codeboxes-last)) 
+         kys1 (apply hash-set (keys codeboxes))
+         kys-new (set/difference kys1 kys0) kys-del (set/difference kys0 kys1)
+         kys-diff (apply hash-set (filterv #(not (comp-eq? (get codeboxes-last %) (get codeboxes %))) (set/intersection kys0 kys1)))
+        
+         ; Changed parents causing update paths of children or deleting children:
+         ck2ch-last (apply merge (mapv #(chk2chpath (get codeboxes-last %) false) (set/union kys-del kys-diff)))  
+         ck2ch (apply merge (mapv #(chk2chpath (get codeboxes %) false) kys-diff)) 
+         codeboxes1 (update-paths codeboxes ck2ch-last ck2ch)
+         
+         ; Twin updatings (same paths, diff only as del has no effect here):
+         ph2ks (if (> (count kys-diff) 0) ; path to vector of keys.
+                (reduce (fn [acc k] (update acc (:path (get codeboxes1 k)) #(?conj %1 k))) {} 
+                  (keys codeboxes1)) {})
+         
+         codeboxes2 (reduce (fn [acc k]
+                              (let [leader (get codeboxes1 k)
+                                    ph (:path leader)
+                                    all-with-p (apply hash-set (get ph2ks ph))
+                                    twins (disj all-with-p k)]
+                                (reduce (fn [acci ki] (update acci ki #(single-codebox-sync leader %))) acc twins))) 
+                            codeboxes1 kys-diff)
+
+         ; Copy children when there are multible paths mapping to the same ::chtag. This occurs when i.e. you copy a section of code with an expanded child in it:
+         codeboxes3 (copy-export-realize codeboxes2 kys-diff)
+        ] codeboxes3))
+
+(defn update-keytags [comps0 comps1]
+  "Use this AFTER synching.
+   Comps0 should be fully synched and up to date, can be empty for the initialization.
+   Comps1 is the modified and synced comps0, which we use to diff comps0."
+; Differential: only non comp-eq? comps, and new comps, need to be updated if they are :fbrowser or :codebox.
+; Each ::childtag is a vectors of keys of expanded children and fbrowser opening codebox keys, all children are listed.
+;   All pieces, and children thereof, etc get a ::childtag for all children that are relevant to the pieces.
+; A [] and nil ::childtag is the same for our purposes.
+; This is different from the comp's internal :exported? tags.
+                                        ; If structural editing then set everything at once (simpler this way).
+  ;(println "update keytags")
+  (let [codeboxes0 (getty :codebox comps0) codeboxes1 (getty :codebox comps1)
+        fbrowsers0 (getty :fbrowser comps0) fbrowsers1 (getty :fbrowser comps1)
+        combined0 (merge codeboxes0 fbrowsers0) combined1 (merge codeboxes1 fbrowsers1)
+        
+        structural? (or (not= (sort (mapv pr-str (keys combined0)))
+                              (sort (mapv pr-str (keys combined1))))
+                      (first (filter #(let [c0 (get combined0 %) c1 (get combined1 %)]
+                                        (and (not (comp-eq? c0 c1))
+                                             (not= (uspath2chpath c0) (uspath2chpath c1))))
+                               (keys combined0))) 
+                        (keys combined1))
+        
+        comps2 (if structural? ; a low bar to clear to recalculate everything...
+                 (let [path2kys1 (reduce (fn [acc k]
+                                           (let [c (get combined1 k) ph (:path c)
+                                                 acc1 (update acc ph #(?conj % k))
+                                                 _ (if (and (= (:type c) :codebox) (string? (:path c))) (throw (Exception. "Codebox got a string path somehow")))
+                                                 acc2 (if (and (= (:type c) :codebox) (= (count ph) 1)) ;Vec codebox paths as well to handle fbrowser -> codebox cases.
+                                                        (update acc1 (fbrowser/vec-file (first ph)) #(?conj % k)) acc1)] acc2 
+                                                )) {} (keys combined1))
+                       update1 (fn [comp]
+                                 (let [us2ch (uspath2chpath comp)]
+                                   (reduce (fn [acc usph]
+                                             (let [usph1 (conj usph ::childtag)
+                                                   chph (get us2ch usph) ; chph = path of hypothetical children.
+                                                   x0 (get-in acc usph1) x1 (get path2kys1 chph)]
+                                               (cond (= x0 x1) acc
+                                                     (or (not x1) (= (count x1) 0)) (do #_(println "unbinding:" (:type comp) usph) (assoc-in acc (conj usph ::childtag) []))
+                                                     :else (do #_(println "binding: " (:type comp) usph x1) (assoc-in acc (conj usph ::childtag) x1)))))
+                                     comp (keys us2ch))))]
+                   (reduce (fn [acc k] (update acc k update1)) comps1 (keys combined1))))]
+    comps2))
 
 (defn comprehensive-sync [comps0 comps1]
-  "Not really iterativly, as multible iterations of total-descendent-update cause bugs.
-   Not sure the best one to go first."
-  (let [get-ky-diff (fn [cA cB] (apply hash-set (filterv #(not (comp-eq? (get cA %) (get cB %)))
-                                                  (apply hash-set (concat (keys cA) (keys cB))))))
-        comps2 (total-sibling-update comps1 (get-ky-diff comps0 comps1))
-        comps3 (total-descendent-update comps0 comps2 (get-ky-diff comps0 comps2))
-        comps4 (total-sibling-update comps3 (get-ky-diff comps0 comps3))
-        ; spread-fname-gui is not handled in this sync, it is handled elsewhere.
-        ] comps4))
-
-;;;;;;;;;;;;;;;;;;;; Getting and setting files ;;;;;;;;;;;;;;;
+  (let [fbrowsers0 (getty :fbrowser comps0) fbrowsers1 (getty :fbrowser comps1)
+        fbsync (loop [old fbrowsers0 new fbrowsers1 n 0]
+                 (if (= n 512) (throw (Exception. "Iterative fbrowser sync is (probably) not converging."))
+                   (let [new1 (update-fbrowser-step old new)]
+                     (if (= new new1) new1 (recur new new1 (inc n))))))
+        codeboxes0 (getty :codebox comps0) codeboxes1 (getty :codebox comps1)
+        cbsync1 (update-fbrowser-codebox fbrowsers0 fbsync codeboxes0 codeboxes1)
+        
+        cbsync2 (loop [old codeboxes0 new cbsync1 n 0]
+                  (if (= n 512) (throw (Exception. "Iterative codebox sync is (probably) not converging."))
+                    (let [new1 (update-codebox-step old new)]
+                      (if (= new new1) new1 (recur new new1 (inc n))))))
+        
+        kothers (filterv #(let [ty (:type (get comps1 %))]
+                            (and (not= ty :codebox) (not= ty :fbrowser))) (keys comps1))
+        others (zipmap kothers (mapv #(get comps1 %) kothers))]
+    (sync-line-nums comps0 (update-keytags comps0 (merge others fbsync cbsync2)))))

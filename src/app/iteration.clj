@@ -130,7 +130,7 @@
         open (apply hash-set (mapv #(first (:path (get comps %))) codeboxks))
         new2?old (multicomp/new2?old-files s)
         open2text (zipmap (into [] open)
-                    (mapv #(multicomp/get-filetext s %) (into [] open)))
+                    (mapv #(multicomp/open-cache s %) (into [] open)))
         get-old (fn [new] (if-let [x (get new2?old new)] x new))
         old2new (dissoc (zipmap (vals new2?old) (keys new2?old)) nil false)
 

@@ -15,10 +15,8 @@
 
 ; No child UI is planned in the near future.
 (defn expandable? [mouse-evt box] false)
-(defn expand-child [mouse-evt marker box] (throw (Exception. "No plans to implement siconsole child-UI.")))
+(defn expand-child [mouse-evt box] (throw (Exception. "No plans to implement siconsole child-UI.")))
 (defn contract-child [box child] (throw (Exception. "No plans to implement siconsole child-UI.")))
-(defn unwrapped-tree [box] [])
-(defn implement-diffs [box diffs] box)
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -36,4 +34,4 @@
    :mouseMoved (fn [_ box] box)
    :expandable? expandable?
    :expand-child expand-child :contract-child contract-child
-   :is-child? (fn [box] false) :unwrapped-tree unwrapped-tree :implement-diffs implement-diffs})
+   :is-child? (fn [box] false)})
