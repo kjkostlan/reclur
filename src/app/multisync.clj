@@ -178,8 +178,7 @@
 (defn copy-with-descendents [components k-copy-me new-kys new-paths]
   "Copies all descendents of comp into comp-copies, adjusting the child id and path."
   (let [comp (get components k-copy-me)
-        desc (if (= (:type comp) :codebox) (codebox-descendents components k-copy-me) (fbrowser-descendents comp))
-        ;_ (println "desc is:" desc)
+        desc (if (= (:type comp) :codebox) (codebox-descendents components k-copy-me) (fbrowser-descendents comp k-copy-me))
         shft #(assoc %1 :position (mapv + (:position %1) [(* 15 %2) (* 15 %2)])
                      :z (+ (:z %1) %2))
         n (count new-kys) nd (count desc)
@@ -219,9 +218,8 @@
                  (let [ni (count phs)
                        new-ks (conj (mapv #(keyword (gensym (str "pop" %)))
                                           (range (dec ni))) k)
-                       ch-comp (get acci k)
+                       ch-comp (get acci k)                       
                        compi1 (reduce #(assoc-in %1 (conj (get ch2us (nth phs %2)) ::childtag) (nth new-ks %2)) compi (range ni))
-
                        ;acci1 (reduce #(assoc %1 (nth new-ks %2) (assoc ch-comp :path (nth phs %2))) acci (range ni))
                        acci1 (copy-with-descendents acci k new-ks phs)] ; copy us and all descendents.
                    (recur acci1 compi1 (inc ix)))))))))
@@ -349,11 +347,14 @@
          kys1 (apply hash-set (keys codeboxes))
          kys-new (set/difference kys1 kys0) kys-del (set/difference kys0 kys1)
          kys-diff (apply hash-set (filterv #(not (comp-eq? (get codeboxes-last %) (get codeboxes %))) (set/intersection kys0 kys1)))
+
+        ; Copy children when there are multible paths mapping to the same ::chtag. This occurs when i.e. you copy a section of code with an expanded child in it:
+        codeboxes (copy-export-realize codeboxes kys-diff)
         
          ; Changed parents causing update paths of children or deleting children:
          ck2ch-last (apply merge (mapv #(chk2chpath (get codeboxes-last %) false) (set/union kys-del kys-diff)))  
          ck2ch (apply merge (mapv #(chk2chpath (get codeboxes %) false) kys-diff)) 
-         codeboxes1 (update-paths codeboxes ck2ch-last ck2ch)
+        codeboxes1 (update-paths codeboxes ck2ch-last ck2ch)
          
          ; Twin updatings (same paths, diff only as del has no effect here):
          ph2ks (if (> (count kys-diff) 0) ; path to vector of keys.
@@ -366,11 +367,8 @@
                                     all-with-p (apply hash-set (get ph2ks ph))
                                     twins (disj all-with-p k)]
                                 (reduce (fn [acci ki] (update acci ki #(single-codebox-sync leader %))) acc twins))) 
-                            codeboxes1 kys-diff)
-
-         ; Copy children when there are multible paths mapping to the same ::chtag. This occurs when i.e. you copy a section of code with an expanded child in it:
-         codeboxes3 (copy-export-realize codeboxes2 kys-diff)
-        ] codeboxes3))
+                            codeboxes1 kys-diff)    
+        ] codeboxes2))
 
 (defn update-keytags [comps0 comps1]
   "Use this AFTER synching.
@@ -428,8 +426,7 @@
         cbsync2 (loop [old codeboxes0 new cbsync1 n 0]
                   (if (= n 512) (throw (Exception. "Iterative codebox sync is (probably) not converging."))
                     (let [new1 (update-codebox-step old new)]
-                      (if (= new new1) new1 (recur new new1 (inc n))))))
-        
+                      (if (= new new1) new1 (recur new new1 (inc n))))))        
         kothers (filterv #(let [ty (:type (get comps1 %))]
                             (and (not= ty :codebox) (not= ty :fbrowser))) (keys comps1))
         others (zipmap kothers (mapv #(get comps1 %) kothers))]
