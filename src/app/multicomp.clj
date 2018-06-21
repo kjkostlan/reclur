@@ -165,9 +165,10 @@
                        bump-ix (count (:path (get comps k-parent)))
                        shift (- 1 n-embed-ch)]
                  (reduce (fn [acc k] (update-in acc [:components k :path bump-ix]
-                                       #(if (>= % (+ export-ix n-embed-ch)) (+ % shift) %))) s1 desc)) s)]
-        (-> s1 (assoc-in [:components k-parent] (assoc new-parent :position (:position comp0)))
-          (assoc-in [:components k-child] (assoc new-child :position pos1 :z (inc (:z new-parent)))))) s)))
+                                       #(if (>= % (+ export-ix n-embed-ch)) (+ % shift) %))) s1 desc)) s)
+              s2 (assoc-in s1 [:components k-parent] (assoc new-parent :position (:position comp0)))
+              s3 ((:add-component (:layout s2)) s2 (assoc new-child :position pos1 :z (inc (:z new-parent))) k-child)] 
+        s3) s)))
 
 (defn contract-child [parent child]
   (assoc ((:contract-child (:interact-fns parent)) (dissoc parent :position) (dissoc child :position)) :position (:position parent)))

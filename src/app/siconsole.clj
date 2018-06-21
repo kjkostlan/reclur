@@ -1,14 +1,23 @@
 ; Just a place to print results, eventual TODO of browsing features and macro log file location.
 (ns app.siconsole
- (:require [app.rtext :as rtext]))
+ (:require [app.rtext :as rtext]
+   [app.colorful :as colorful]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(def ^:dynamic *max-text-length* 10000) 
+
 (declare interact-fns) ; Possible dependency cycle with the new function being used by some interact fns.
+
+(defn colorize [s pieces piece-ixs char-ix0 char-ix1]
+  "Use colorfulness."
+  (let [max-ix (if-let [x (last piece-ixs)] x 0)
+        cols (mapv #(conj (colorful/cmdix2rgb %) 1) (range (inc max-ix)))]
+    (mapv #(nth cols %) piece-ixs)))
 
 (defn new-console []
   (assoc rtext/empty-text :interact-fns (interact-fns) 
-  :outline-color [0 0.75 0 1] :path "console" :type :siconsole :show-line-nums? false))
+  :outline-color [0 0.75 0 1] :path "console" :type :siconsole :show-line-nums? false :colorize-fn colorize))
 
 (defn get-text [box]
   (:text (first (:pieces box))))
@@ -25,11 +34,21 @@
     (if (or (= (:type ed) :arrow) (= (:type ed) :copy)) (rtext/key-press key-evt box) box)))
 
 (defn log1 [console msg]
-  (let [max-text-ln 10000 ; performance tradeoff. Needs to increase if we get more performance in the rtexts.
-        s (str (get-text console) "\n" msg)
-        console1 (assoc console :scroll-top 1000000000000)
-        s1 (if (> (count s) max-text-ln) (subs s (- (count s) max-text-ln)) s)]
-    (rtext/scroll-bound (set-text console1 s1))))
+  (let [pieces0 (:pieces console)
+        msg1 (if (= (str (last msg)) "\n") msg (str msg "\n"))
+        pieces1 (conj pieces0 {:text msg1}) ; add the msg as a separate piece.
+        ; Remove old stuff:
+        starting-ixs (into [] (reductions + (mapv #(count (:text %)) pieces1)))
+        cut-ix (- (last starting-ixs) *max-text-length*) ; stuff before this gets cut.
+        
+        pieces2 (mapv (fn [st p] (update p :text #(subs % (min (count %) (max 0 (- cut-ix st)))))) 
+                   starting-ixs pieces1)
+        first-nz-ix (if-let [x (first (filter #(> (count (:text (nth pieces2 %))) 0) (range (count pieces2))))] x (count pieces2))
+        gran (colorful/num-cmd-cycle)
+        pieces3 (into [] (subvec pieces2 (* (int (/ (int first-nz-ix) (int gran))) (int gran))))
+        
+        console1 (assoc console :pieces pieces3 :scroll-top 1000000000000)]
+    (rtext/scroll-bound console1)))
 
 (defn log [s msg]
   "Logs msg to all consoles in s. Includes the newline."

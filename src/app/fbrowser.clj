@@ -232,8 +232,9 @@
 
 (defn recursive-unwrap [folder]
   "Recursively lists and unwraps all files in folder."
-  (mapv #(devec-file (second %))
-    (all-paths (load-from-folder folder))))
+  (let [folder (devec-file (if (= folder "") "." folder))]
+    (mapv #(devec-file (second %))
+                (all-paths (load-from-folder folder)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Interactions beyond the usual rtext interactions.

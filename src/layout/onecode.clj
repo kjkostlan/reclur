@@ -40,13 +40,18 @@
     (update (assoc-in s [:precompute :desync-safe-mod?] true) 
       :components #(assoc % kwd (assoc comp :z z)))))
 
+(defn add-then [s comp kwd f]
+  "Adds a component then applys f to it; f is applied after positioning."
+  (let [s1 (add-component s comp kwd false)]
+    (update-in s1 [:components kwd] f)))
+
 (defn goto-code [s k key-is-file? char-ix0 char-ix1]
   "Manipulates s by going to the filename or component between char-ix0 and char-ix1.
    If there is something already open within view we can simply use it, otherwise open a new component.
    for key-is-file? we go to the real text in char-ix0 and char-ix1, which may involve opening a component.
    Otherwise we go to the component specified."
   (if key-is-file? ; the more complex one that may make a new component if need be and must go to the char-ix on the real string.
-    (let [kys-cixs (multicomp/who-has s k char-ix0) ;[keys real-ix-within-component char-ix-within-piece]
+    (let [kys-cixs (multicomp/who-has s k char-ix0) ;[codeboxkys real-ix-within-component char-ix-within-piece]
           kys (first kys-cixs) ; only matching comps.
 
           comps (:components s)
@@ -67,22 +72,26 @@
                     (< (max fracx fracy) threshold-on-screen))
                  (range (count comp-uxxyys))))
           ky (if kyix (nth kys kyix))
-          jx0 (last kys-cixs) jx1 (+ jx0 (- char-ix1 char-ix0))]
-      ;(println "goto: " char-ix0 char-ix1 ky kys)
+          jx0 (last kys-cixs) jx1 (+ jx0 (- char-ix1 char-ix0))
+          who-has? (> (count kys) 0)
+          hilite #(rtext/scroll-to-see-cursor
+                   (if who-has? (codebox/select-on-real-string % (second kys-cixs) jx0 jx1)
+                       (codebox/select-on-real-string % 0 char-ix0 char-ix1)))]
       (cond ky ; The comp is close enough, move to the key and adjust the key to select us.
-            (let [comp1 (codebox/select-on-real-string (get comps ky) (second kys-cixs) jx0 jx1)]
-              (assoc s :components (assoc comps ky comp1)))
-        (> (count kys) 0) ; no comps close enough, but can copy one of them (must make a copy since all exported stuff must be in agreement).
-        (let [comp (get comps (first kys))
-              comp1 (codebox/select-on-real-string comp (second kys-cixs) jx0 jx1)
+            (update-in s [:components ky] hilite)
+            who-has? ; no comps close enough, but can copy one of them (must make a copy since all exported stuff must be in agreement).
+        (let [comp (get comps (first kys)) ; copy and move this comp.
               ky1 (keyword (gensym 'goto-target))]
-          (assoc-in s [:components ky1] (pos-newcommer s comp1)))
+          (add-then s comp ky1 hilite))
         :else ; no comps at all, must make them.
-        (let [comp1 (multicomp/load-from-file comps k) ky1 (keyword (gensym 'goto-target))]
-          (assoc-in s [:components ky1]
-                    (rtext/scroll-to-see-cursor
-                     (assoc comp1 :cursor-ix char-ix0
-                            :selection-start char-ix0 :selection-end char-ix1))))))))
+        (let [comp (multicomp/load-from-file comps k)
+              ky1 (keyword (gensym 'goto-target))]
+          (add-then s comp ky1 hilite))))
+    (let [comp (get-in s [:components k])
+          _ (if (not comp) (throw (Exception. "Nil component for dumb search.")))
+          ; Dumb text-as-is search:
+          comp1 (assoc comp :cursor-ix char-ix0 :selection-start char-ix0 :selection-end char-ix1)]
+      (assoc-in s [:components k] (rtext/scroll-to-see-cursor comp1)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Compile it all together ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

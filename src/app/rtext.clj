@@ -55,6 +55,7 @@
    :line-no-standoff-chars 2.5
    :lines-above-top-allowed 1 ; free up space for rendering the path.
    :line-fontsz-mult 0.8
+   :scroll-see-cursor-oneline-shift? true
    :fit-to-text-margin 1}) ; extra space so that the text doesn't get cutoff. Only used in the fit-to-text fn.
 
 (defn remove-empty [pieces]
@@ -467,12 +468,13 @@
 (defn scroll-to-see-cursor [box]
   "Scrolls just enough to make the cursor visible."
   (let [box (v box) xy (cursor-ix-to-ugrid box) x (first xy) y (second xy)
+        sh? (:scroll-see-cursor-oneline-shift? *text-params*) ; so the title doesn't intefere.
         scx (fn [n dx] (update n :scroll-left #(+ % (long dx))))
         scy (fn [n dy] (update n :scroll-top #(+ % (long dy))))
         vr (view-range box) ; [top bottom left right].
         t (first vr) b (second vr) l (nth vr 2) r (nth vr 3)
         boxx (cond (< x l) (scx box (- x l)) (> (dec x) r) (scx box (- (dec x) r)) :else box)
-        boxxy (cond (< y t) (scy boxx (- y t)) (> y b) (scy boxx (- y b)) :else boxx)] 
+        boxxy (cond (< y t) (scy boxx (+ (- y t) (if sh? -1 0))) (> y b) (scy boxx (- y b)) :else boxx)] 
     (scroll-bound boxxy)))
 
 (defn cursor-scroll-update [box box1 vis-edits]

@@ -52,30 +52,30 @@
 (defn set-up-search [s opts] 
   (let [comps (:components s)
         sel-keys (:components opts)
-        ; ts (get-in s [:tool-state ::strfind])
-        ; :searches = vector of [k char-ix0 char-ix1], k = comp key used for :dumb-text?, filename if otherwise.
-        ; :search-ix = index on searches that will be selected next.
+                                        ; ts (get-in s [:tool-state ::strfind])
+                                        ; :searches = vector of [k char-ix0 char-ix1], k = comp key used for :dumb-text?, filename if otherwise.
+                                        ; :search-ix = index on searches that will be selected next.
         simple? (:dumb-text? opts)
         
-        ; Texts, in order of key name or filename:
+                                        ; Texts, in order of key name or filename:
         kys (if simple? (into [] (sort sel-keys))
-              (let [file-groups (mapv #(let [c (get comps %) ty (:type c) ph (:path c)]
-                                         (cond (= ty :codebox) [(first ph)]
-                                            (= ty :fbrowser) (filterv jfile/texty? (fbrowser/recursive-unwrap (fbrowser/devec-file ph)))
-                                            :else [])) sel-keys)]
-                (into [] (sort (apply hash-set (apply concat file-groups))))))
-        texts (if simple? (mapv #(rtext/rendered-string (get kys %)) kys)
-                  (mapv #(if (> (count (multicomp/who-has s % 0)) 0) 
+                (let [file-groups (mapv #(let [c (get comps %) ty (:type c) ph (:path c)]
+                                           (cond (= ty :codebox) [(first ph)]
+                                                 (= ty :fbrowser) (filterv jfile/texty? (fbrowser/recursive-unwrap (fbrowser/devec-file ph)))
+                                                 :else [])) sel-keys)]
+                  (into [] (sort (apply hash-set (apply concat file-groups))))))
+        texts (if simple? (mapv #(rtext/rendered-string (get comps %)) kys)
+                  (mapv #(if (> (count (first (multicomp/who-has s % 0))) 0) ; already-open stuff takes priority. 
                            (multicomp/open-cache s %) 
                            (if-let [x (jfile/open %)] x "")) kys))
-        ; Search result groups:
+                                        ; Search result groups:
         result-groups (mapv #(boring-find % (:key opts) (:case? opts)) 
-                        texts)
+                            texts)
         searches (into [] (apply concat 
-                            (mapv (fn [k g] (mapv #(vector k (first %) (second %)) g)) 
-                                  kys result-groups)))]
+                                 (mapv (fn [k g] (mapv #(vector k (first %) (second %)) g)) 
+                                       kys result-groups)))]
     (update-in s [:tool-state ::strfind]
-              #(merge % {:searches searches :search-ix 0 :opts opts}))))
+               #(merge % {:searches searches :search-ix 0 :opts opts}))))
 
 (defn search-step [s opts] 
   (let [ts (get-in s [:tool-state ::strfind])

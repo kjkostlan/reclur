@@ -4,6 +4,8 @@
 (defn clamp01 [v]
   (mapv #(cond (< % 0) 0.0 (> % 1) 1.0 :else (double %)) v))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; codebox coloring ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defn hsv2rgb [hsv]
   ; 0-1 scale.
   (clamp01
@@ -50,3 +52,10 @@
         b (if (= level 0) 1 (+ 0.87 (* 0.08 (mod level 2))))
         h (nth hvals (mod (dec level) (count hvals)))
         s (if (<= level (count hvals)) 1 0.5)] (hsl2rgb [h s b])))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; siconsole coloring ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn num-cmd-cycle [] 5)
+(defn cmdix2rgb [cmd-ix]
+  (let [brt (mod (/ cmd-ix (double (num-cmd-cycle))) 1.0)]
+    [(Math/pow brt 1.0) (+ 0.5 (* (Math/pow brt 0.333) 0.4999)) (Math/pow brt 0.5)]))
