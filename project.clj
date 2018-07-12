@@ -14,6 +14,7 @@
                  [com.cemerick/pomegranate "0.0.11"]
                  [com.fifesoft/rsyntaxtextarea "2.5.0"]
                  [org.clojure/tools.nrepl "0.2.12"]
+                 [rewrite-clj "0.6.0"]
                  ;[org.clojars.charles-stain/lwjgl "3.0"]
                  ;[jogl2 "0.1.0"]
                  ;[net.java.dev.jogl/jogl "1.1.1a"]

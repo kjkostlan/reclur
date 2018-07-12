@@ -3,11 +3,11 @@
  (:require [clojure.string :as string]
    [app.rtext :as rtext]
    [app.fbrowser :as fbrowser]
-   [coder.fsmparse :as fsmparse]
    [app.colorful :as colorful]
+   [app.stringdiff :as stringdiff]
    [javac.file :as jfile]
    [clojure.string :as string]
-   [app.stringdiff :as stringdiff]))
+   [coder.langs :as langs]))
 
 ; The global rtext contains a language protocol in :lang that is used for text coloring and 
 ; contraction/expansion, etc.
@@ -34,7 +34,7 @@
 
 (defn set-precompute [box]
   (let [inter-levels (cond (= (:lang box) :clojure)
-                       (fsmparse/depth-clojure (rtext/rendered-string box))
+                       ((:depth (:clojure langs/supported-langs)) (rtext/rendered-string box))
                         :else (throw (Exception. ":lang wasn't set to a useful thing.")))
         ; Inclusive indents.
         levels (mapv max (butlast inter-levels) (rest inter-levels))]
