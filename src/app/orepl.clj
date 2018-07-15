@@ -6,7 +6,8 @@
     [app.rtext :as rtext]
     [javac.clipboard :as clipboard] 
     [javac.file :as jfile]
-    [javac.exception :as jexc]))
+    [javac.exception :as jexc]
+    [coder.plurality :as plurality]))
 
 ; The rtext has three pieces: 
 ; The first is the text entered. The second is a newline. The last is the repl's output.
@@ -55,36 +56,47 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Running the repl ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(def r-ns *ns*)
+
 (def _state-atom (atom {})) ; only used locally for the mutation-free run-standard-repl function.
 (defn set-state [s-new] "No effect outside of repl." (reset! _state-atom s-new))
 (defn swap-state [f] "No effect outside of repl." (swap! _state-atom f))
 
-(def this-ns *ns*)
+(defn shift-enter? [key-evt] (and (:ShiftDown key-evt) (= (:KeyCode key-evt) 10)))
 
-(defn cmd?-parse [s gaucmds-recognized-cmd?] 
+(defn recognized-cmd? [sym] (boolean (ns-resolve r-ns sym)))
+
+(defn cmd?-parse [s] 
   "Sugar. Returns [cmd-sym, [arg symbols]] if a valid cmd shorthand, otherwise returns nil."
   (let [tokens (string/split s #"[, ;]+")
         sym (if (> (count tokens) 0) (symbol (first tokens)))]
-    (if (and sym (gaucmds-recognized-cmd? sym))
+    (if (and sym (recognized-cmd? sym))
       [sym (mapv read-string (rest tokens))])))
 
 (defn run-standard-repl [s repl-k txt]
     (reset! _state-atom s)
     (let [result (try (let [code (read-string txt)] ; internal mutation of _state-atom possible.
-                        (try (let [y (str (binding [*ns* this-ns] (eval code)))]
+                        (try (let [y (str (binding [*ns* r-ns] (eval code)))]
                                (limit-length y))
                              (catch Exception e (limit-length (str "Runtime error:\n" (pr-error e))))))
                      (catch Exception e (limit-length (str "Syntax error: " e))))]
       (assoc-in @_state-atom [:components repl-k :pieces 2 :text] result)))
 
-(defn run-cmd [s cmd-sym arg-symbols repl-k gaucmds-run-cmd]
+(defn _run-cmd [s cmd-sym args]
+  "Returns the modified state."
+  ; TODO: add a sort of spell-check.
+  (if (recognized-cmd? cmd-sym) 
+    (let [tool-fn (binding [*ns* r-ns] (eval cmd-sym))] 
+      (apply tool-fn s args))
+    (throw (Exception. (str "Unrecognized command: " cmd-sym)))))
+(defn run-cmd [s cmd-sym arg-symbols repl-k]
   "Special cmd sequence that is more like shell scripting."
-  (let [args (binding [*ns* this-ns] (mapv #(if (symbol? %) (eval %) %) arg-symbols))]
-    (try (gaucmds-run-cmd s cmd-sym args)
+  (let [args (binding [*ns* r-ns] (mapv #(if (symbol? %) (eval %) %) arg-symbols))]
+    (try (_run-cmd s cmd-sym args)
       (catch Exception e
         (assoc-in s [:components repl-k :pieces 2 :text] (limit-length (str "Cmd err: " e)))))))
 
-(defn run-repl [s repl-k gaucmds-recognized-cmd? gaucmds-run-cmd] 
+(defn run-repl [s repl-k] 
   ; TODO: put repls on another process with it's own threads.
   ; The other process has no windows (headless).
   ; Sync our namespace variables with that process.
@@ -97,8 +109,8 @@
     ; Crashes can leak into here but at least this gives us a way to modify the gui.
   (let [box (get-in s [:components repl-k])
         txt (:text (first (:pieces box)))]
-    (if-let [x (cmd?-parse txt gaucmds-recognized-cmd?)] 
-      (run-cmd s (first x) (second x) repl-k gaucmds-run-cmd)
+    (if-let [x (cmd?-parse txt)] 
+      (run-cmd s (first x) (second x) repl-k)
       (run-standard-repl s repl-k txt))))
  
 (defn ensure-three-pieces [box]
@@ -191,18 +203,30 @@
 (defn expand-child [mouse-evt box] (throw (Exception. "No plans to implement orepl child-UI.")))
 (defn contract-child [box child] (throw (Exception. "No plans to implement orepl child-UI.")))
 
+(defn dispatch-heavy [evt s k]
+  "Running the repl may affect s, depending on the command. This is agnostic to which repl is focused, i.e the k value."
+  (if (and (= (:type evt) :keyPressed) (shift-enter? evt))
+    (reduce #(if (= (:type (get (:components %1) %2)) :orepl)
+               (run-repl %1 %2) %1) s (:selected-comp-keys s)) s))
+
+(def dispatch 
+  (plurality/->simple-multi-fn
+    {:mousePressed rtext/mouse-press
+     :mouseDragged rtext/mouse-drag
+     :mouseWheelMoved rtext/mouse-wheel
+     :keyPressed key-press
+     :keyReleased rtext/key-release}
+     (fn [e-clj comp] comp)
+     (fn [e-clj comp] (:type e-clj))))
+
 (defmacro updaty-fns [code] 
   (let [a1 (gensym 'args)] 
     (zipmap (keys code) (mapv #(list `fn ['& a1] (list `apply % a1)) (vals code)))))
 (defn interact-fns []
   (updaty-fns
-  {:mousePressed rtext/mouse-press
-   :mouseDragged rtext/mouse-drag
-   :keyPressed key-press
+  {:dispatch dispatch 
+   :dispatch-heavy dispatch-heavy
    :render rtext/render
-   :keyReleased rtext/key-release
-   :mouseWheelMoved rtext/mouse-wheel
-   :everyFrame (fn [_ box] box)
    :mouseMoved (fn [_ box] box)
    :expandable? expandable?
    :is-child? (fn [box] false)

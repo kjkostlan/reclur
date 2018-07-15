@@ -7,7 +7,8 @@
    [app.stringdiff :as stringdiff]
    [javac.file :as jfile]
    [clojure.string :as string]
-   [coder.langs :as langs]))
+   [coder.langs :as langs]
+   [coder.plurality :as plurality]))
 
 ; The global rtext contains a language protocol in :lang that is used for text coloring and 
 ; contraction/expansion, etc.
@@ -465,18 +466,22 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(def dispatch 
+  (plurality/->simple-multi-fn
+    {:mousePressed mouse-press
+     :keyPressed key-press
+     :keyReleased rtext/key-release
+     :mouseDragged rtext/mouse-drag
+     :mouseWheelMoved rtext/mouse-wheel}
+     (fn [e-clj comp] comp)
+     (fn [e-clj comp] (:type e-clj))))
+
 (defmacro updaty-fns [code] 
   (let [a1 (gensym 'args)] 
     (zipmap (keys code) (mapv #(list `fn ['& a1] (list `apply % a1)) (vals code)))))
 (defn interact-fns [] (updaty-fns
-  {:mousePressed mouse-press
-   :mouseDragged rtext/mouse-drag
-   :keyPressed key-press
-   :keyReleased rtext/key-release
-   :mouseWheelMoved rtext/mouse-wheel
-   :everyFrame (fn [_ box] box)
+  {:dispatch dispatch
    :render rtext/render
-   :mouseMoved (fn [_ box] box)
    :expandable? expandable?
    :expand-child expand-child :contract-child contract-child
    :is-child? (fn [box] (> (count (:path box)) 1))})) 

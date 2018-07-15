@@ -27,9 +27,7 @@
     [app.iteration :as iteration]
     [search.strfind :as strfind]))
 
-(def this-ns *ns*)
-
-(declare launch-main-app!!) ; avoids a circular dependency with launch main app.
+(declare launch-main-app!!) ; avoids a circular dependency with launch main app depending on earlier fns.
 
 ;;;;;;;;;;;;;;;; Library of commands ;;;;;;;;;;;;;;;;;;;;;
 
@@ -63,8 +61,6 @@
 
 ;;;;;;;;;;;;;;;; Keyboard interaction with hotkeys ;;;;;;;;;;;;;;;;;;;;;
 
-(defn shift-enter? [key-evt] (and (:ShiftDown key-evt) (= (:KeyCode key-evt) 10)))
-
 (defn ctrl+? [kevt letter] 
   (and (or (:ControlDown kevt) (:MetaDown kevt)) (not (:ShiftDown kevt))
     (= (str letter) (str (:KeyChar kevt)))))
@@ -94,17 +90,6 @@
    #(ctrl-shift+? % "c") store-state!
    #(ctrl-shift+? % "z") (fn [_] (retrieve-state!))})
 
-;;;;;;;;;;;;;;;; Run by symbol with evals ;;;;;;;;;;;;;;;;;;;;;
-
-(defn recognized-cmd? [sym] (boolean (ns-resolve this-ns sym)))
-
-(defn run-cmd [s cmd-sym args]
-  "Returns the modified state."
-  ; TODO: add a sort of spell-check.
-  (if (recognized-cmd? cmd-sym) 
-    (let [tool-fn (binding [*ns* this-ns] (eval cmd-sym))] 
-      (apply tool-fn s args))
-    (throw (Exception. (str "Unrecognized command: " cmd-sym)))))
 
 ;;;;;;;;;;;;;;;; Adding a component on the top of the z-stack ;;;;;;;;;;;;;;;;;;;;;
 
@@ -134,18 +119,16 @@
     (assoc s1 :components (sync-f (:components s) (:components s1)))))
 
 (defn single-comp-dispatches [evt-c s]
-  ; TODO: something. if (:operate-on-global? comp) but better.
-  ; Easy mode: Just the event to the target component.
-  ; Med mode: give the events.
-  ; Hard mode: give the state as well.
-  ; Harder mode: Give events and the state to all components, with information, but can ignore.
   (let [sel (set/intersection (apply hash-set (keys (:components s))) (apply hash-set (:selected-comp-keys s)))] ; normalize this.
     (reduce 
       (fn [s k]
         (let [comp (get-in s [:components k])
               evt (xform/xevt (xform/x-1 (singlecomp/pos-xform (:position comp))) evt-c)
-              ifn (get (:interact-fns comp) (:type evt-c))
-              comp1 (if ifn (assoc (ifn evt (dissoc comp :position)) :position (:position comp)) comp)]
+              s (let [ifn-heavy (get (:interact-fns comp) :dispatch-heavy)] ; allows modifying s itself.
+                  (if ifn-heavy (ifn-heavy evt s k) s))
+              comp (get-in s [:components k])
+              comp1 (let [ifn (get (:interact-fns comp) :dispatch)]
+                        (if ifn (ifn evt comp) comp))]
          (assoc-in s [:components k] comp1))) 
          (assoc s :selected-comp-keys sel) sel)))
          
@@ -165,11 +148,6 @@
                    :position (mapv + pos (mapv * sz [0.25 0.75])))
             s1 (assoc-in s [:components compk] comp)]
         (add-component s1 cbox (gensym 'codebox))) s)))
-
-(defn maybe-run-repl [evt-g evt-c s k]
-  (if (and (= k :keyPressed) (shift-enter? evt-c))
-    (reduce #(if (= (:type (get (:components %1) %2)) :orepl)
-               (orepl/run-repl %1 %2 recognized-cmd? run-cmd) %1) s (:selected-comp-keys s)) s))
 
 (defn update-mouse [evt-g evt-c s k]
   (if (or (= k :mouseMoved) (= k :mouseDragged)) 
@@ -228,32 +206,38 @@
         (and (or (= ek :mousePressed) (= ek :mouseDragged)) (or meta? ctrl?))) (ut cam)
       :else (ut sms))))
 
-(defn dispatch-listener [evt-g s k] 
+(defn low-cpu-mouse-move [evt-g s]
+  (let [evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g)]
+    (update-mouse evt-g evt-c s :mouseMoved)))
+
+(defn dispatch-listener [evt-g s] 
   "Transforms and dispatches an event (that doesn't change :typing-mode? and :active-tool).
    Only certain changes to f need diff checking."
-  (let [s0 s evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g) 
+  (if (and cpanel/*low-cpu?* (= (:type evt-g) :mouseMoved)) ; don't let mouse moves eat up CPU time.
+    (let [evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g)]
+      (update-mouse evt-g evt-c s :mouseMoved))
+    (let [k (:type evt-g)
+          s0 s evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g) 
+          
+          x (if (= k :parent-in) ; only used to update namespaces for now.
+              (let [txt (:contents evt-g)]
+                (try (eval (read-string txt))
+                  (catch Exception e
+                    (throw (Exception. (str "Eval of: " txt "\n Produced this error: " (.getMessage e)))))))) 
+          s (if x (siconsole/log s (str "Parent command result:\n" x)) s)
+          s (update-mouse evt-g evt-c s k)
         
-        x (if (= k :parent-in) ; only used to update namespaces for now.
-            (let [txt (:contents evt-g)]
-              (try (eval (read-string txt))
-                (catch Exception e
-                  (throw (Exception. (str "Eval of: " txt "\n Produced this error: " (.getMessage e)))))))) 
-        s (if x (siconsole/log s (str "Parent command result:\n" x)) s)
-        s (update-mouse evt-g evt-c s k)
-        
-        s (diff-checkpoint s #(maybe-hotkey evt-g evt-c % k))
-        hk? (boolean (:tmp-hotkey-triggered? s))
-        s (dissoc s :tmp-hotkey-triggered?)]
-    (if hk? s ; hotkeys block other actions.
-      (let [s (diff-checkpoint s #(maybe-run-repl evt-g evt-c % k))
-        
-            ; Typing mode forces single component use.
-            s (if (and (:typing-mode? s) (= k :mousePressed)) (single-select evt-c s) s)
-            s (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c))) 
-                (maybe-use-tool evt-c s (selectmovesize/get-camera-tool))
-                (:typing-mode? s) (diff-checkpoint s #(single-comp-dispatches evt-c %))
-                :else (diff-checkpoint s #(maybe-common-tools evt-c %)))        
-            ] s))))
+          s (diff-checkpoint s #(maybe-hotkey evt-g evt-c % k))
+          hk? (boolean (:tmp-hotkey-triggered? s)) ; a recognized hotkey.
+          s (dissoc s :tmp-hotkey-triggered?)]
+      (if hk? s ; hotkeys block other actions.
+        (let [; Typing mode forces single component use.
+              s (if (and (:typing-mode? s) (= k :mousePressed)) (single-select evt-c s) s)
+              s (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c))) 
+                  (maybe-use-tool evt-c s (selectmovesize/get-camera-tool))
+                  (:typing-mode? s) (diff-checkpoint s #(single-comp-dispatches evt-c %))
+                  :else (diff-checkpoint s #(maybe-common-tools evt-c %)))        
+              ] s)))))
 
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
 
@@ -324,39 +308,24 @@
         err? (instance? java.lang.Exception s1-or-ex) 
         s2 (if err? s s1-or-ex)
         s3 (if (= (count txt) 0) s2 (siconsole/log s2 (str txt "\n")))]
-     (if err? (siconsole/log s3 (orepl/pr-error s1-or-ex)) s3)))
+     (if err? (do (println (orepl/pr-error s1-or-ex)) (siconsole/log s3 (orepl/pr-error s1-or-ex))) s3)))
 
-(defn try-dispatch-listener [evt-g s kwd] ; TODO: superfulus level.
+(defn try-dispatch-listener [evt-g s] ; TODO: superfulus level.
   "Can't use a generic f as input b/c functions won't always get updated when that happens.
    Logs prints within the listener to si-console."
-  (logged-function-run #(dispatch-listener %2 %1 %3) s evt-g kwd))
-
-(defn low-cpu-mouse-move [evt-g s]
-  (let [evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g)]
-    (update-mouse evt-g evt-c s :mouseMoved)))
-
-(defn listener-fns []
-    {:mousePressed (fn [evt-g s] (try-dispatch-listener evt-g s :mousePressed))
-     :mouseMoved   (fn [evt-g s] (if cpanel/*low-cpu?* (low-cpu-mouse-move evt-g s) (try-dispatch-listener evt-g s :mouseMoved)))
-     :mouseDragged (fn [evt-g s] (try-dispatch-listener evt-g s :mouseDragged))
-     :mouseReleased (fn [evt-g s] (try-dispatch-listener evt-g s :mouseReleased))
-     :keyPressed (fn [evt-g s]    (try-dispatch-listener evt-g s :keyPressed))
-     :keyReleased (fn [evt-g s] (try-dispatch-listener evt-g s :keyReleased))
-     :everyFrame (fn [evt-g s] (try-dispatch-listener evt-g s :everyFrame))
-     :mouseWheelMoved (fn [evt-g s] (try-dispatch-listener evt-g s :mouseWheelMoved))
-     :parent-in (fn [evt-g s] (try-dispatch-listener evt-g s :parent-in))})
+  (logged-function-run #(dispatch-listener %2 %1) s evt-g))
 
 (defn launch-main-app!! []
   (cpanel/stop-app!!)
   (let [layout (onecode/layout)
         s {:layout layout :components {} :camera [0 0 1 1] :typing-mode? true :active-tool (first (get-tools))}
         s1 (if (and (globals/can-child?) (not (globals/are-we-child?))) (iteration/ensure-childapp-folder-init!!! s) s)
-            
+        
         s2 ((:initial-position layout) s1 (root-fbrowser s1) (orepl/new-repl) (siconsole/new-console))
         
         s3 (assoc s2 :selected-comp-keys #{})
         s4 (update s3 :components #(multisync/update-keytags {} %))]
-    (cpanel/launch-app!! s4 (listener-fns)
+    (cpanel/launch-app!! s4 (fn [evt-g s] (try-dispatch-listener evt-g s))
       (fn [s] (logged-function-run update-gfx s))
       app-render))) ; keep app-render minimal, no logging is allowed here.
 

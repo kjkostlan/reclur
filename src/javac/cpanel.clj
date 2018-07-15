@@ -76,7 +76,7 @@
           evt (if (or (= kwd :mouseDragged) (= kwd :mouseMoved))
                 (assoc evt :X0 (:X0 extern) :Y0 (:Y0 extern) :X1 (:X1 extern) :Y1 (:Y1 extern)) evt)
           ;_ (println "Removing: " kwd "old queue len" (count (:evt-queue x)) "new queue len: " (count (into [] (rest (:evt-queue x)))))
-          f (get-in x [:listeners kwd])
+          f (:dispatch x)
           new-external (update-external-state evt (:type evt) extern)
           new-state (try (if f (f evt (:app-state x)) (:app-state x))
                       (catch Exception e (println e) (:app-state x)))
@@ -157,7 +157,7 @@
   (future
     (while [true]
       (let [s (try (iteration/get-input) (catch Exception e (do (Thread/sleep 1000) (str "ERROR in iteration/get-input:\\n" (orepl/pr-error e)))))] ; waits here until the stream has stuff in it.
-        (SwingUtilities/invokeLater #(event-queue!! {:contents s} :parent-in)))))) ; all evts are queued on the edt thread, not sure if this is ideal.
+        (SwingUtilities/invokeLater #(event-queue!! {:contents s :type :parent-in} :parent-in)))))) ; all evts are queued on the edt thread, not sure if this is ideal.
 (if (globals/are-we-child?) (add-parentin-listener!))
 
 (defn proxy-panel []
@@ -188,9 +188,9 @@
   (if *mac-keyboard-kludge?* (f)
     (SwingUtilities/invokeAndWait f)))
 
-(defn launch-app!! [init-state evt-fns update-gfx-fn render-fn]
+(defn launch-app!! [init-state dispatch-fn update-gfx-fn render-fn]
   "app is singleton, launching 
-   evt-fns including :everyFrame are (f evt-clj state), we make our own every-frame event.
+   dispatch-fn including is (f evt-clj state), we make our own every-frame event.
    update-gfx-fn is (f state-clj), returns the new state, and should cache any expensive gfx cmds.
    render-fn is (f state-clj) but some render commands are functions on the java object."
   (if *low-cpu?* (println "Low CPU mode, less mouse moves and no animations.")) 
@@ -204,7 +204,7 @@
         (reset! one-atom
                (assoc (empty-state)
                       :app-state init-state
-                      :listeners evt-fns :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn 
+                      :dispatch dispatch-fn :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn 
                       :external-state {}
                       :evt-queue []
                       :JFrame frame :JPanel panel))))))

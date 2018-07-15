@@ -4,7 +4,8 @@
  (:require [javac.file :as jfile]
    [app.rtext :as rtext]
    [clojure.string :as string]
-   [app.stringdiff :as stringdiff]))
+   [app.stringdiff :as stringdiff]
+   [coder.plurality :as plurality]))
 
 ; Each :piece of the our app.gaui.rtext contains:
  ; :text = indentation, an arrow for folders, the filename itselfm and a newline
@@ -455,18 +456,22 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(def dispatch 
+  (plurality/->simple-multi-fn
+    {:mousePressed mouse-press
+     :mouseDragged rtext/mouse-drag
+     :keyPressed key-press
+     :keyReleased rtext/key-release
+     :mouseWheelMoved rtext/mouse-wheel}
+     (fn [e-clj comp] comp)
+     (fn [e-clj comp] (:type e-clj))))
+
 (defmacro updaty-fns [code] 
   (let [a1 (gensym 'args)] 
     (zipmap (keys code) (mapv #(list `fn ['& a1] (list `apply % a1)) (vals code)))))
 (defn interact-fns [] (updaty-fns
-  {:mousePressed mouse-press
-   :mouseDragged rtext/mouse-drag
-   :keyPressed key-press
-   :keyReleased rtext/key-release
-   :mouseWheelMoved rtext/mouse-wheel
-   :everyFrame (fn [_ box] box)
+  {:dispatch dispatch
    :render rtext/render
-   :mouseMoved (fn [_ box] box)
    :expandable? expandable?
    :expand-child expand-child :contract-child contract-child
    :is-child? (fn [box] (> (count (vec-file (:path box))) 1))}))
