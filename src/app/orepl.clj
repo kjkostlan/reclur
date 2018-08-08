@@ -4,11 +4,11 @@
     [clojure.set :as set]
     [app.codebox :as codebox]
     [app.rtext :as rtext]
-    [app.colorful :as colorful]
     [javac.clipboard :as clipboard] 
     [javac.file :as jfile]
     [javac.exception :as jexc]
     [coder.plurality :as plurality]
+    [layout.colorful :as colorful]
     [layout.keybind :as kb]))
 
 ; The rtext has three pieces: 

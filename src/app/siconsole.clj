@@ -1,7 +1,7 @@
 ; Just a place to print results, eventual TODO of browsing features and macro log file location.
 (ns app.siconsole
  (:require [app.rtext :as rtext]
-   [app.colorful :as colorful]
+   [layout.colorful :as colorful]
    [coder.plurality :as plurality]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;;;;;;;;;;;;

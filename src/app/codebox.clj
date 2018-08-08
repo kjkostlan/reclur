@@ -3,12 +3,12 @@
  (:require [clojure.string :as string]
    [app.rtext :as rtext]
    [app.fbrowser :as fbrowser]
-   [app.colorful :as colorful]
    [app.stringdiff :as stringdiff]
    [javac.file :as jfile]
    [clojure.string :as string]
    [coder.langs :as langs]
-   [coder.plurality :as plurality]))
+   [coder.plurality :as plurality]
+   [layout.colorful :as colorful]))
 
 ; The global rtext contains a language protocol in :lang that is used for text coloring and 
 ; contraction/expansion, etc.

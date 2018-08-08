@@ -1,7 +1,7 @@
 ; Lisps love indentation. Lets make it beautiful!
 ; TODO: move to layout/colorful.
 ; TODO: use rgba colors here rather than using a conj.
-(ns app.colorful)
+(ns layout.colorful)
 
 (defn clamp01 [v]
   (mapv #(cond (< % 0) 0.0 (> % 1) 1.0 :else (double %)) v))
