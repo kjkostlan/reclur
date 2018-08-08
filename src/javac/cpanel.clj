@@ -5,7 +5,6 @@
   (:require [clojure.string :as string] [globals]
     [javac.gfx :as gfx] [javac.exception :as exception]
     [javac.clojurize :as clojurize]
-    globals
     [app.orepl :as orepl]
     [app.iteration :as iteration])
   (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent ComponentAdapter]

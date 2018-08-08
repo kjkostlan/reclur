@@ -285,41 +285,29 @@
     [(first vr) (- (dec (count lc)) (second vr))
      (nth vr 2) (- (dec (apply max lc)) (nth vr 3))]))
 
-;;;;;;;;;;;;;;;;;;;; String analysis:
-(defn string-grid [box add-one-on-right? allow-overflow?]
-  "Grid map from the 2D [ix iy] integer cursor coords to the cursor on the rendered string.
-   On the grid 0 is placing the cursor all the way left/top on the screen (scrolling will affect this).
-   On the string 0 is the placing the cursor before the first char.
-   add-one-on-right?:
-   	Add an extra column on the right side for the keys of the map.
-   allow-overflow? true:
-      left-overflow is mapped to the end of the line, bottom overflow is mapped to the length of string.
-   allow-overflow? false:
-      Any keys with overflow are discarded.
-   DOES account for scrolling."
-  (let [box (v box) d (string-digest (rendered-string box))
-        v-range (view-range box) top (first v-range) bottom (second v-range) 
-        add-me (if add-one-on-right? 1 0) ; add 1 because the cursor can be after the end of the string.
-        left (nth v-range 2) right (+ (nth v-range 3) add-me)
-        kys (into [] (apply concat 
-                       (mapv (fn [l] (mapv #(vector (- % left) (- l top)) (range left (inc right)))) 
-                         (range top (inc bottom)))))
-        nc (:nchars d) num-b4 (:num-b4 d) nlines (:nlines d) line-counts (:counts d)
-        vls (mapv #(let [x (+ (first %) left) y (+ (second %) top)] ; location on the string.
-                     (cond (< y 0) (if allow-overflow? 0 -1)
-                       (>= y nlines) (if allow-overflow? nc -1)
-                       :else (+ (nth num-b4 y) ; add how many chars are before us to get to the char index.
-                               (let [nl (nth line-counts y)]
-                                 (if (and (>= x nl) (not allow-overflow?)) -1e100 (min nl x)))))) kys)]
-    (reduce #(let [k (get kys %2) v (get vls %2)] ; keep non-zero keys.
-               (if (>= v 0) (assoc %1 k v) %1)) {} (range (count kys)))))
-
 ;;;;;;;;;;;;;;;;;;;; Cursor conversion:
 ; ix = cursor index in the string (stored in the node for functions that convert from it).
 ; piece = which piece we are on.
 ; grid = 2D location within the component's text. Scrolling needs to be subtracted out to compute this.
 ; ugrid = not adding scrolling.
 ; pixel = 2D location of cursor in pixels (local coords, camera is moved/zoomed and physics).
+
+(defn line-char-ixs [box add-one-on-right?]
+  "Two vectors, the first is the char ix at the start of the line.
+   The second is the first + # chars in line + 1 if add-one-on-right?"
+  (let [box (v box) d (string-digest (rendered-string box))
+        v-range (view-range box) top (first v-range) bottom (second v-range) 
+        add-me (if add-one-on-right? 1 0)
+        num-b4 (:num-b4 d) nlines (:nlines d) line-counts (:counts d) nc (:nchars d)]
+    (if (= nlines 0) [[][]]
+      [(mapv #(cond (< % 0) -1 
+                (>= % nlines) nc
+                :else (nth num-b4 %)) 
+         (range top (inc bottom)))
+       (mapv #(cond (< % 0) -1 
+                (>= % nlines) (+ nc add-me)
+                :else (+ (nth num-b4 %) (nth line-counts %) add-me)) 
+         (range top (inc bottom)))])))
 
 (defn cursor-pixel-to-ugrid [box pixel-x pixel-y]
   "Gets the cursor integer cursor grid position [x y] where 0 is upper left corner.
@@ -331,8 +319,8 @@
         cx0 (/ (- pixel-x mr) (first g2))
         cy0 (/ (- pixel-y mr) (second g2))
         ; clamped values:
-        cx (Math/round (double (min (max cx0 0.0) (- (nth v-range 3) (nth v-range 2)))))
-        cy (int (Math/floor (double (min (max cy0 0.0) (- (nth v-range 1) (nth v-range 0))))))]
+        cx (Math/round (double (min (max cx0 0.0) (inc (- (nth v-range 3) (nth v-range 2))))))
+        cy (int (Math/floor (double (min (max cy0 0.0) (inc (- (nth v-range 1) (nth v-range 0)))))))]
     [cx cy]))
 
 (defn cursor-pixel-to-grid [box pixel-x pixel-y]
@@ -350,22 +338,19 @@
         shy (* (:font-yshift-to-size *text-params*) ft-pts)]
     [(+ (first naive-bottom) shx) (+ (second naive-bottom) shy)]))
 
-;(defn cursor-grid-to-pixel [box grid-x grid-y]
-;  "Gets the cursor-midpoint pixel location. Add half of the fontsize to get to the bottom-right char. Yes scrolling."
-;  (let [ft-sz (gran2 box) sx (first ft-sz) sy (second ft-sz) m (:margin *text-params*)]
-;  DOES NOT WORK FOR NOW, may not be useful to use.
-;    [(+ m (* sx (- grid-x (:scroll-left box)))) (+ m (* sy (- grid-y (:scroll-top box))))]))
-
 (defn cursor-ugrid-to-ix [box x y]
-  (let [gr (string-grid box true true)]
-    (get gr [x y])))
+  (let [x1 (+ x (:scroll-left box))
+        l-start-ends (line-char-ixs box false)
+        lst (first l-start-ends) len (second l-start-ends) n (count lst)]
+    (if (= n 0) 0
+      (let [y (max 0 (min y (dec n)))]
+        (min (+ (nth lst y) x1) (nth len y))))))
 
 (defn cursor-pixel-to-ix [box pixel-x pixel-y]
   "Gets the cursor index from a node and a cursor position.
    For a string of length n, the cursor ix ranges from 0 to n inclusive (n+1 different values)."
-  (let [xy (cursor-pixel-to-ugrid box pixel-x pixel-y) ; don't do scrolling yet.
-        gr (string-grid box true true)] ; scrolling is accounted for here.
-    (get gr xy)))
+  (let [uxy (cursor-pixel-to-ugrid box pixel-x pixel-y)] ; don't do scrolling yet.
+    (cursor-ugrid-to-ix box (first uxy) (second uxy)))) ; scrolling is accounted for here.
 
 (defn cursor-ix-to-ugrid [box] 
   "Gets the x and y global grid, never nil and out-of-bounds cursors are clamped.
@@ -409,16 +394,30 @@
   (let [pieces (mapv :text (:pieces box))] (apply + (mapv count (subvec pieces 0 piece-ix)))))
 
 (defn get-selected-char-rects [box]
-  "Gets the character rectangles, vector of [x,y width height]'s, local coords with respect to us"
+  "Gets the character rectangles, vector of [x,y width height]'s, local coords with respect to us."
   (let [ix0 (:selection-start box)
-        ix1 (:selection-end box)]
+        ix1 (:selection-end box)
+        left (:scroll-left box)]
     (if (> ix1 ix0)
       (let [g2 (gran2 box) sx (first g2) sy (second g2) v-range (view-range box)
-            gr (string-grid box true false)
-            igr (zipmap (vals gr) (keys gr))
+            n-x (- (nth v-range 3) (nth v-range 2))
+            
             m (:margin *text-params*)
-            xys (filterv identity (mapv #(get igr %) (range ix0 ix1)))]
-        (mapv #(vector (+ m (* sx %1)) (+ m (* sy %2)) (+ sx 1.001) (+ sy 1.001)) (mapv first xys) (mapv second xys))))))
+            
+            st-en (line-char-ixs box false) starts (first st-en) ends (second st-en) nl (count starts)
+            line0 (if (> nl 0) (first (filter #(>= (nth ends %) ix0) (range nl))))
+            line1 (if line0 (first (filter #(<= (nth starts %) ix1) (range (dec nl) -1 -1))))]
+         (if (and line0 line1)
+            (let [xys (filterv #(and % (>= (first %) 0) (<= (first %) n-x)) 
+                        (apply concat 
+                          (mapv (fn [y] 
+                                  (let [st (nth starts y) en (nth ends y)]
+                                    (mapv #(if (and (>= % ix0) (< % ix1)) 
+                                             [(- % st left) y])
+                                      (range st en))))
+                          (range line0 (inc line1)))))]
+             (mapv #(vector (+ m (* sx %1)) (+ m (* sy %2)) (+ sx 1.001) (+ sy 1.001)) (mapv first xys) (mapv second xys)))
+          [])) [])))
 
 (defn exon [box] 
   "Gets the excised region upon a keypress, [ix0 ix1] inclusive-exclusive pattern.
@@ -670,32 +669,36 @@
 
 (defn render-text [box]
   "Renders the characters of box with the line numbers, using :line-num-start and :hidden-nlines to have line nums be properly calculated."
-  (let [gr (string-grid box false false) ; [ix iy] => i.
-        
+  (let [st-end (line-char-ixs box false)
+        line-starts (first st-end) line-ends (second st-end)
+        n (count line-ends)
+        view-r (view-range box)
+        top (first view-r) bottom (second view-r) left (max 0 (nth view-r 2)) right (inc (nth view-r 3))
+              
         x (pieces-digest (:pieces box)) s (rendered-string box) ft-pts (:font-size box)
         piece-ix (into [] (apply concat (mapv #(repeat %1 %2) (:counts x) (range))))
-        vals-gr (into [] (vals gr))
-        grid-chars (mapv #(subs s % (inc %)) vals-gr)
-        min-c (if (= (count vals-gr) 0) 0 (apply min vals-gr)) max-c (inc (apply max -1 (vals gr)))
-        cols ((:colorize-fn box) box (subs s min-c max-c) (subvec piece-ix min-c max-c) min-c max-c) gcols (mapv #(get cols (- % min-c)) (vals gr))
-        ;_ (if (not= (count cols) (count s))
-        ;    (throw (Exception. (str "Colorize fn returns colors of the wrong length, " (count cols) " instead of " (count s)))))
-        gchar-locations (mapv #(cursor-ugrid-to-pixel box (first %) (second %)) (keys gr))
-        new-way? true
-        char-gfx (if new-way?
-                   [[:grid-string [ft-pts (apply str grid-chars) (mapv first gchar-locations) (mapv second gchar-locations) 
-                                (mapv first gcols) (mapv second gcols) (mapv #(nth % 2) gcols) (mapv #(nth % 3) gcols)] {}]]
-                   (mapv #(vector :drawString [(str %2) (first %1) (second %1)] {:Color %3 :FontSize ft-pts}) gchar-locations grid-chars gcols))]
+              
+        min-c (max 0 (first line-starts)) max-c (last line-ends)
+              
+        sub-s (subs s min-c max-c)
+        cols ((:colorize-fn box) box sub-s (subvec piece-ix min-c max-c) min-c max-c) 
+              
+        ; Only keep the parts that are visible:
+        _i0 (mapv #(min (- max-c min-c) (- (+ (max % 0) left) min-c)) line-starts)
+        _i1 (mapv #(max %1 (min (+ %1 (- right left)) (- (max %2 0) min-c))) _i0 line-ends)
+        sub-s1 (apply str (mapv #(subs sub-s %1 %2) _i0 _i1))
+        cols1 (into [] (apply concat (mapv #(subvec cols %1 %2) _i0 _i1)))
+        ux-loc (into [] (apply concat (mapv #(range (- %2 %1)) _i0 _i1)))
+        uy-loc (into [] (apply concat (mapv #(repeat (- %2 %1) %3) _i0 _i1 (range n))))
+              
+        char-locations (mapv #(cursor-ugrid-to-pixel box %1 %2) ux-loc uy-loc)
+        char-gfx [[:grid-string [ft-pts sub-s1 (mapv first char-locations) (mapv second char-locations) 
+                    (mapv first cols1) (mapv second cols1) (mapv #(nth % 2) cols1) (mapv #(nth % 3) cols1)] {}]]]
      (if (:show-line-nums? box)
        (let [ladd (:line-no-standoff-chars *text-params*)
-             _line-xsm (reduce (fn [acc xy] (update acc (second xy) #(max (if % % 0) (first xy)))) 
-                                                {} (keys gr))
-             _line-xsm1 (zipmap (keys _line-xsm) (mapv #(+ ladd %) (vals _line-xsm)))
-
-             line-xs (mapv #(if-let [x (get _line-xsm1 %)] x ladd) (range (inc (apply max -1 (keys _line-xsm1)))))
-
-             n (count line-xs)
-             line-locations (mapv #(cursor-ugrid-to-pixel box (nth line-xs %) %) (range n))
+             
+             line-xs (conj (mapv #(+ ladd (- %2 %1) (- left)) line-starts line-ends) ladd)
+             line-locations (mapv #(cursor-ugrid-to-pixel box %1 %2) line-xs (range n))
              
              ; vector "map" from vis to real lines:
              _ps (conj (:pieces box) {:text "\n"}) _n (count _ps)
@@ -706,13 +709,12 @@
                                     xtra (if-let [x (:hidden-nlines p)] x 0)]
                                 (recur (apply conj acc (mapv #(+ % xtra line-ix) (range nfeed)))
                                   (inc ix) (+ line-ix nfeed xtra)))))
-             ;_ (println "lnum-vis2rel long: "  lnum-vis2rel)
-             line-strs (mapv #(let [l (+ (:scroll-top box) %)] 
-                                (if (>= l 0) (str (nth lnum-vis2rel l)) "0")) (range n))
-             max-visible-x (first (view-wh box))
+             line-strs (mapv #(let [l (+ top %)] 
+                                (if (>= l 0) (str (if-let [x (get lnum-vis2rel l)] x "")) "0")) (range n))
+             
              lft-pts (* ft-pts (:line-fontsz-mult *text-params*))
              lineno-gfx (filterv identity 
-                          (mapv #(if (<= (+ %3 (count %2)) max-visible-x) 
+                          (mapv #(if (and (>= %3 0) (<= (+ %3 (count %2)) (- right left)))
                                    (vector :drawString [%2 (first %1) (second %1)] {:Color [1 1 1 0.5] :FontSize lft-pts}))
                             line-locations line-strs line-xs))]
          (into [] (concat char-gfx lineno-gfx)))

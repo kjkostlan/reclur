@@ -13,7 +13,7 @@
 (defn colorize [s pieces piece-ixs char-ix0 char-ix1]
   "Use colorfulness."
   (let [max-ix (if-let [x (last piece-ixs)] x 0)
-        cols (mapv #(conj (colorful/cmdix2rgb %) 1) (range (inc max-ix)))]
+        cols (mapv #(conj (colorful/printix2rgb %) 1) (range (inc max-ix)))]
     (mapv #(nth cols %) piece-ixs)))
 
 (defn new-console []

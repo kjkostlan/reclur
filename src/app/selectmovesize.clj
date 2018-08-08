@@ -4,19 +4,35 @@
   (:require [app.xform :as xform]
     [app.singlecomp :as singlecomp]
     [app.multicomp :as multicomp]
-    [clojure.string :as string]))
-; has been required by the multicomp.
+    [clojure.string :as string]
+    [layout.keybind :as kb]
+    [layout.layoutcore :as layoutcore]
+    [clojure.set :as set]
+    [globals]))
 
 (def ^:dynamic *handle-size* 25)
 
+(defn is-sh? [] (:ShiftDown (:external-state @globals/one-atom)))
+(defn is-alt? [] (:AltDown (:external-state @globals/one-atom)))
+(defn is-mouse? [] (let [ext (:external-state @globals/one-atom)]
+                     (or (:Button0 ext) (:Button1 ext) (:Button2 ext))))
+
 (defn add-defaults [tool-state] ; nil check. ;TODO: code can be simplified with collections.
   (let [addy (fn [def x] (reduce #(if (get x %2) (assoc %1 %2 (get x %2)) %1) def (keys x)))
-        def {:xxyy [0 0 0 0]
+        def {:xxyy [-1e100 -1e100 -1e100 -1e100]
              :corner-mode :miss
              :copy-mx 0 :copy-my 0}] (addy def tool-state)))
 
+(defn comp-xxyy [comp]
+  (let [p (:position comp) sz (:size comp)] 
+    [(p 0) (+ (p 0) (sz 0)) (p 1) (+ (p 1) (sz 1))]))
+
 (defn hit-rect? [x y x0 x1 y0 y1]
   (and (>= x x0) (<= x x1) (>= y y0) (<= y y1)))
+
+(defn engulfs? [xxyy-big xxyy-small]
+  (and (< (xxyy-big 0) (xxyy-small 0)) (> (xxyy-big 1) (xxyy-small 1))
+    (< (xxyy-big 2) (xxyy-small 2)) (> (xxyy-big 3) (xxyy-small 3))))
 
 (defn unders-cursor [x y comps]
   (filterv #(singlecomp/click? x y (get comps %)) (keys comps)))
@@ -93,7 +109,7 @@
   (reduce (fn [acc k] (update acc k #(_apply-xform % xform))) comps keys))
 
 (defn bounding-xxyy [comps]
-  (if (= (count comps) 0) [0 0 0 0]
+  (if (= (count comps) 0) [-1e100 -1e100 -1e100 -1e100]
     [(apply min (mapv #(first (:position %)) comps)) 
      (apply max (mapv #(+ (first (:position %)) (first (:size %))) comps))
      (apply min (mapv #(second (:position %)) comps)) 
@@ -106,39 +122,59 @@
 (defn sts [s ts] (assoc-in s [:tool-state :selectmovesize] ts))
 (defn uts [s f] (update-in s [:tool-state :selectmovesize] f))
 
-; Inkscape-like tool:
+; Inkscape-like selection tool:
 (defn get-tool []
-  {:render (fn [s] (let [ts (gts s) zoom (last (:camera s))] 
-                    (apply draw-box-handle (/ *handle-size* zoom) (:corner-mode s) (:xxyy ts))))
+  {:render (fn [s] (let [ts (gts s) zoom (last (:camera s)) 
+                         sh? (is-sh?) ; shifting disables seeing the selection (until the mouse gets going), as it disables being to drag the selection.
+                         alt? (is-alt?) ; alt is the same idea and it removes selections.
+                         mouse? (is-mouse?) ts (gts s)] 
+                     (if (and (or sh? alt?) (or (not mouse?) (:insta-drag? ts)))
+                       [] (apply draw-box-handle (/ *handle-size* zoom) (:corner-mode s) (:xxyy ts)))))
    :mousePressed (fn [mevt-c s]
                    (let [ts (gts s) x (:X mevt-c) y (:Y mevt-c)
+                        sh? (:ShiftDown mevt-c) ; shift adds to the selection.
+                        alt? (:AltDown mevt-c) ; alt subtracts
                         comps (:components s) target (click-test mevt-c ts (last (:camera s)))
+                        target (if (or sh? alt?) :miss target) ; shift/alt means don't drag the selection box.
                         khit (under-cursor x y comps)
                         insta-drag? (and (= target :miss) khit)   
-                        ts (assoc ts :fresh-press? true :corner-mode (if insta-drag? :main-rect target))]
+                        ts (assoc ts :fresh-press? true :insta-drag? insta-drag?
+                             :corner-mode (if (and insta-drag? (not sh?) (not alt?)) :main-rect target))]
                     (cond insta-drag?
                       (let [comp (get comps khit) pos (:position comp) sz (:size comp)
                             ts (assoc ts :xxyy [(first pos) (+ (first pos) (first sz)) (second pos) (+ (second pos) (second sz))])] 
-                        (assoc (sts s ts) :selected-comp-keys (hash-set khit)))
-                      (= target :miss) (sts (assoc s :selected-comp-keys #{}) (assoc ts :xxyy [x x y y] :corner-mode :miss)) ; zero-size rectangle.
+                        (assoc (sts s ts) :selected-comp-keys 
+                          (cond sh? (set/union (set (:selected-comp-keys s)) (hash-set khit))
+                            alt? (set/difference (set (:selected-comp-keys s)) (hash-set khit))
+                            :else (hash-set khit))))
+                      (= target :miss) (sts (if (or sh? alt?) s (assoc s :selected-comp-keys #{})) (assoc ts :xxyy [x x y y] :corner-mode :miss)) ; zero-size rectangle.
                       :else (sts s ts))))
   ; Snap to whatever is selected.
   :mouseReleased (fn [mevt-c s] 
                    (let [ts (gts s)]
                      (if (:fresh-press? ts) 
                        (let [xxyy-loose (:xxyy ts)
-                             sel-kys (if (= (:corner-mode ts) :miss) (apply selected-comp-keys (:components s) xxyy-loose)
-                                   (:selected-comp-keys s))
+                             sel-kys (if (= (:corner-mode ts) :miss) 
+                                        ((if (is-alt?) set/difference set/union)
+                                          (set (:selected-comp-keys s))
+                                          (set (apply selected-comp-keys (:components s) xxyy-loose)))
+                                         (set (:selected-comp-keys s)))
                              xxyy-tight (bounding-xxyy (mapv #(get (:components s) %) sel-kys))
                              ts (assoc ts :fresh-press? false :xxyy xxyy-tight :corner-mode :miss)] 
                          (assoc (sts s ts) :selected-comp-keys sel-kys))
                        s)))
   :mouseDragged (fn [mevt-c s] 
-                  (let [ts (gts s)
+                  (let [ts (gts s) insta-drag? (:insta-drag? ts)
                         xxyy (:xxyy ts) mx1 (:X1 mevt-c) my1 (:Y1 mevt-c) 
                         mx (:X mevt-c) my (:Y mevt-c) target0 (:corner-mode ts)]
                     (if (= target0 :miss) 
-                      (sts s (update ts :xxyy #(assoc % 1 mx 3 my))) ; creating a rectangle, no selection.
+                      (cond (and (is-sh?) insta-drag?)
+                        (let [khit (under-cursor mx my (:components s))]
+                          (if khit (update s :selected-comp-keys #(conj % khit)) s))
+                        (and (is-alt?) insta-drag?) 
+                        (let [khit (under-cursor mx my (:components s))]
+                          (if khit (update s :selected-comp-keys #(disj % khit)) s))
+                        :else (sts s (update ts :xxyy #(assoc % 1 mx 3 my)))) ; creating a rectangle, no selection.
                       (let [dx (- mx mx1) dy (- my my1)
                             new-xxyy (if (:single-drag? ts) (mapv + xxyy [dx dx dy dy])
                                        (apply _new-rect dx dy target0 xxyy))
@@ -149,7 +185,7 @@
                             ts-new (assoc ts :xxyy new-xxyy)]
                         (update (sts s ts-new) :components #(apply-xform % (:selected-comp-keys s) xform))))))
   :keyPressed (fn [k-evt s]
-                (let [mx (first (:mouse-pos s)) my (second (:mouse-pos s))] 
+                (let [mx (first (:mouse-pos-world s)) my (second (:mouse-pos-world s))] 
                   (cond (and (or (:ControlDown k-evt) (:MetaDown k-evt)) (= (str (:KeyChar k-evt)) (str "c")))
                     (let [ts (gts s) 
                           sel (:selected-comp-keys s)]
@@ -166,10 +202,6 @@
                         (assoc ts :copied-comps (zipmap comp-kys (vals (:copied-comps ts))))))
                     :else s)))})
 
-; How to seralize functions?
-;(require '[clojure.repl :as repl])
-;(println (read-string (pr-str (:mousePressed (get-tool)))))
-
 (defn clear-selecion [s]
   (let [mp (:mousePressed (get-tool)) mr (:mouseReleased (get-tool))
         s1 (mr (assoc {} :X 0 :Y 0) s) ; not the best code here...
@@ -179,7 +211,7 @@
 (defn swap-on-top [s] 
   "Rotates the :z of components under the cursor. Also clears the selection (that was confusing)."
   (let [s (assoc-in s [:precompute :desync-safe-mod?] true)
-        x (first (:mouse-pos s)) y (second (:mouse-pos s))
+        x (first (:mouse-pos-world s)) y (second (:mouse-pos-world s))
         comps (:components s)
         kys (unders-cursor x y comps)
       
@@ -195,17 +227,47 @@
         comps1 (reduce #(assoc-in %1 [(nth kys %2) :z] (nth zs1 %2)) comps (range (count kys)))]
     (assoc (clear-selecion s) :components comps1)))
 
+(defn wheel-zoom [m-evt s] ; w and s to zoom in and out by an increment.
+                      (let [zoom0 (nth (:camera s) 2)
+                            mX (:X m-evt) mY (:Y m-evt)
+                            rotation (:PreciseWheelRotation m-evt)
+                            step 0.020; (cond (:AltDown m-evt) 0.5 (:ShiftDown m-evt) 0.01 :else 0.05)
+                            rzoom (Math/exp (* step rotation))
+                            xf [(* mX (- 1 rzoom)) (* mY (- 1 rzoom)) rzoom rzoom]]
+                        (update s :camera #(xform/xx % xf))))
+
+(defn insta-zoom [k-evt s]
+  (let [radius-range 1.75 ; for counting as "nearby".
+        screen-sz (layoutcore/screen-pixels) 
+        srx (* (first screen-sz) 0.5) sry (* (second screen-sz) 0.5)
+        target [(first (:mouse-pos-world s)) (second (:mouse-pos-world s))]
+        target-xxyy [(- (target 0) (* srx radius-range)) 
+                     (+ (target 0) (* srx radius-range)) 
+                     (- (target 1) (* sry radius-range)) 
+                     (+ (target 1) (* sry radius-range))]
+         
+        comp-xxyys (mapv comp-xxyy (vals (:components s)))
+        
+        ; All nearby xxyys:
+        near-xxyys (filterv #(engulfs? target-xxyy %) comp-xxyys)
+               
+        ; Bounding box thereof:
+        bound-xxyy [(apply min 1e10 (mapv first near-xxyys))
+                    (apply max -1e10 (mapv second near-xxyys))
+                    (apply min 1e10 (mapv #(nth % 2) near-xxyys))
+                    (apply max -1e10 (mapv #(nth % 3) near-xxyys))]
+                         
+        target1 [(+ (* (bound-xxyy 0) 0.5) (* (bound-xxyy 1) 0.5))
+                 (+ (* (bound-xxyy 2) 0.5) (* (bound-xxyy 3) 0.5))] 
+        target1-corner [(- (target1 0) srx) (- (target1 1) sry)]]
+    (assoc s :camera [(- (target1-corner 0)) (- (target1-corner 1)) 1 1])))
 
 ; Why not put moving and sizing of the camera here as well?
 (defn get-camera-tool []
-  {:keyPressed (fn [k-evt s] ; w and s to zoom in and out by an increment.
-                 (let [zoom0 (nth (:camera s) 2)
-                       zoom-in? (= (:KeyCode k-evt) 38)
-                       zoom-out? (= (:KeyCode k-evt) 40)
-                       step (cond (:AltDown k-evt) 2 (:ShiftDown k-evt) 1.03 :else 1.1)
-                       rzoom (cond zoom-in? step zoom-out? (/ step) :else 1)
-                       xf [0 0 rzoom rzoom]]
-                   (update s :camera #(xform/xx % xf))))
+  {:mouseWheelMoved wheel-zoom
+   :keyPressed (fn [k-evt s]
+                 (if (kb/ctrl+? k-evt "1") ; Zoom where (or very near where) the mouse currently is to zoom 1, best fitting to componens.
+                   (insta-zoom k-evt s) s))
    :mouseDragged
     (fn [mevt-c s]
       (let [dx (- (:X mevt-c) (:X1 mevt-c)) dy (- (:Y mevt-c) (:Y1 mevt-c))

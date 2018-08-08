@@ -1,5 +1,5 @@
 
-                                        ; Simple finite-state machine parsers to get interstitial indent level very fast, for clojure.
+; Simple finite-state machine parsers to get interstitial indent level very fast, for clojure.
 ; Interstitial means the indent level at each cursor location.
 ; For the string "(foo)" we would get 011110, i.e. one more element than the (count "(foo)")
 ; The -ints functions return native arrays, the vanilal forms return vectors.
@@ -15,6 +15,8 @@
   ; 6 = reader macros (does not include metadata, sets, or regexp), includes spaces in reader macros which is possible in poorly formatted code, mostly unique to lisps, does not include C macros.
   ; 7 = meta tag (java annotations and python decorators).
   ; This list seems 95% universal for most languages, so there isn't a need to have a fancier more extensible datatype for now.
+
+; Also contains a reversable parser.
 
 (ns coder.clojure
   (:require [clojure.string :as string] collections
@@ -135,6 +137,8 @@
                                                    (= c \:) 2
                                                    (or (= c \0) (= c \1) (= c \2) (= c \3) (= c \4) (= c \5) (= c \6) (= c \7) (= c \8) (= c \9)
                                                        (= c \") (= c \\)) 3
+                                                   (and (or (= c \-) (= c \+))
+                                                        (or (= c1 \0) (= c1 \1) (= c1 \2) (= c1 \3) (= c1 \4) (= c1 \5) (= c1 \6) (= c1 \7) (= c1 \8) (= c1 \9))) 3
                                                    :else 1)]
                                    (if (not= mode1 0)
                                      (do (_add!) (recur (inc ix) ix (inc kx) mode1 (= c \\) (= c \;) (= c \") level ignore-level))
@@ -489,11 +493,9 @@
       (assoc tok 1 (mapv #(if %2 (_pad1 %1) %1) t1 pad-after?)))
     tok))
 
-;;;;;;;;;;;;;;;;;;; A simple function ;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;; Non-pipeline parse fns ;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn depth [s]
-  "A fast parser used for indent hiliting et al."
-  (into [] ^ints (depth-ints (str s))))
+
 
 ;;;;;;;;;;;;;;;;;;; The forward pipeline ;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -554,13 +556,22 @@
                                 (zipmap (mapv #(clm (nth processed-children (* % 2))) (range n2))
                                         (mapv #(vector (conj (nth ch-txtv (* % 2)) %) (conj (nth ch-txtv (inc (* % 2))) %)) (range n2)))
                                 :else ; sets.
-                                (zipmap (mapv #(clm (nth processed-children %)) (range n)) ch-txtv))
+                                (zipmap (mapv #(clm (nth processed-children %)) (range n))
+                                        (mapv #(conj %1 %2) ch-txtv (range))))
             obj (cond (list? val)
                       (apply list processed-children)
                       (map? val)
-                      (apply hash-map processed-children)
+                      (let [xi (apply hash-map processed-children)]
+                        (if (< (count xi) (/ (count processed-children) 2))
+                          (throw (java.lang.IllegalArgumentException.
+                                   "Duplicate key(s) in map literal.")))
+                        xi)
                       (set? val)
-                      (apply hash-set processed-children)
+                      (let [xi (set processed-children)]
+                        (if (< (count xi) (count processed-children))
+                          (throw (java.lang.IllegalArgumentException.
+                                   "Duplicate key(s) in set literal.")))
+                        xi)
                       :else processed-children)]
         (with-meta obj {:txt txt :children-txts children-txts}))
       (cond (or (symbol? val) (coll? val)) (with-meta val {:txt txt}) ; this may shave a small amount of time off.
@@ -596,6 +607,9 @@
         (with-meta target new-meta))
        ; Make a 1-element :PARSE vector to store our idiomatic meta:
       :else (vary-meta x1 #(hash-map :PARSE [%])))))
+
+(defn forwards [x]
+  (-> x grouped-tokenize rmacro-apply data-structure meta-pack))
 
 ;;;;;;;;;;;;;;;;;;; The reverse pipeline ;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -647,23 +661,25 @@
                   (vector? x) ["[" "" "]"]
                   (coll? x) ["(" "" ")"]
                   :else ["" "" " "])
+        clm #(if (meta %) (with-meta % nil) %)
         ch-txts (:children-txts m)
+        sort-k #(let [v (get ch-txts %)]
+                  (if (vector? (last v)) (get-in v [0 3])
+                      (if-let [v3 (get v 3)] v3 0)))
         body (cond (map? x)
-                   (let [kys (into [] (sort-by #(let [v (get ch-txts %)]
-                                                  (if (vector? (last v)) (get-in v [0 3])
-                                                      (if-let [v3 (get v 3)] v3 0))) (keys x))) ; sort by original order assuming we have that data.
+                   (let [kys (into [] (sort-by sort-k (keys x))) ; sort by original order assuming we have that data.
                          vls (mapv #(get x %) kys) ; cant use vals as kys are sorted.
                          kys1 (mapv #(naive-unstructure % (first (get ch-txts %))) kys)
                          vls1 (mapv #(naive-unstructure %2 (second (get ch-txts %1))) kys vls)]
                      (into [] (apply concat (mapv vector kys1 vls1))))
                    (set? x)
-                   (let [kys (into [] (sort-by #(:order (meta %)) x))
+                   (let [kys (into [] (sort-by sort-k x))
                          kys (mapv #(naive-unstructure % (get ch-txts %)) kys)] kys)
                    (coll? x)
                    (mapv #(naive-unstructure %1 (get ch-txts %2)) x (range))
                    :else (if (txt 1) (txt 1) (pr-str x)))
         obj (cond (map? x) {} (set? x) #{} (vector? x) [] (coll? x) () :else x)]
-    [(txt 0) body (txt 2) obj]))
+    [(txt 0) (clm body) (txt 2) (clm obj)]))
 
 (defn projection [tok]
   "The projection step that ensures we update the string values of tok to reflect the new meaning."
@@ -671,10 +687,127 @@
 
 (defn blit [tok]
   "Turns the tok back into a string."
-  ;(println (count tok) (pr-str tok) (type tok))
   (str (if (vector? (tok 0)) (apply str (tok 0)) (tok 0))
        (if (vector? (tok 1)) (apply str (mapv blit (tok 1))) (tok 1))
        (if (vector? (tok 2)) (apply str (tok 2)) (tok 2))))
+
+(defn backwards [x]
+  (-> x meta-unpack naive-unstructure projection blit))
+
+
+;;;;;;;;;;;;;;;;;;; Non-pipeline parse fns ;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn reads-string [s] (read-string (str "[" s "\n]")))
+
+(defn depth [s]
+  "A fast parser used for indent hiliting et al."
+  (into [] ^ints (depth-ints (str s))))
+
+(defn locate-in [x path x-needs-projection?]
+  "Returns the [start end] locations on the original string of the path within x.
+   O(n) in the original string, use the break-down function (TODO).
+   x-needs-projection? use this whenever x has been modified. False if x is parsed from a .clj file.
+   Does not include meta-tags."
+  (let [x (if x-needs-projection? (-> x backwards forwards) x)
+        unmarked (get-in x path)
+        ; Leaf-level change so collections don't get intefered with:
+        tmp (loop [ph []]
+                 (let [chi (collections/cget-in unmarked ph)]
+                     (if (coll? chi)
+                       (recur (conj ph (first (collections/ckeys chi))))
+                       [(collections/cassoc-in unmarked ph
+                                               (with-meta (gensym "LOCATEBEACON") (meta chi)))
+                        ph])))
+        marked (first tmp)
+        submarked-path (second tmp)
+        submarked (collections/cget-in marked submarked-path)
+        in-set? (and (> (count path) 0) (set? (collections/cget-in x (butlast path))))
+        x1 (if in-set? ; in sets you can't reassign a key/index to a new value, must change the value. 
+             (collections/cupdate-in x (butlast path)
+                                     (fn [st]
+                                       (let [v (last path)
+                                             v1 (with-meta marked (meta (get st v)))
+                                             st1 (conj (disj st v) v1)
+                                             ; Also change the :children texts:
+                                             ch-txts (get-in (meta st) [:PARSE 0 :children-txts])
+                                             ch-txts1 (-> ch-txts (dissoc v) (assoc v1 (get ch-txts v)))]
+                                         (vary-meta st1 #(assoc-in % [:PARSE 0 :children-txts] ch-txts1)))))
+             (collections/cassoc-in x path (with-meta marked (meta (collections/cget-in x path)))))
+        ; naive tokenize and see where the marker goes:
+        tok1 (-> x1 meta-unpack naive-unstructure)
+        subtpath (into [] (butlast (collections/find-value-in tok1 submarked)))
+        ;_ (if (not subtpath) (throw (Exception. "Token not found.")))
+        tpath (subvec subtpath 0 (- (count subtpath) (* (count submarked-path) 2)))
+        tok-b4 (reduce
+                (fn [acc pix]
+                  (let [ph (subvec tpath 0 pix)
+                        n-keep (nth tpath pix)
+                        ph2tok? (even? (count ph)) ; ph takes us to a token, not to a vector of tokens.
+
+                        target0 (get-in tok1 ph)
+                        target (subvec target0 0 n-keep)
+                        target (if (and ph2tok? (< (count target) 3))
+                                 [(target 0) [] ["" "" ""] (target0 3)] ; remove closing half of token.
+                                 target)]
+                    (collections/cassoc-in acc ph target)))
+                tok1 (range (count tpath)))
+        ; Don't include leading or trailing spaces in the target tok:
+        target (get-in tok1 tpath)
+        n-lead (count (if (vector? (target 0)) (get-in target [0 0]) (target 0)))
+        n-follow (count (if (vector? (target 2)) (get-in target [2 0]) (target 2)))
+        
+        nb4 (count (blit tok-b4))
+        nin (count (blit (get-in tok1 tpath)))]
+    [(+ nb4 n-lead) (+ nb4 nin (- n-follow))]))
+
+(defn path-at [x char-ix x-needs-projection?]
+ "The path to the form that the char at char-ix belongs to.
+  whitespace lands us in the enclosing form.
+  Map literals map both the key and value to the key, and do not dig into collection-valued keys.
+  O(n). char-ix is clamped."
+  (let [tok (-> x meta-unpack naive-unstructure)
+        tok (if x-needs-projection? (projection tok) tok)
+        char-ix (max char-ix 0)
+        l2f #(into [] (conj (interpose 1 %) 1))
+        _two #(subvec % 0 (- (count %) 2))
+        stop (atom 0)
+        tok2cursor (loop [ph [] n-b4 0 coll-tail? false]
+                     (let [t (get-in tok ph)
+                           n-head (count (if (vector? (t 0)) (apply str (t 0)) (t 0)))
+                           n-headspace (if (vector? (t 0)) (count (first (t 0))) n-head)
+                           n-tail (count (if (vector? (t 2)) (apply str (t 2)) (t 2)))
+                           v? (and (vector? (t 1)) (> (count (t 1)) 0))]
+                       (swap! stop inc)
+                       (if (> @stop 10000) (throw (Exception. "Probable infinite loop.")))
+                       (cond (and (not coll-tail?) (> (+ n-b4 n-head) char-ix))
+                             (if (> (+ n-b4 n-headspace) char-ix) (_two ph) ph) ; hit something.
+                             (and v? (not coll-tail?))
+                             (recur (conj ph 1 0) (+ n-b4 n-head) false) ; jump in.
+                             (and (= ph []) coll-tail?) [] ; overflow.
+                             :else
+                             (let [last-ix (last ph)
+                                   max-last (dec (count (get-in tok (butlast ph))))
+                                   n-body (if v? 0 (count (t 1)))
+                                   n1 (+ n-b4 n-body (if coll-tail? n-tail (if v? n-head (+ n-head n-tail))))
+                                   n-tailspace (if (vector? (t 2)) (count (last (t 2))) n-tail)]
+                               (if (> n1 char-ix)
+                                 (if (<= (- n1 n-tailspace) char-ix) (_two ph) ph) ; hit stuff
+                                 (if (= last-ix max-last)
+                                   (recur (subvec ph 0 (- (count ph) 2)) n1 true) ; overflow
+                                   (recur (update ph (dec (count ph)) inc) n1 false))))))) ; next element
+        vpath (into [] (collections/odds tok2cursor)) ; if everything was sequential this would be the answer.
+        tok2x #(if (coll? (% 3)) (-> % data-structure meta-pack) (% 3))
+        out (loop [ph [] toki tok ix 0]
+              (if (= ix (count vpath)) ph
+                  (let [px (nth vpath ix)
+                        tok1 (get-in toki [1 px])
+                        val (toki 3)
+                        px1 (cond (map? val) (tok2x (nth (toki 1) (* (int (/ px 2)) 2))) ; kv pairs.
+                                  (set? val) (tok2x (nth (toki 1) px))
+                                  :else px)]
+                    (if (and (map? val) (even? px)) (conj ph px1) ; don't dig into map keys; compat with collections/cget-in
+                        (recur (conj ph px1) tok1 (inc ix))))))]
+    out))
 
 ;;;;;;;;;;;;;;;;;;;; TESTING ;;;;;;;;;;;;;;;;;;
 
@@ -722,4 +855,12 @@
         ix0 (if e0 (:ix0 e0) k)]
     (if e0 [(count eds) (subs s (- ix0 k) (+ ix0 k))
             (subs s1 (- ix0 k) (+ ix0 k))]
-      (= s s1)))
+      (println "test file reversable: " (= s s1))))
+
+#_(let [s "^foo bar"
+        x (forwards s)
+        ixs (locate-in x [0] false)]
+    [ixs (apply subs s ixs)])
+
+#_(let [x (forwards "a [1,,,],,, b c")
+        ph (path-at x 14 false)] ph)

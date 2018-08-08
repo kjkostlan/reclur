@@ -9,7 +9,7 @@
 
 ;;;;;;;;;;;;;;;;;; The layout code ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(def lparams {:files-x 0.2 :repl-x 0.5 :console-x 0.67 :replconsole-y 0.25 :margin 0.025})
+(def lparams {:files-x 0.2 :repl-x 0.5 :console-x 0.67 :replconsole-y 0.25 :margin 0.0})
 
 (def y- layoutcore/y-)
 
@@ -51,11 +51,11 @@
    for key-is-file? we go to the real text in char-ix0 and char-ix1, which may involve opening a component.
    Otherwise we go to the component specified."
   (if key-is-file? ; the more complex one that may make a new component if need be and must go to the char-ix on the real string.
-    (let [kys-cixs (multicomp/who-has s k char-ix0) ;[codeboxkys real-ix-within-component char-ix-within-piece]
-          kys (first kys-cixs) ; only matching comps.
+    (let [kys-loc (multicomp/who-has s k char-ix0) ;[codeboxkys real-ix-within-component char-ix-within-piece]
+          kys (first kys-loc) ; only matching comps.
+          loc (second kys-loc)
 
           comps (:components s)
-          ;_ (println "stuff careful: " char-ix0 char-ix1 kys-cixs (mapv #(count (:text %)) (:pieces (get comps (first kys)))))
 
           vis-xxyy (layoutcore/visible-xxyy (:camera s))
           comp-uxxyys (mapv #(layoutcore/unitscreen-xxyy vis-xxyy (layoutcore/xxyy (get comps %))) kys)
@@ -72,11 +72,9 @@
                     (< (max fracx fracy) threshold-on-screen))
                  (range (count comp-uxxyys))))
           ky (if kyix (nth kys kyix))
-          jx0 (last kys-cixs) jx1 (+ jx0 (- char-ix1 char-ix0))
           who-has? (> (count kys) 0)
-          hilite #(rtext/scroll-to-see-cursor
-                   (if who-has? (codebox/select-on-real-string % (second kys-cixs) jx0 jx1)
-                       (codebox/select-on-real-string % 0 char-ix0 char-ix1)))]
+          hilite #(if who-has? (codebox/select-our-who-has % loc (- char-ix1 char-ix0))
+                    (codebox/select-our-who-has % [0 char-ix0] (- char-ix1 char-ix0)))] ; fresh codebox.
       (cond ky ; The comp is close enough, move to the key and adjust the key to select us.
             (update-in s [:components ky] hilite)
             who-has? ; no comps close enough, but can copy one of them (must make a copy since all exported stuff must be in agreement).

@@ -24,8 +24,9 @@
    is the same as applying the edits to the entire s0.
    Thus the s0-piece will be dragged along by edits that change the length of earlier sections."
   (let [; Edits that cover two pieces go the the lower piece.
-        n (count edits) k (- ix1 ix0)
-        ix1 (if goes-to-end-of-str? (inc ix1) ix1)]
+        n (count edits)
+        ix1 (if goes-to-end-of-str? (inc ix1) ix1)
+        k (- ix1 ix0)]
     (loop [acc [] ix 0 shift (- ix0)]
       (if (= ix n) acc
         (let [ed (shift-edit (nth edits ix) shift)

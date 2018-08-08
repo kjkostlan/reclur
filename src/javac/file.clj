@@ -63,6 +63,8 @@
 
 (defn sep [] (File/separator))
 
+(def ^:dynamic *file-safety?* true)
+
 (defn absolute-project-folder []
   "Gets the absolute project folder, the reclur folder's full path."
   (System/getProperty "user.dir"))
@@ -73,12 +75,13 @@
 
 (defn assert-in-our-folders [file]
   "Safety feature to ensure we only modify our own directories, which is either our reclur directory or the child iteration thereof."
-  (let [^String fullpath (absolute-path file)
-        us-folder (absolute-path chfile/us-folder)
-        ch-folder (absolute-path chfile/child-folder)
-        contained-in? (fn [^String folder] (.startsWith fullpath folder))]
-    (if (or (contained-in? us-folder) (contained-in? ch-folder)) true
-      (throw (Exception. (str file " = " fullpath " is not in either us or the child reclur folder. Maybe it's not so safe to modify it."))))))
+  (if *file-safety?*
+    (let [^String fullpath (absolute-path file)
+          us-folder (absolute-path chfile/us-folder)
+          ch-folder (absolute-path chfile/child-folder)
+          contained-in? (fn [^String folder] (.startsWith fullpath folder))]
+      (if (or (contained-in? us-folder) (contained-in? ch-folder)) true
+        (throw (Exception. (str file " = " fullpath " is not in either us or the child reclur folder. It may be safe to do so, but be careful before removing this error!")))))))
 
 ;;;;;;;;;;;;;;;;;;;;;; conversion functions:
 

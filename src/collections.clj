@@ -13,7 +13,7 @@
 (ns collections
   (:require [clojure.set :as set]))
 
-;;;;;;;;;;;;;;;; More unique functions ;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;; Foundational functions ;;;;;;;;;;;;;;
 
 (defn listy? [x]
   "Does pr-str use ()? These all are treated as lists."
@@ -24,16 +24,6 @@
 
 (defn wtf [x] (if (coll? x) (throw (Exception. (str "Unrecognized collection type:" (type x))))
                   (throw (Exception. "Not a collection."))))
-
-(defn rmap [f x]
-  "Doesn't tuple map elements, just runs f on all keys and vals separately, useful in recursive functions."
-  (with-meta
-    (cond (or (not x) (vector? x)) (mapv f x)
-          (sequential? x) (apply list (mapv f x))
-          (map? x) (zipmap (mapv f (keys x)) (mapv f (vals x)))
-          (set? x) (set (map f x))
-          :else (wtf x))
-    (meta x)))
 
 ;;;;;;;;;;;;;;;; Generalized functions ;;;;;;;;;;;;;;
 
@@ -49,7 +39,7 @@
   (let [metax (meta x)]
     (with-meta
       (cond
-       (map? x) (apply assoc x k v kvs)
+       (or (nil? x) (map? x)) (apply assoc x k v kvs)
        (sequential? x)
        (let [v? (vector? x) xm (zipmap (range (count x)) x)
              xm (apply assoc xm k v kvs) nks (sort (filterv number? (keys xm)))
@@ -75,13 +65,14 @@
   (if (sequential? x) (peek x) (first x)))
 
 (defn cpop [x]
-  (cond (sequential? x) (pop x)
+  (cond (nil? x) nil
+        (sequential? x) (pop x)
         (map? x) (dissoc x (first (first x)))
         (set? x) (disj x (first x))
         :else (wtf x)))
 
 (defn cconj [x v] ; doesn't generalize well.
-  (cond (or (sequential? x) (list? x) (set? x)) (conj x v)
+  (cond (nil? x) (list v) (or (sequential? x) (list? x) (set? x)) (conj x v)
       (map? x) (assoc x (gensym) v) :else (wtf x)))
 
 (defn creverse [x] ; doesnt affect maps or sets.
@@ -89,25 +80,28 @@
     (sequential? x) (reverse x)    
     :else x))
 
-(defn cdissoc [x k]
-  (let [metax (meta x)]
-    (with-meta 
-      (cond (sequential? x)      
-            (cond (= (count x) (inc k))
-              (if (vector? x) (into [] (butlast x))
-                  (apply list (butlast x)))
-              (> (count x) (inc k))
-              (cassoc x k nil)
-              :else x)
-            (map? x) (dissoc x k)
-            (set? x) (disj x k)
-            :else (wtf x))
-      metax)))
+(defn cdissoc [x k & ks]
+  (if (empty? ks)
+    (let [metax (meta x)]
+      (with-meta 
+        (cond (nil? x) [nil]
+              (sequential? x)      
+              (cond (= (count x) (inc k))
+                (if (vector? x) (into [] (butlast x))
+                    (apply list (butlast x)))
+                (> (count x) (inc k))
+                (cassoc x k nil)
+                :else x)
+              (map? x) (dissoc x k)
+              (set? x) (disj x k)
+              :else (wtf x))
+        metax)) (apply cdissoc (cdissoc x k) ks)))
 
 (defn cselect-keys [x kys]
   (let [metax (meta x)]
     (with-meta 
-      (cond (sequential? x)
+      (cond (nil? x) {}
+            (sequential? x)
             (let [xv (if (vector? x) x (into [] x))]
               (reduce #(if-let [xi (get xv %2)] (conj %1 xi) %1)
                       (if (vector? x) [] ()) kys))
@@ -118,7 +112,8 @@
 
 (defn cmerge [& xs]
   "Metadata also merged, the type of the first element determines the output type."
-  (let [metax (apply merge (mapv meta xs)) ; merge metamaps.
+  (let [xs (mapv #(if % % {}) xs)
+        metax (apply merge (mapv meta xs)) ; merge metamaps.
         xms (mapv #(cond (set? %) (zipmap % %) (map? %) % :else (zipmap (range) (into [] %))) xs)
         x0 (first xs)
         xms (if (sequential? x0) (mapv (fn [mp] (reduce #(if (get %1 %2) %1 (dissoc %1 %2)) mp (keys mp))) xms) xms) ; remove nil/false.
@@ -136,7 +131,8 @@
 
 (defn cmerge-with [f & xs]
   "Metadata also merged, the type of the first element determines the output type."
-  (let [metax (apply merge (mapv meta xs)) ; merge metamaps.
+  (let [xs (mapv #(if % % {}) xs)
+        metax (apply merge (mapv meta xs)) ; merge metamaps.
         xms (mapv #(cond (set? %) (zipmap % %) (map? %) % :else (zipmap (range) (into [] %))) xs)
         x0 (first xs)
         xms (if (sequential? x0) (mapv (fn [mp] (reduce #(if (get %1 %2) %1 (dissoc %1 %2)) mp (keys mp))) xms) xms) ; remove nil/false.
@@ -175,8 +171,10 @@
 (def cunion cmerge) 
 
 (defn cdifference [x & xs]
-  "Keps the metadata of the first x."
-  (let [shadow (apply cmerge xs)
+  "Keps the metadata of the first x. Uses keys not vals for non-set colls."
+  (if x
+  (let [x (if x x #{}) xs (mapv (fn [xi] (if xi xi #{})) xs)
+        shadow (apply cmerge xs)
         xk (set (ckeys x)) shk (set (ckeys shadow))
         keep-keys (set/difference xk shk)]
     (with-meta
@@ -187,12 +185,13 @@
             (map? x) (zipmap keep-keys (mapv #(get x %) keep-keys))
             (set? x) keep-keys
             :else (wtf x))
-      (meta x))))
+      (meta x)))))
 
 (defn cintersection [& xs]
   "Unions the metadata, as metadata may be missing on some components."
   (let [keep-keys (apply set/intersection (mapv #(set (ckeys %)) xs))
         x0 (first xs)]
+  (if x0
     (with-meta
       (cond (sequential? x0)
             (let [n (apply max 0 keep-keys) xv (into [] x0)
@@ -201,13 +200,14 @@
             (map? x0) (zipmap keep-keys (mapv #(get x0 %) keep-keys))
             (set? x0) keep-keys
             :else (wtf x0))
-      (apply merge (mapv meta xs)))))
+      (apply merge (mapv meta xs))))))
 
 (defn cmap [f & xs]
-  "cmap treats map entires as vectors, passing them into f."
+  "cmap treats map entires as [k v] vectors, passing them into f."
   (let [x0 (first xs)]
     (with-meta 
-      (cond (sequential? x0)
+      (cond (nil? x0) ()
+        (sequential? x0)
         (#(if (vector? x0) (into [] %) (apply list %))
          (apply map f xs))
         (map? x0) (zipmap (keys x0) (apply map f xs))
@@ -223,3 +223,55 @@
           (map? x) (reduce #(assoc %1 %2 (get x %2)) {} (filterv #(f (get x %)) (keys x)))
           :else (wtf x))
     (meta x)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;; Working with metadata ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(defn keep-meta [x f & args] 
+  "Applies f w/o affecting meta. Throws an error if x had meta and (f x) can't hold meta."
+  (if (meta x)
+    (with-meta (apply f x args) (meta x))
+    (apply f x args)))
+
+(defn dual-get-in [x ph-mph]
+  "Simplify your paths.
+   ph-mph is a tuple of paths, the first within x the second path within the meta."
+  (let [ph (first ph-mph) mph (second ph-mph)]
+    (cget-in (meta (cget-in x ph)) mph)))
+
+(defn dual-assoc-in [x ph-mph v]
+  (let [ph (first ph-mph) mph (second ph-mph)]
+    (cupdate-in x ph
+      (fn [xi] (vary-meta xi #(cassoc-in % mph v))))))
+
+(defn dual-update-in [x ph-mph f & args]
+  (let [ph (first ph-mph) mph (second ph-mph)]
+    (cupdate-in x ph
+      (fn [xi] (vary-meta xi #(apply cupdate-in % mph f args))))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;; More unique functions ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(defn rmap [f x]
+  "Doesn't tuple map elements, just runs f on all keys and vals separately, useful in recursive functions."
+  (with-meta
+    (cond (or (not x) (vector? x)) (mapv f x)
+          (sequential? x) (apply list (mapv f x))
+          (map? x) (zipmap (mapv f (keys x)) (mapv f (vals x)))
+          (set? x) (set (map f x))
+          :else (wtf x))
+    (meta x)))
+
+(defn _find-value-in [x v p]
+  (cond (= x v) p
+    (coll? x)
+    (let [kys (into [] (ckeys x))
+          vls (into [] (cvals x))]
+      (first (filter identity (mapv #(_find-value-in %2 v (conj p %1)) kys vls))))))
+(defn find-value-in [x v]
+  "Finds the first path to value v in x.
+   The path can't go through a key in maps.
+   Value is determied by cvals. nil for not found."
+  (_find-value-in x v []))

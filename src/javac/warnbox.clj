@@ -4,7 +4,16 @@
 (ns javac.warnbox
   (:import (javax.swing JOptionPane)))
 
-(defn yes-no? [msg]
-  "User input, modal dialog box. Closing it returns false."
-  (let [value (JOptionPane/showInputDialog nil, msg, "Decide", JOptionPane/INFORMATION_MESSAGE, nil, (into-array ["no", "yes"]), "no")]
-    (= value "yes")))
+(defn yes-no? [^String msg]
+  "User input, modal dialog box, boolean return. Closing it returns false."
+  (let [btn (JOptionPane/YES_NO_OPTION)
+        value (JOptionPane/showConfirmDialog nil msg "Warning" (int btn))]
+    (= value (JOptionPane/YES_OPTION))))
+
+(defn yes-no-cancel? [^String msg]
+  "User input, modal dialog box, keyword return. Closing it returns :cancel."
+  (let [btn (JOptionPane/YES_NO_CANCEL_OPTION)
+        value (JOptionPane/showConfirmDialog nil msg "Warning" (int btn))]
+    (cond (= value (JOptionPane/YES_OPTION)) :yes
+      (= value (JOptionPane/NO_OPTION)) :no
+      :else :cancel)))

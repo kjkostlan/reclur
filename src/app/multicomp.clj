@@ -19,9 +19,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Searching ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn who-has [s filename real-char-ix]
-  "Returns [keys real-ix-within-component char-ix-within-piece].
-   The real-ix and char-ix are based on exported pieces, not on folded pieces,
-   so they are the same for all components and we only return one.
+  "Returns [keys, zone], the latter is in a format
+   that codebox/select-our-who-has understands.
    Rounds right."
   (let [comps (:components s) boxes (filterv #(= (:type (get comps %)) :codebox) (keys comps))
         boxes1 (filterv #(= (first (:path (get comps %))) filename) boxes)
@@ -35,9 +34,26 @@
     (if ix-p
       (let [path (into [] (butlast (second ix-p)))
             boxes2 (filterv #(= (:path (get comps %)) path) boxes1)]
-        [boxes2 (last (second ix-p)) (first ix-p)]) [[] 0 0])))
+        [boxes2 [(last (second ix-p)) (first ix-p)]]) [[] [0 0]])))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Getting and setting files, based on s NOT the disk ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defn codebox-keys [comps fname] (filterv #(and (= (first (:path (get comps %))) fname) (= (:type (get comps %)) :codebox)) (keys comps)))
+
+(defn cursor-locate [s k]
+  "Returns the [filename, char-ix within file] of the cursor given a k."
+  (let [comps (:components s) comp (get comps k) 
+        filename (first (:path comp))
+        sp-tuples (multisync/string-path+ comps filename)
+        nums (mapv #(count (first %)) sp-tuples)
+        ij (codebox/cursor-to-real-string comp)
+        stop-path (conj (:path comp) (first ij)) ; Add up all paths b4 this.
+        contrib-b4 (loop [acc 0 ix 0]
+                     (let [ph (get-in sp-tuples [ix 1])]
+                       (if (and ph (not= ph stop-path))
+                         (recur (+ acc (nth nums ix)) (inc ix))
+                         acc)))]
+    [filename (+ contrib-b4 (second ij))]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Modifying the cached tree within s ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn _wrap-tree [paths]
   "Only used for updating the filetree, it would be nice to refactor this away."
@@ -69,37 +85,38 @@
         comps1 (dissoc (multisync/comprehensive-sync (:components s) (assoc (:components s) tmpk fb)) tmpk)]
     (assoc s :components (if reset-fullname0s? (zipmap (keys comps1) (mapv fbrowser/reset-fullname0s (vals comps1))) comps1))))
 
-(defn codebox-keys [comps fname] (filterv #(and (= (first (:path (get comps %))) fname) (= (:type (get comps %)) :codebox)) (keys comps)))
-
 (defn open-cache [s fname]
   "Loads fname from s, not the disk."
   (let [string-pathP-tuples (multisync/string-path+ (:components s) fname)]
     (apply str (mapv first string-pathP-tuples))))
 
 (defn save-cache [s fname new-string]
-  "Saves new-string to the file fname, but not within the disk, instead returns new state."
-  (let [comps (:components s) string-pathP-tuples (multisync/string-path+ comps fname)
+  "Saves new-string to the file fname within s, not the disk."
+  (let [_ (if (not (string? new-string)) (throw (Exception. "The string to save as must be a string.")))
+        comps (:components s) string-pathP-tuples (multisync/string-path+ comps fname)
         
         codeboxks (codebox-keys comps fname)
         path-to-kys (reduce (fn [m k] (let [p (:path (get comps k))] ; to vector of keys.
-                                        (update m p #(if % [k] (conj % k))))) codeboxks)
-                                
-        nb4s (zipmap (mapv second string-pathP-tuples) (reduce + 0 (mapv #(count (first %)) string-pathP-tuples)))
+                                        (update m p #(if % [k] (conj % k))))) {} codeboxks)
+        
+        nb4s (zipmap (mapv second string-pathP-tuples) (reductions + 0 (mapv #(count (first %)) string-pathP-tuples)))
         old-string (apply str (mapv first string-pathP-tuples))
         edits (stringdiff/edits-between old-string new-string)
-        
+
         comps1 (reduce 
                  (fn [acc p] 
                    (let [ks (get path-to-kys p) real-s (codebox/real-strings (get comps (first ks)))
                          nchars (mapv count real-s) nr (count real-s)
                          p+s (mapv #(conj p %) (range nr)) ix0s (mapv #(get nb4s %) p+s)
                          ix1s (mapv + ix0s nchars)
-                         editss (mapv #(stringdiff/window-edits edits %1 %2 (= %3 nr)) ix0s ix1s (range nr))
-                         acc1 (fn [acc k]
-                                (reduce #(codebox/apply-edits-to-real-string
-                                           %1 (nth editss %2) %2)) (get acc k) (range nr))]
-                     (reduce acc1 acc ks))) (keys path-to-kys))]
-    
+                         editss (mapv #(stringdiff/window-edits edits %1 %2 (= %3 (dec nr))) ix0s ix1s (range nr))
+                         update1 (fn [acci k]
+                                   (assoc acci k
+                                     (reduce #(codebox/apply-edits-to-real-string
+                                                %1 (nth editss %2) %2) (get acci k) (range nr))))]
+                     (reduce update1 acc ks))) comps (keys path-to-kys))]
+    ;(println "edits are:" (pr-str edits))
+    ;(println "new string vv:" new-string "new string redux:" (open-cache (assoc s :components comps1) fname))
     (if (not= (open-cache (assoc s :components comps1) fname) new-string) (throw (Exception. "Bug in multicomp/save-cache"))) ; TODO: DEBUG remove when trusted.
     (assoc s :components comps1)))
 
@@ -225,19 +242,26 @@
             s2))) (assoc s :components (dissoc cs0 kwd)))))
 
 (defn close-component [s kwd]
-  "Prompts the user if there are modified files open and the last codebox of a given type is open."
+  "Prompts the user if there are modified files open and the last codebox of a given type is open.
+   Closes will fail if the user clicks cancel."
   (let [comp (get (:components s) kwd) ph (:path comp)]
-    (if (and (= (:type comp) :codebox) (= (count ph) 1) ; this block only generates an error if the user says yes to unsaved changes, forcing the user to save.
-          (= (count (multisync/twins (:components s) kwd)) 0))
+    (cond (and (= (:type comp) :codebox) (= (count ph) 1) ; Closing the last open dialogue box.
+            (= (count (multisync/twins (:components s) kwd)) 0))
       (let [fname (first (:path comp))
             txt0 (if (jfile/exists? fname) (jfile/open fname))
             txt1 (open-cache s fname)]
-        (if (and (not= txt0 txt1) (warnbox/yes-no? (str "Save file before closing? " fname)))
-          ; Think through all the ramifications of creating and closing a file, then later saving and disk updates, etc, b4 removing this lazy thing.
-          (throw (Exception. "Ctrl+s before closing that window, stupid limitation in the program TODO.")))))
-    (if (and (rootfbrowser? comp) (= (count (filterv rootfbrowser? (vals (:components s)))) 1))
-      (throw (Exception. "Can't close the last root fbrowser.")))
-    (close-component-noprompt s kwd)))
+        (if (not= txt0 txt1)
+          (let [opt (warnbox/yes-no-cancel? (str "Save file before closing? " fname))]
+            (cond (= opt :yes) 
+              (do (jfile/save!!! fname txt1)
+                (close-component-noprompt s kwd)) ; the cache is stored in the components; closing it removes the cache.
+              (= opt :no)
+              (close-component-noprompt s kwd)
+              :else s))
+          (close-component-noprompt s kwd)))
+      (and (rootfbrowser? comp) (= (count (filterv rootfbrowser? (vals (:components s)))) 1))
+      (do (println "Can't close the last root fbrowser.") s)
+      :else (close-component-noprompt s kwd))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

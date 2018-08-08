@@ -71,7 +71,7 @@
       (str msg fname " Sent ns-update code to the child process."))
     (let [report (orepl/reload-file!! fname)] ; reload on ourselves.
       (if (:error report)
-        (str "Saved:" fname "Compile error:\n" (:error report)) ; no err in deleted files.
+        (str "Saved:" fname ", Compile error:\n" (:error report)) ; no err in deleted files.
         (str msg fname " Namespaces updated.")))))
 
 (defn save-or-delete1!!! [child-process fname txt] ; nil txt = delete file.

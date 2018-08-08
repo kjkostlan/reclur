@@ -4,10 +4,12 @@
     [clojure.set :as set]
     [app.codebox :as codebox]
     [app.rtext :as rtext]
+    [app.colorful :as colorful]
     [javac.clipboard :as clipboard] 
     [javac.file :as jfile]
     [javac.exception :as jexc]
-    [coder.plurality :as plurality]))
+    [coder.plurality :as plurality]
+    [layout.keybind :as kb]))
 
 ; The rtext has three pieces: 
 ; The first is the text entered. The second is a newline. The last is the repl's output.
@@ -26,9 +28,10 @@
   "levels and sp?s are one element per character. 
     non-white chars in sp?s are rendered the same as comments." ; 380 ms.
   (let [box1 (codebox/set-precompute (update box :pieces #(vector (first %))))
-        t1 (:text (first (:pieces box1))) n1 (+ (count (:text (second (:pieces box)))) (count (:text (nth (:pieces box) 2))))]
+        t1 (:text (first (:pieces box1))) n1 (+ (count (:text (second (:pieces box)))) (count (:text (nth (:pieces box) 2))))
+        col-output (conj (colorful/cmdix2rgb (:num-run-times box)) 1)]
     (subvec (into [] (concat (codebox/colorize box1 t1 (into [] (repeat (count t1) 0)) 0 (count t1))
-                     (repeat n1 [1 1 1 1])))
+                     (repeat n1 col-output)))
       char-ix0 char-ix1))) ; lazy way.
 
 (defn limit-length [s]
@@ -39,6 +42,7 @@
 
 (defn new-repl []
   (assoc rtext/empty-text :type :orepl :lang :clojure :pieces [{:text "(+ 1 2)"} {:text "\n"} {:text "3"}]
+   :num-run-times 0
    :outline-color [0.2 0.2 1 1]
    :interact-fns (interact-fns) :path "repl" :show-line-nums? false :colorize-fn colorize))
 
@@ -62,7 +66,6 @@
 (defn set-state [s-new] "No effect outside of repl." (reset! _state-atom s-new))
 (defn swap-state [f] "No effect outside of repl." (swap! _state-atom f))
 
-(defn shift-enter? [key-evt] (and (:ShiftDown key-evt) (= (:KeyCode key-evt) 10)))
 
 (defn recognized-cmd? [sym] (boolean (ns-resolve r-ns sym)))
 
@@ -108,10 +111,11 @@
   ; If there is a *gui-atom* in the input we run it locally on a future.
     ; Crashes can leak into here but at least this gives us a way to modify the gui.
   (let [box (get-in s [:components repl-k])
-        txt (:text (first (:pieces box)))]
+        txt (:text (first (:pieces box)))
+        s1 (update-in s [:components repl-k :num-run-times] inc)]
     (if-let [x (cmd?-parse txt)] 
-      (run-cmd s (first x) (second x) repl-k)
-      (run-standard-repl s repl-k txt))))
+      (run-cmd s1 (first x) (second x) repl-k)
+      (run-standard-repl s1 repl-k txt))))
  
 (defn ensure-three-pieces [box]
   (let [ps (mapv #(if (:text %) % {:text ""}) (:pieces box)) n (count ps)]
@@ -121,21 +125,11 @@
         (= n 2) [(first ps) {:text "\n"} {:text ""}]
         :else [{:text (apply str (:text (first ps)) (drop-last (:text (second ps))))}
                {:text "\n"} (nth ps 2)]))))
-  
+
 (defn key-press [key-evt box]
-  "Modified to: only edit the first piece. The first piece must stay non-empty (given a space).
-   No run-repl here. Run-repl modifies the state so we call it from multicomp."
-  (let [ed (rtext/key-to-edit box key-evt) arrow? (= (:type ed) :arrow)
-        n0 (count (:text (first (:pieces box))))
-        ed (if (and (not arrow?) (:ix0 ed)) (update ed :ix0 #(min % n0)) ed)
-        ed (if (and (not arrow?) (:ix1 ed)) (update ed :ix1 #(min % n0)) ed)
-        box (if (or (= (:type ed) :type) (= (:type ed) :cut))
-               (update box :cursor-ix #(min % n0)) box)] ; move cursor back for typing.
-    (ensure-three-pieces 
-      (if (= (:type ed) :paste) ; paste the string in instead of the pieces.
-        (let [txt (clipboard/get-as-string)]
-          (update-in box [:pieces 0 :text] #(str (subs % 0 (:ix0 ed)) txt (subs % (:ix1 ed)))))
-          (rtext/dispatch-edit-event box ed)))))
+  (if (kb/shift-enter? key-evt) box ; this wa handled in the heavy dispatch.
+    (let [box1 (rtext/key-press key-evt box)]
+      (ensure-three-pieces box1))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Namespace reloading et al ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -146,47 +140,34 @@
    ;Fully-qualified symbols -> var for the old namespace vars. Thus we don't lose the old references.
    (atom {}))
 
-(defn _update-core!! [ns-symbol removing?] ; returns (not throws) an exception if the code doesn't compile.
+(defn _clear-vars!! [ns-symbol] ; sets to an error message.
+  (let [nms (find-ns ns-symbol)
+        interns (ns-interns nms)]
+    (zipmap (keys interns) 
+      (mapv (fn [k vr] (alter-var-root vr (fn [_] (fn [& args] (throw (Exception. (str "Variable:" k "/" ns-symbol " has been removed."))))))) 
+        (keys interns) (vals interns)))))
+
+(defn _update-simple!! [ns-symbol removing?]
   (let [tmp-sym (gensym 'tmp) ns-tmp (create-ns tmp-sym)]
-    (let [maybe-er (binding [*ns* ns-tmp] ; So the require we call doesn't affect the orepl ns.
-                     (let [ns-object (find-ns ns-symbol)
-                           vars-dayold (if ns-object (ns-interns ns-object) {}) ; symbol -> var.
-                           _ (mapv #(ns-unmap ns-object %) (keys vars-dayold)) 
-                           maybe-e (if removing? false ; the actual reloading part.
-                                     (try (do (require ns-symbol :reload) false)
-                                       (catch Exception e e)))
-                           ns-object (find-ns ns-symbol) ; the :reload needs this.
-                           var-at @var-atom
-                           vars-new (if removing? {} (if maybe-e vars-dayold (ns-interns ns-object))) ; compile error = don't change the namespace.
-                           deleted-stuff (set/difference (apply hash-set (keys vars-dayold)) (apply hash-set (keys vars-new)))]
-                       ;(if (> (count deleted-stuff) 0) (println "Removed from the code: " ns-symbol deleted-stuff))
-                       ; Keep the old var objects around, just set their value to the new stuff.
-                       (mapv (fn [sym] 
-                               (let [sym-full-qual (symbol (str ns-symbol "/" sym))
-                                     var-old (if-let [v (get var-at sym-full-qual)] v (get vars-dayold sym))
-                                     old-val @var-old deleted? (boolean (get deleted-stuff sym))
-                                     err (Exception. (str sym-full-qual (if removing? " belongs to a .clj file that was deleted." " has been removed from it's .clj file.")))
-                                     new-val (if deleted?
-                                               (if (fn? old-val) (fn [& args] (throw err)) err)
-                                               @(get vars-new sym))]
-                                 ; Don't know which of these (or both) is necessary. They are very similar:
-                                 (alter-var-root var-old (fn [_] new-val))
-                                 (swap! var-atom #(assoc % sym-full-qual var-old))
-                                 (intern ns-object sym new-val)))
-                         (keys vars-dayold)) maybe-e))]
-      (remove-ns tmp-sym) maybe-er)))
+    (_clear-vars!! ns-symbol)
+    (binding [*ns* ns-tmp]
+      (let [maybe-e (if removing? false ; the actual reloading part.
+                      (try (do (require ns-symbol :reload) false)
+                              (catch Exception e e)))]
+        maybe-e))))
 
 (defn reload-file!! [cljfile]
   "Reloads a given clj file, removing the ns if the file no longer exists."
   (let [ns-symbol (symbol (jfile/file2dotpath cljfile))
         file-exists? (jfile/exists? cljfile)]
     (cond 
+      (= ns-symbol 'ect) {:error false :message "The project.clj file has no namespace."} ; special for saving changes to the project.clj
       (and (not (find-ns ns-symbol)) (not file-exists?)) {:error false :message "Non-existant namespace with non-existant file, no reloading needed."}
       file-exists?
-      (let [maybe-e (_update-core!! ns-symbol false)
+      (let [maybe-e (_update-simple!! ns-symbol false) ;(_update-core!! ns-symbol false)
             report (if maybe-e {:error (pr-error maybe-e) :message "Compile error"}
                       {:error false :message (str cljfile " saved and updated without error.")})] report)
-      :else (do (_update-core!! ns-symbol true) {:error false :message "File no longer exists, deleted ns."}))))
+      :else (do (_update-simple!! ns-symbol true) {:error false :message "File no longer exists, deleted ns."}))))
 
 (defn save-and-update!!! [cljfile text]
   "Saves a clj file and attempts to reload the namespace, returning the error info if there is a compile error."
@@ -205,7 +186,7 @@
 
 (defn dispatch-heavy [evt s k]
   "Running the repl may affect s, depending on the command. This is agnostic to which repl is focused, i.e the k value."
-  (if (and (= (:type evt) :keyPressed) (shift-enter? evt))
+  (if (and (= (:type evt) :keyPressed) (kb/shift-enter? evt))
     (reduce #(if (= (:type (get (:components %1) %2)) :orepl)
                (run-repl %1 %2) %1) s (:selected-comp-keys s)) s))
 

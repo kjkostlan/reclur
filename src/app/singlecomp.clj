@@ -2,6 +2,7 @@
 (ns app.singlecomp
   (:require [app.xform :as xform]
     [app.orepl :as orepl]
+    [clojure.string :as string]
     ))
 
 (defn click? [x y comp]
@@ -20,7 +21,9 @@
   (if (not (map? comp)) (throw (Exception. "Non-map component")))
   (let [ifns (:interact-fns comp) 
         gfx (try ((:render ifns) (dissoc comp :position) focused?)
-              (catch Exception e [[:drawString [(orepl/pr-error e) 10 10] {:Color [1 1 1 1]}]]))] gfx))
+              (catch Exception e 
+                (let [pieces (string/split (orepl/pr-error e) #"\n")]
+                  (mapv #(vector :drawString [%1 10 (+ 10 (* %2 10))] {:Color [1 1 1 1]}) pieces (range)))))] gfx))
 
 (defn gfx-l2g [gfx cam position]
   (let [xform (xform/xx cam (pos-xform position))]

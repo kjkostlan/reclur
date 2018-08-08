@@ -25,7 +25,9 @@
     [app.xform :as xform]
     [app.siconsole :as siconsole]
     [app.iteration :as iteration]
-    [search.strfind :as strfind]))
+    [search.strfind :as strfind]
+    [layout.keybind :as kb]
+    [coder.logger :as logger]))
 
 (declare launch-main-app!!) ; avoids a circular dependency with launch main app depending on earlier fns.
 
@@ -61,35 +63,26 @@
 
 ;;;;;;;;;;;;;;;; Keyboard interaction with hotkeys ;;;;;;;;;;;;;;;;;;;;;
 
-(defn ctrl+? [kevt letter] 
-  (and (or (:ControlDown kevt) (:MetaDown kevt)) (not (:ShiftDown kevt))
-    (= (str letter) (str (:KeyChar kevt)))))
-
-(defn ctrl-shift+? [kevt letter] 
-  (and (or (:ControlDown kevt) (:MetaDown kevt)) (:ShiftDown kevt)
-    (= (str letter) (str (:KeyChar kevt)))))
-
-(defn esc? [kevt] (= (:KeyCode kevt) 27))
-
 (defn hotkeys [] ; fn [s] => s, where s is the state.
-  {#(ctrl+? % "w") close ; all these are (fn [s]).
-   #(esc? %) toggle-typing
-   #(ctrl-shift+? % "r") #(if (or (globals/are-we-child?) (warnbox/yes-no? "Relaunch app, losing any unsaved work? Does not affect the child app.")) 
+  {#(kb/ctrl+? % "w") close ; all these are (fn [s]).
+   #(kb/esc? %) toggle-typing
+   #(kb/ctrl-shift+? % "r") #(if (or (globals/are-we-child?) (warnbox/yes-no? "Relaunch app, losing any unsaved work? Does not affect the child app.")) 
                             (do (future (launch-main-app!!)) (throw (Exception. "This iteration is dead, reloading."))) %)
-   #(ctrl+? % "`") selectmovesize/swap-on-top 
-   #(ctrl+? % "f") (fn [s] (strfind/add-search-box s)) 
+   #(kb/ctrl+? % "`") selectmovesize/swap-on-top 
+   #(kb/ctrl+? % "f") (fn [s] (strfind/add-search-box s)) 
+   #(kb/ctrl+? % "p") (fn [s] (logger/log-toggle-at-cursor s))
    ; The saving system: 
    ; ctrl+s = save onto child generation.
    ; ctrl+shift+s = pull child onto ourselves (TODO: do this when we quit as well).
    ; The child is viewed as the most up-to-date at all times, and it is occasionally copied back to us.
-   #(ctrl+? % "s") (fn [s] (iteration/save-state-to-disk!!! s)) ; save to the child, rapid iteration.
-   #(ctrl-shift+? % "s") (fn [s] ; copy from child to us if we are the parent
+   #(kb/ctrl+? % "s") (fn [s] (iteration/save-state-to-disk!!! s)) ; save to the child, rapid iteration.
+   #(kb/ctrl-shift+? % "s") (fn [s] ; copy from child to us if we are the parent
                            (if (and (globals/can-child?) (not (globals/are-we-child?)))
                              (let [s1 (iteration/ensure-childapp-folder-init!!! s)]
                                (iteration/copy-child-to-us!!! s1) s1) s))
-   #(ctrl-shift+? % "c") store-state!
-   #(ctrl-shift+? % "z") (fn [_] (retrieve-state!))})
-
+   #(kb/ctrl-shift+? % "c") store-state!
+   #(kb/ctrl-shift+? % "z") (fn [_] (retrieve-state!))
+   #(kb/ctrl+? % "p") (fn [s] (logger/log-toggle-at-cursor s))})
 
 ;;;;;;;;;;;;;;;; Adding a component on the top of the z-stack ;;;;;;;;;;;;;;;;;;;;;
 
@@ -151,7 +144,7 @@
 
 (defn update-mouse [evt-g evt-c s k]
   (if (or (= k :mouseMoved) (= k :mouseDragged)) 
-             (assoc s :mouse-pos [(:X evt-c) (:Y evt-c)]) s))
+             (assoc s :mouse-pos-world [(:X evt-c) (:Y evt-c)]) s))
 
 (defn expand-child [mevt-c s]
   (let [x (:X mevt-c) y (:Y mevt-c) comps (:components s)] 
@@ -192,7 +185,6 @@
         ut #(maybe-use-tool evt-c s %)
         
         click-target (if (= ek :mousePressed) (selectmovesize/under-cursor (:X evt-c) (:Y evt-c) (:components s)))
-        m? (or (= ek :mousePressed) (= ek :mouseDragged))
         double? (and (= ek :mousePressed) (= (:ClickCount evt-c) 2))
         shift? (:ShiftDown evt-c)
         ctrl? (:ControlDown evt-c)
@@ -202,13 +194,9 @@
       (= ek :mouseReleased) (ut sms)
       (and click-target ctrl? double?) (ut ech)
       (and click-target double?) (ut ofl)
-      (or (and (= ek :keyPressed) (not ctrl?) (not meta?)) 
-        (and (or (= ek :mousePressed) (= ek :mouseDragged)) (or meta? ctrl?))) (ut cam)
+      (or (and (= ek :keyPressed) (kb/ctrl+? evt-c "1"))
+        (= ek :mouseWheelMoved) (and (or (= ek :mousePressed) (= ek :mouseDragged)) (or meta? ctrl?))) (ut cam)
       :else (ut sms))))
-
-(defn low-cpu-mouse-move [evt-g s]
-  (let [evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g)]
-    (update-mouse evt-g evt-c s :mouseMoved)))
 
 (defn dispatch-listener [evt-g s] 
   "Transforms and dispatches an event (that doesn't change :typing-mode? and :active-tool).
@@ -241,7 +229,7 @@
 
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
 
-(defn globalize-gfx [comps cam local-comp-renders selected-comp-keys tool-sprite sel-move-sz-sprite tool-hud-sprite]
+(defn globalize-gfx [comps cam local-comp-renders selected-comp-keys tool-sprite sel-move-sz-sprite typing?]
   "Takes the local gfx of components as well as tool information to make the global gfx"
   (let [sel-keys (apply hash-set selected-comp-keys)
         
@@ -251,10 +239,16 @@
                                      cam1 (xform/xx cam (singlecomp/pos-xform (:position c)))]
                                  {:camera cam1 :gfx (get local-comp-renders k) :z (:z c)}))
                              (keys comps)))
-            
+        bg-scale 10.0
+        bg-perspective-effect 2.0 ; make it in the background.
+        bg {:no-sprite? true :camera cam :z -1e100
+            :gfx [[:bitmap [(* bg-scale -500) (* bg-scale -500) bg-scale bg-perspective-effect "./assets/forest.jpg"]]]}
         sel-sprite {:no-sprite? true :camera cam :z 2e10
-                    :gfx (into [] (apply concat (mapv #(multicomp/draw-select-box comps % [0 0 1 1]) sel-keys)))}]
-    (assoc comp-sprites :TOOL-SPRITE-CORE tool-sprite :TOOL-SMS-SPRITE sel-move-sz-sprite :TOOL-SEL-SPRITE sel-sprite :TOOL-WHICH-MODE tool-hud-sprite)))
+                    :gfx (into [] (apply concat (mapv #(multicomp/draw-select-box comps % [0 0 1 1]) sel-keys)))}
+        haze-sprite {:no-sprite? true :camera [0 0 1 1] :z -1e99
+                     :gfx (if typing? [[:fillRect [0 0 1500 1500] {:Color [0 0 0 0.333]}]] [])}]
+    (assoc comp-sprites ::TOOL-SPRITE-CORE tool-sprite ::TOOL-SMS-SPRITE sel-move-sz-sprite ::TOOL-SEL-SPRITE sel-sprite 
+    ::BACKGROUND-SPRITE bg ::HAZE-SPRITE haze-sprite)))
 
 (defn update-gfx [s]
   "Returns s with updated graphics information. app-render will then use the updated graphics to return a sprite map."
@@ -279,9 +273,10 @@
         
         sel-move-sz-sprite (if (:typing-mode? s) {:camera [0 0 1 1] :gfx []} 
                              {:camera cam :gfx ((:render (selectmovesize/get-tool)) s) :z 1e10 :no-sprite? true})
-        tool-hud-sprite {:no-sprite? true :camera [0 0 1 1] :z 1e100
-                         :gfx (multicomp/which-tool-hud s)}
-        global-gfx (globalize-gfx (:components s) (:camera s) gfx-comps-l (:selected-comp-keys s) tool-sprite sel-move-sz-sprite tool-hud-sprite)]
+        ;tool-hud-sprite {:no-sprite? true :camera [0 0 1 1] :z 1e100
+        ;                 :gfx (multicomp/which-tool-hud s)}
+        global-gfx (globalize-gfx (:components s) (:camera s) gfx-comps-l (:selected-comp-keys s) tool-sprite sel-move-sz-sprite
+                     (:typing-mode? s))]
     (assoc-in s1 [:precompute :gfx :global] global-gfx)))
 
 (defn app-render [s]

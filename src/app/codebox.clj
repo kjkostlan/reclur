@@ -128,7 +128,7 @@
 
 (defn new-codebox []
   (assoc rtext/empty-text :interact-fns (interact-fns) :outline-color [0.8 0 0 1] :path []
-    :type :codebox :lang :clojure :precompute {:inter-levels [0]} :colorize-fn (fn [& args] (apply colorize args))))
+    :type :codebox :lang :clojure :precompute {:levels [] :inter-levels [0]} :colorize-fn (fn [& args] (apply colorize args))))
 
 (defn code-fold-toggle [cur-pieceix folding? ixs exporting? box]
   "Both (un)exporting and code (un)folding. exporting? nil or false for not exporting"
@@ -146,7 +146,7 @@
         cud #(edits-update box %1 [edit])]
    (cond (and exporting? folding?) ; fold it up, but put it it into the exported child.
      (let [box1 (boxy1 (concat (:b4 stats) [(dissoc (assoc folded-piece :exported? exporting?) :children)] (:afr stats)))
-           expand-ix (int (/ cur-pieceix 2))    
+           expand-ix (count (filterv #(exported? %) (subvec (:pieces box) 0 cur-pieceix))) ;expand-ix (int (/ cur-pieceix 2))    
            child (set-precompute (assoc (new-codebox) :pieces (:children folded-piece) 
                                     :path (conj (:path box) expand-ix)))
            ; Calculate total line nums before:
@@ -296,7 +296,7 @@
                      (not (folded? (nth (:pieces box) cur-pieceix1))))]
       (code-fold-toggle-at-cursor cur-ix folding? nil box)) (rtext/mouse-press m-evt box)))
 
-;;;;;;;;;;;;;;;;;;;;;;;; Finding code functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;; Finding code locations ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn ensure-visible [box path]
   "Unfolds code to make the path visible, drags the cursor along if possible. Does not scroll to said piece."
@@ -331,12 +331,13 @@
         loc-within (- jx (nth n-b4s (- index-in-path ix-0)))]
     [index-in-path loc-within]))
 
-(defn select-on-real-string [box pix jx0 jx1]
-  "Selects the text on the real string, scrolling to the selection and expanding if necessary.
+(defn select-our-who-has [box who-has-loc n-chars-in-selection]
+  "Selects the text on the as-real-as-we-know string, scrolling to the selection and expanding if necessary.
    pix is the ix of the real string, jx0 and jx1 are the ixs within the real string.
-   If the jxs go off the end it just maps them to the end.
-   Note: If it's hard to get pix, jx0, or jx1 look at/use onecode/goto-code."
-  (let [ij0 (u-ixjx box pix jx0)
+   If the jxs go off the end it just maps them to the end."
+  (let [pix (first who-has-loc) jx0 (second who-has-loc) jx1 (+ jx0 n-chars-in-selection)
+  
+        ij0 (u-ixjx box pix jx0)
         ij1 (u-ixjx box pix jx1)
        
         uspaths (splay-out box)
@@ -361,6 +362,31 @@
     (rtext/scroll-to-see-cursor
      (assoc (rtext/scroll-to-see-cursor (assoc box1 :cursor-ix vis-sel1))
             :cursor-ix vis-sel0 :selection-start vis-sel0 :selection-end vis-sel1))))
+
+(defn cursor-to-real-string [box]
+  "Returns [ix jx] on the real string. Rounds right."
+  (let [uspaths (splay-out box)
+        rsix (real-str-ixs box uspaths) nr (count rsix)
+        
+        n-contrib (mapv #(let [p (get-in box %)] (count (if (or (folded? p) (exported? p)) "" (:text p)))) uspaths)
+        
+        ; (subvec uspaths (get-in rsix [i 0]) (get-in rsix [i 1]))
+        
+        n-vis-contrib (mapv #(if (> (count %) 2) 0 (count (:text (get-in box %)))) uspaths)
+        n-visb4 (into [] (reductions + 0 n-vis-contrib))
+        n-visafr (mapv + n-visb4 n-vis-contrib) n (count n-vis-contrib)
+        cur-ix (:cursor-ix box)
+        pathix-contains-cursor (first (filter #(and (<= (nth n-visb4 %) cur-ix) (> (nth n-visafr %) cur-ix)) (range n)))
+        pathix-contains-cursor (if pathix-contains-cursor pathix-contains-cursor (dec n))
+        
+        
+        ix (first (filter #(< pathix-contains-cursor (get-in rsix [% 1])) (range nr)))
+        ix (if ix ix (dec nr))
+        
+        vis-jx (- cur-ix (n-visb4 pathix-contains-cursor))
+
+        jx (apply + vis-jx (subvec n-contrib (get-in rsix [ix 0]) pathix-contains-cursor))]  
+[ix jx]))
 
 ;;;;;;;;;;;;;;;;;;;;; other child UI functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

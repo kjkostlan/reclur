@@ -3,6 +3,7 @@
   (:require [javac.file :as jfile]
     [app.chfile :as chfile]))
 
+; Stores the app state and queued events among other things.
 (defonce one-atom (atom {}))
 
 (defn read-conf []

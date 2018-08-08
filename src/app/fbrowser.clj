@@ -95,13 +95,12 @@
                      (into [] (concat (subvec lines 0 lix) [(assoc (dissoc line :children) :text (str-assoc txt level folder-open))]
                                 (:children line) (subvec lines (inc lix)))) ; :children are already indented more than the parent.
                      :else lines)
-
         cur-fn #(_cursor-advect box new-lines lix %)]
     (-> box (assoc :pieces new-lines) (update :cursor-ix cur-fn)
       (update :selection-start cur-fn) (update :selection-end cur-fn))))
 
 (defn clear-empty-files [box]
-  "Clears files with no filename text (i.e. just the newline and maybe a folder). 
+  "Clears files with no filename text (i.e. just the newline and indentation/ the folder arrow mark). 
    Eventually this will integrate in some way with some form of 'are your sure you want to delete'?.
    Subfilders are deleted iff the folder is compact."
   (let [keep-line?s (mapv #(>= (count (:text %)) (+ 2 (if (folder? %) 1 0))) (:pieces box))]
@@ -153,9 +152,9 @@
     (assoc (assoc box3 :pieces pieces4) :cursor-ix ; :cursor-ix also may move.
       (rtext/carry-cursor (:pieces box3) pieces4 (:cursor-ix box3) (fn [old new ix] ix)))))
 
-(defn partial-grab-fn [piece txt ix01] ; only total grab for now (is this a good idea or not?)
-  ;(assoc piece :text (valid-str (folder? piece) (expanded? piece) txt)) ; partial grab.
-  piece)
+(defn partial-grab-fn [piece txt ix01] 
+  piece ;(if (< (second ix01) (count piece)) piece {:text ""}) ; this would be better but causes other bugs.
+  )
 
 (defn delete-fn [box stats]
    (insert-fn box "" stats true))
@@ -256,6 +255,32 @@
        ln (pixel-to-line box x y)]
    (if (and (>= ln 0) (< ln (count (:pieces box))) (folder? (nth (:pieces box) ln)))
     (_folder-open-toggle box ln) box)))
+    
+(defn selection-snap [box]
+  "Makes sure the selection selects text within a file or whole files."
+  (let [sel-start (:selection-start box) sel-end (:selection-end box)]
+    (if (and sel-start sel-end (> sel-end sel-start))
+      (let [p-s0 (rtext/cursor-ix-to-piece (assoc box :cursor-ix (inc sel-start))) ; [piece ix, loc within piece.]
+            p-s1 (rtext/cursor-ix-to-piece (assoc box :cursor-ix sel-end)) ; round left for this.
+            ix0 (first p-s0) jx0 (dec (second p-s0))
+            ix1 (first p-s1) jx1 (second p-s1)
+            n (count (:text (nth (:pieces box) ix0)))]
+        (cond 
+          (and (= ix0 ix1) (= jx0 0) (>= jx1 (dec n))) box
+          (= ix0 ix1)
+          (let [n0 (level-of (nth (:pieces box) ix0))
+                start1 (+ sel-start (cond (< jx0 n0) (- n0 jx0) (= jx0 n) -1 :else 0))
+                end1 (+ sel-end (cond (< jx1 n0) (- n0 jx1) (= jx1 n) -1 :else 0))]
+            (-> box (assoc :selection-start start1)
+              (assoc :selection-end end1)
+              (update :cursor-ix #(if (< % start1) start1 end1))))
+          :else
+          (let [n1 (count (:text (nth (:pieces box) ix1)))
+                start1 (rtext/cursor-piece-to-ix box ix0)
+                end1 (+ 1 (dec n1) (rtext/cursor-piece-to-ix box ix1))]
+            (-> box (assoc :selection-start start1) (assoc :selection-end end1)
+             (update :cursor-ix #(if (< % start1) start1 end1))))))
+      box)))
 
 (defn mouse-press [m-evt box] ; did we click on the arrow? If so folder-open-toggle.
   (let [c-ix (rtext/pixel-to-selected-char-ix box (:X m-evt) (:Y m-evt))
@@ -290,7 +315,8 @@
            box1 (assoc box :pieces pieces)]
        (assoc box1 :selection-start 0 :selection-end 0
          :cursor-ix (+ (rtext/cursor-piece-to-ix box1 (+ lix 1)) lev (if folder? 1 0) (count nm))))
-     :else (rtext/key-press key-evt box)))) ; normal keypress BUT with our modified fn.
+     :else 
+       (clear-empty-files (rtext/key-press key-evt box))))) ; normal keypress but deleting any files.
 
 (defn reset-fullname0s [box]
   ":fullname0 is reset, use this after a disk update."
@@ -462,7 +488,8 @@
      :mouseDragged rtext/mouse-drag
      :keyPressed key-press
      :keyReleased rtext/key-release
-     :mouseWheelMoved rtext/mouse-wheel}
+     :mouseWheelMoved rtext/mouse-wheel
+     :mouseReleased (fn [m-evt comp] (selection-snap comp))}
      (fn [e-clj comp] comp)
      (fn [e-clj comp] (:type e-clj))))
 
