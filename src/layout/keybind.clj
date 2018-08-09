@@ -1,7 +1,7 @@
 ; Key modifiers. 
 (ns layout.keybind)
 
-;;;;;;;;;;;;;;;;;; Simple keybindings ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;; Simple key processings ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn ctrl+? [kevt letter] 
   (and (or (:ControlDown kevt) (:MetaDown kevt)) (not (:ShiftDown kevt))

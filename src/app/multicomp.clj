@@ -120,6 +120,10 @@
     (if (not= (open-cache (assoc s :components comps1) fname) new-string) (throw (Exception. "Bug in multicomp/save-cache"))) ; TODO: DEBUG remove when trusted.
     (assoc s :components comps1)))
 
+(defn who-is-open [s]
+  "Which files are open in our codeboxes."
+  (set (mapv #(first (:path %)) (filterv #(= (:type %) :codebox) (vals (:components s))))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; DISK based file handling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn load-from-file [comps filename]

@@ -1,4 +1,4 @@
-; Just a place to print results, eventual TODO of browsing features and macro log file location.
+; Just a place to grab println et al, coder/logger is the more "proper" debug logging tool.
 (ns app.siconsole
  (:require [app.rtext :as rtext]
    [layout.colorful :as colorful]
@@ -17,7 +17,7 @@
     (mapv #(nth cols %) piece-ixs)))
 
 (defn new-console []
-  (assoc rtext/empty-text :interact-fns (interact-fns) 
+  (assoc rtext/empty-text :interact-fns (interact-fns) :pieces [{:text "\n"}]
   :outline-color [0 0.75 0 1] :path "console" :type :siconsole :show-line-nums? false :colorize-fn colorize))
 
 (defn get-text [box]

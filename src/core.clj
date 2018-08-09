@@ -15,6 +15,7 @@
     [javac.warnbox :as warnbox]
     [javac.clojurize :as clojurize]
     [layout.onecode :as onecode]
+    [layout.undo :as undo]
     [app.multicomp :as multicomp] 
     [app.multisync :as multisync] 
     [app.orepl :as orepl]
@@ -305,25 +306,26 @@
         s3 (if (= (count txt) 0) s2 (siconsole/log s2 (str txt "\n")))]
      (if err? (do (println (orepl/pr-error s1-or-ex)) (siconsole/log s3 (orepl/pr-error s1-or-ex))) s3)))
 
-(defn try-dispatch-listener [evt-g s] ; TODO: superfulus level.
-  "Can't use a generic f as input b/c functions won't always get updated when that happens.
-   Logs prints within the listener to si-console."
-  (logged-function-run #(dispatch-listener %2 %1) s evt-g))
+(defn undo-wrapped-listener [evt-g s]
+  (let [ty (:type evt-g)
+        undo? (and (= ty :keyPressed) (kb/ctrl+? evt-g "z"))
+        redo? (and (= ty :keyPressed) (kb/ctrl-shift+? evt-g "z"))]
+    (cond undo? (undo/undo!!) redo? (undo/redo!!)
+      :else (let [s1 (logged-function-run #(dispatch-listener %2 %1) s evt-g)]
+              (undo/maybe-report!! evt-g s s1) s1))))
 
 (defn launch-main-app!! []
   (cpanel/stop-app!!)
   (let [layout (onecode/layout)
         s {:layout layout :components {} :camera [0 0 1 1] :typing-mode? true :active-tool (first (get-tools))}
         s1 (if (and (globals/can-child?) (not (globals/are-we-child?))) (iteration/ensure-childapp-folder-init!!! s) s)
-        
         s2 ((:initial-position layout) s1 (root-fbrowser s1) (orepl/new-repl) (siconsole/new-console))
         
         s3 (assoc s2 :selected-comp-keys #{})
         s4 (update s3 :components #(multisync/update-keytags {} %))]
-    (cpanel/launch-app!! s4 (fn [evt-g s] (try-dispatch-listener evt-g s))
+    (cpanel/launch-app!! s4 undo-wrapped-listener
       (fn [s] (logged-function-run update-gfx s))
       app-render))) ; keep app-render minimal, no logging is allowed here.
-
 
 ; DONT call save-file, we can't run swing stuff from shutdown hooks reliably.
 ; Instead we do this on the exit-if-close function.
