@@ -41,6 +41,9 @@
 (defn cursor-locate [s k]
   "Returns the [filename, char-ix within file] of the cursor given a k."
   (let [comps (:components s) comp (get comps k) 
+        _ (if (nil? comps) (throw (Exception. "Bad state")))
+        _ (if (nil? comp) (throw (Exception. (str k " doesn't exist within the :components"))))
+        _ (if (not= (:type comp) :codebox) (throw (Exception. "Not a codebox")))
         filename (first (:path comp))
         sp-tuples (multisync/string-path+ comps filename)
         nums (mapv #(count (first %)) sp-tuples)

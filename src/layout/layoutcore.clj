@@ -94,7 +94,7 @@
             (recur (apply hash-set acc1) (inc ix)))))))
 
 (defn maxarea-free-screenunitxxyy [s]
-  "The largest free xxyy on the screen, approximate algorithm but tries to align snugly. 
+  "The largest free xxyy on the screen. 
    x0 = x1 an y0 = y1 if there is no free space."
   (let [vis-xxyy (visible-xxyy (:camera s)) x (- (vis-xxyy 1) (vis-xxyy 0)) y (- (vis-xxyy 3) (vis-xxyy 2))
         uxxyys (mapv #(unitscreen-xxyy vis-xxyy %) (mapv xxyy (vals (:components s))))
@@ -103,4 +103,5 @@
         rects (into [] (screenunitfree-rects uxxyys))
         areas (mapv #(* (- (% 1) (% 0)) (- (% 3) (% 2))) rects)
         max-area (apply max 0 areas)]
-    (nth rects (first (filter #(= (nth areas %) max-area) (range))))))
+    (if (= rects []) [(vis-xxyy 0) (vis-xxyy 0) (vis-xxyy 2) (vis-xxyy 2)] ; can happen once in a while when there is no space.
+      (nth rects (first (filter #(= (nth areas %) max-area) (range)))))))

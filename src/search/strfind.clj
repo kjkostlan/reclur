@@ -1,22 +1,28 @@
 ; String-based search tools, the most basic kind of searching.
 (ns search.strfind
-  (:require [clojure.string :as string]
+  (:require [clojure.string :as string] [clojure.set :as set] [clojure.pprint]
             [javac.file :as jfile]
             [layout.layoutcore :as layoutcore]
             [app.rtext :as rtext]
             [app.multicomp :as multicomp]
             [app.fbrowser :as fbrowser]
             [app.orepl :as orepl]
-            [app.siconsole :as siconsole]
-            [clojure.pprint])
+            [app.siconsole :as siconsole])
   (:import [java.util.regex Pattern]))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Basic searching tools ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Basic tools ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn wix- [v ix]
+  (if (= ix 0) (dec (count v)) (dec ix)))
+
+(defn wix+ [v ix]
+  (if (= ix (dec (count v))) 0 (inc ix)))
 
 (defn boring-find [s ky case?]
   "Returns a vector of [start ix, end ix]. 
-   s-key can be either a string or regexp, as it can be in most cases.
-   For non-regex each end ix is (count s-key) more than the corresponding start ix."
+   ky can be either a string or regexp, as it can be in most cases.
+   For non-regex each end ix is (count ky) more than the corresponding start ix."
   (let [case? (or case? (not (string? ky))) ; how to set case on a regexp?
         ky (if case? ky (string/lower-case ky))
         re (if (string? ky) (re-pattern (Pattern/quote ^String ky)) ky)
@@ -30,102 +36,82 @@
             (recur (conj acc [(+ nb4 ni) (+ nb4 ni nl)])
                    (+ nb4 ni nl) (inc ix)))))))
 
-(defn file-find [files ky case?]
-  "Search in any of files and returns a map of filename => start ix, end ix].
-   Non-existant files are ignored. Only returns files with matches."
-  (let [files (if (sequential? files) (into [] files) [files])
-        texts (filterv identity (mapv jfile/open files))
-        searches (mapv #(boring-find % ky case?) texts)
-        out (zipmap files searches)]
-    (select-keys out
-      (filterv #(> (count (get out %)) 0) files))))
-
-(defn folder-find [folder ky case?]
-  "Search among clj files in said folder, acts recursivly.
-   Returns a vector of [filename, start ix, end ix]."
-  (let [files (fbrowser/recursive-unwrap folder)
-        non-folder (filterv jfile/texty? files)]
-    (file-find non-folder ky case?)))
+(defn find1 [txt ky case? ix dir wrap?]
+  "Finds the previous or next instance from ix (depending on the sign of dir).
+   ky can be a string or regexp. Returns [start ix, end ix] or nil."
+  (let [all-pairs (boring-find txt ky case?)] ; don't know of a better way than just running the whole string.
+    (if (< dir 0)
+      (let [last-b4 (last (filterv #(<= (last %) ix) all-pairs))]
+        (if last-b4 last-b4 (if wrap? (last all-pairs))))
+      (let [first-afr (first (filterv #(> (first %) ix) all-pairs))] ; > or >= ?
+        (if first-afr first-afr (if wrap? (first all-pairs)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Working with the app state ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn set-up-search [s opts] 
-  (let [comps (:components s)
-        sel-keys (:components opts)
-                                        ; ts (get-in s [:tool-state ::strfind])
-                                        ; :searches = vector of [k char-ix0 char-ix1], k = comp key used for :dumb-text?, filename if otherwise.
-                                        ; :search-ix = index on searches that will be selected next.
-        simple? (:dumb-text? opts)
-        
-                                        ; Texts, in order of key name or filename:
-        kys (if simple? (into [] (sort sel-keys))
-                (let [file-groups (mapv #(let [c (get comps %) ty (:type c) ph (:path c)]
-                                           (cond (= ty :codebox) [(first ph)]
-                                                 (= ty :fbrowser) (filterv jfile/texty? (fbrowser/recursive-unwrap (fbrowser/devec-file ph)))
-                                                 :else [])) sel-keys)]
-                  (into [] (sort (apply hash-set (apply concat file-groups))))))
-        texts (if simple? (mapv #(rtext/rendered-string (get comps %)) kys)
-                  (mapv #(if (> (count (first (multicomp/who-has s % 0))) 0) ; already-open stuff takes priority. 
-                           (multicomp/open-cache s %) 
-                           (if-let [x (jfile/open %)] x "")) kys))
-                                        ; Search result groups:
-        result-groups (mapv #(boring-find % (:key opts) (:case? opts)) 
-                            texts)
-        searches (into [] (apply concat 
-                                 (mapv (fn [k g] (mapv #(vector k (first %) (second %)) g)) 
-                                       kys result-groups)))]
-    (update-in s [:tool-state ::strfind]
-               #(merge % {:searches searches :search-ix 0 :opts opts}))))
-
 (defn search-step [s opts] 
-  (let [ts (get-in s [:tool-state ::strfind])
-        searches (:searches ts)
-        ix (:search-ix ts)
-        go-fn (:goto (:layout s)) ;[s k key-is-file? char-ix0 char-ix1]
-                                        ; Go to the search
-        search (nth searches ix)
-        cam0 (:camera s)
-        s1 (go-fn s (first search) (not (:dumb-text? opts)) (second search) (nth search 2))
-        cam1 (:camera s1)
-        ; Keep the repl where it is, and on top:
-        box-k (:box-k ts)
-        max-z (layoutcore/max-z (dissoc (:components s1) box-k))
-        s2 (update-in s1 [:components box-k] #(layoutcore/dont-move % cam0 cam1))
-        
-        n (count (:searches ts))
-        ix1 (if (:reverse? opts)
-              (if (= ix 0) (dec n) (dec ix))
-              (if (= ix (dec n)) 0 (inc ix)))]
-    (assoc-in s2 [:tool-state ::strfind :search-ix] ix1)))
-
-(defn search-loop [s opts]
-  (let [ts (get-in s [:tool-state ::strfind])
-        stuff? (boolean ts)
-        ; recompile a fresh regexp every time => not equal => must convert to string.
-        opts-change? (and stuff? (not= (str opts) (str (:opts ts))))
-
-        s1 (if (and stuff? (not opts-change?) (not (:refresh? (:opts ts))))
-             s (set-up-search s opts)) ; initial search set up, which sets the tool state.
-        ts1 (get-in s1 [:tool-state ::strfind])]
-    (if (> (count (:searches ts1)) 0)
-      (search-step s1 opts) ; single search step, which involves moving to the component and keeping this box unmoved.
-      (siconsole/log s1 (str "\"" (:key opts) "\"" " not found in the choosen comps.")))))
+  "Runs a single step."
+  (let [boxk (:boxk opts) comps (:components s)
+        compk (:target opts) comp (get comps compk)
+        go-fn0 (:goto (:layout s)) ;[s k key-is-file? char-ix0 char-ix1]
+        go-fn (fn [s k key-is-file? char-ix0 char-ix1] 
+                (let [s1 ((:goto (:layout s)) s k key-is-file? char-ix0 char-ix1)
+                      cam0 (:camera s) cam1 (:camera s1)
+                      max-z (layoutcore/max-z (dissoc (:components s1) boxk))]
+                  (update-in s1 [:components boxk] #(layoutcore/dont-move % cam0 cam1))))
+        fail (fn [] (siconsole/log s (str "not found: " (pr-str (:key opts)))))
+        file2k (fn [filename]
+                 (first (filterv #(let [c (get comps %)] 
+                                    (and (= (:type c) :codebox) (= (count (:path c)) 1) (= (first (:path c)) filename)))
+                   (keys comps))))] 
+    (cond (or (:dumb-text? opts) (and (not= (:type comp) :codebox) (not= (:type comp) :fbrowser)))
+      (let [txt (rtext/rendered-string comp)
+            cur-ix (:cursor-ix comp)
+            ix1? (find1 txt (:key opts) (:case? opts) cur-ix (if (:reverse? opts) -1 1) true)]
+        (if ix1? (go-fn s compk false (first ix1?) (second ix1?)) (fail)))
+      (= (:type comp) :codebox)
+      (let [fname (first (:path comp))
+            txt (multicomp/open-cache s fname)
+            k0 (file2k fname)
+            cur-ix (second (multicomp/cursor-locate s k0))
+            ix1? (find1 txt (:key opts) (:case? opts) cur-ix (if (:reverse? opts) -1 1) true)]
+        (if ix1? (go-fn s fname true (first ix1?) (second ix1?)) (fail)))
+      :else ;fbrowser
+      (let [files (filterv jfile/texty? (fbrowser/recursive-unwrap (fbrowser/devec-file (:path comp)))) nf (count files)
+            comps (:components s)]
+        (if (= nf 0)
+          (fail)
+          (let [file-ix (if (:index opts) (:index opts) 0) 
+                fix?1 (loop [ix file-ix nloop 0]
+                        (if (<= nloop nf) 
+                          (let [fname (nth files ix)
+                                txt (jfile/open fname)
+                                k0? (file2k fname)
+                                cur-ix (if k0? (second (multicomp/cursor-locate s k0?))
+                                         (if (:reverse? opts) (count txt) -1))
+                                sel-ix? (find1 txt (:key opts) (:case? opts) cur-ix (if (:reverse? opts) -1 1) false)]
+                            (if sel-ix? [fname (first sel-ix?) (second sel-ix?)] 
+                              (recur ((if (:reverse? opts) wix- wix+) files ix) (inc nloop))))))]
+            (if fix?1 (go-fn s (first fix?1) true (second fix?1) (nth fix?1 2)) 
+              (fail))))))))
 
 (defn pretty [code]
   (with-out-str (clojure.pprint/pprint code)))
 
 (defn add-search-box [s]
-  (let [box-k (keyword (gensym 'searchbox))
-        s1 (assoc-in s [:tool-state ::strfind] {:box-k box-k})
-        m0 {:key "" :case? false :reverse? false :dumb-text? false :refresh? false}
-        ckys (:selected-comp-keys s)
-        m (assoc m0 :components
-                 (mapv #(if (symbol? %) (symbol (str "'" %)) %) ckys))
-        code (list 'do
-                   '(require 'search.strfind)
-                   (list 'search.strfind/search-loop 's m))
-        code (pretty code)
-        cursor-ix0 (+ (first (first (boring-find code ":key \"\"" false))) 6)
-        new-comp (orepl/command-wrapped-repl 's code cursor-ix0)
-        s2 (assoc s1 :selected-comp-keys #{box-k} :typing-mode? true)]
-    ((:add-component (:layout s2)) s2 new-comp box-k true)))
+  (let [ckys (:selected-comp-keys s)]
+    (if (= (count ckys) 0) (siconsole/log s "Must select a component to search within.")
+      (let [boxk (keyword (gensym 'searchbox))
+            m0 {:key "" :case? false :reverse? false :dumb-text? false}
+            
+            blit #(if (symbol? %) (symbol (str "'" %)) %)
+            cky (first ckys)
+            m (assoc m0 :target (blit cky) :boxk (blit boxk))
+            code (list 'do
+                       '(require 'search.strfind)
+                       (list 'search.strfind/search-step 's m))
+            code (pretty code)
+            cursor-ix0 (+ (first (first (boring-find code ":key \"\"" false))) 6)
+            new-comp (orepl/command-wrapped-repl 's code cursor-ix0)
+            s1 (assoc s :selected-comp-keys #{boxk} :typing-mode? true)
+            s2 (if (> (count ckys) 1) (siconsole/log s1 "Multible components selected, only selecting the first one.") s1)]
+        ((:add-component (:layout s2)) s2 new-comp boxk true)))))

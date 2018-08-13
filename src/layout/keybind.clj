@@ -3,7 +3,7 @@
 
 ;;;;;;;;;;;;;;;;;; Simple key processings ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn ctrl+? [kevt letter] 
+(defn ctrl+? [kevt letter]
   (and (or (:ControlDown kevt) (:MetaDown kevt)) (not (:ShiftDown kevt))
     (= (str letter) (str (:KeyChar kevt)))))
 

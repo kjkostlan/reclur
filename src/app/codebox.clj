@@ -382,7 +382,6 @@
         
         ix (first (filter #(< pathix-contains-cursor (get-in rsix [% 1])) (range nr)))
         ix (if ix ix (dec nr))
-        
         vis-jx (- cur-ix (n-visb4 pathix-contains-cursor))
 
         jx (apply + vis-jx (subvec n-contrib (get-in rsix [ix 0]) pathix-contains-cursor))]  
