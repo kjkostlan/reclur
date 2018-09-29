@@ -11,4 +11,5 @@
      :backwards clojure/backwards
      :locate-in clojure/locate-in
      :path-at clojure/path-at
+     :tokenize clojure/leaf-tokenize
      }})

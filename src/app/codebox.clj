@@ -33,10 +33,14 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;; Updating the precomputation ;;;;;;;;;;;;;;;;;;;
 
+(defn tokenize [lang s]
+  (cond (= lang :clojure) ((:tokenize (:clojure langs/supported-langs)) s)
+    :else (throw (Exception. (str "Language not supported:" lang)))))
+
 (defn set-precompute [box]
   (let [inter-levels (cond (= (:lang box) :clojure)
                        ((:depth (:clojure langs/supported-langs)) (rtext/rendered-string box))
-                        :else (throw (Exception. ":lang wasn't set to a useful thing.")))
+                        :else (throw (Exception. (str "Language not supported:" (:lang box)))))
         ; Inclusive indents.
         levels (mapv max (butlast inter-levels) (rest inter-levels))]
     (assoc box :precompute {:levels levels :inter-levels inter-levels})))
@@ -225,6 +229,45 @@
   (set-precompute (assoc (new-codebox) :pieces [{:text txt}]
                    :lang lang-kwd)))
 
+(defn select-twofour-click [m-evt box four?] 
+  "double click with no shift, so selects text instead of code folding."
+  (let [st (rtext/rendered-string box)
+        c-ix (:cursor-ix box)
+        ils (:inter-levels (:precompute box))
+        sel-start (:selection-start box)
+        sel-end (:selection-end box)
+        l0 (if (> sel-end (inc sel-start)) 
+             (apply min (mapv #(nth ils %) (range (inc sel-start) sel-end)))
+             (nth ils c-ix))
+        n (count ils)
+        c-ix0 (loop [ix c-ix] ; has this code been written somewhere else?
+                (if (= ix 0) ix
+                  (if (= (nth ils ix) (dec l0)) ix (recur (dec ix)))))
+        c-ix1 (loop [ix c-ix] ; has this code been written somewhere else?
+                (if (= ix (dec n)) ix
+                  (if (= (nth ils ix) (dec l0)) ix (recur (inc ix)))))
+        toksty (tokenize (:lang box) (subs st c-ix0 c-ix1))
+        toks (first toksty) ty (second toksty)
+        cumsum (into [] (reductions + (mapv count toks)))
+        cumsum1 (assoc cumsum (dec (count cumsum)) 1e100)
+        tix-in (first (filter #(>= (nth cumsum1 %) (- c-ix c-ix0)) (range)))
+        tix (first (filterv #(not= (nth ty %) 0) (range tix-in (count toks))))
+        jx0 (if (= tix 0) 0 (nth cumsum (dec tix)))
+        jx1 (nth cumsum tix)]
+    (if four? (assoc box :cursor-ix c-ix1 :selection-start c-ix0 :selection-end c-ix1) ; selects the whole enclosing form.
+      (assoc box :cursor-ix (+ c-ix0 jx1) :selection-start (+ c-ix0 jx0) :selection-end (+ c-ix0 jx1)))))
+
+(defn select-tripleclick [m-evt box]
+   (let [box (rtext/mouse-press m-evt box)
+         c-ix (:cursor-ix box)
+         st (rtext/rendered-string box)
+         lines (string/split-lines st)
+         line-ends (into [] (reductions + (mapv #(inc (count %)) lines)))
+         lix (first (filter #(>= (nth line-ends %) c-ix) (range)))]
+    (assoc box :cursor-ix (nth line-ends lix)
+      :selection-start (- (nth line-ends lix) (inc (count (nth lines lix))))
+      :selection-end (nth line-ends lix))))
+
 ;;;;;;;;;;;;;;;;;;;;;;; Line number updating ;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn update-lineno-info [box num-lines-b4-each-realstring] "Updates the info that is used rendertime to calc line-nos."
@@ -288,13 +331,21 @@
       (set-precompute (rtext/key-press key-evt box))))))
 
 (defn mouse-press [m-evt box] ; shift+double click = code folding.
-  (if (and (= (:ClickCount m-evt) 2) (:ShiftDown m-evt))
+  (cond (and (= (:ClickCount m-evt) 2) (:ShiftDown m-evt))
     (let [cur-ix (rtext/cursor-pixel-to-ix box (:X m-evt) (:Y m-evt))          
           cur-pieceix (first (rtext/cursor-ix-to-piece (assoc box :cursor-ix cur-ix)))
           cur-pieceix1 (first (rtext/cursor-ix-to-piece (assoc box :cursor-ix (inc cur-ix))))
           folding? (and (not (folded? (nth (:pieces box) cur-pieceix)))
                      (not (folded? (nth (:pieces box) cur-pieceix1))))]
-      (code-fold-toggle-at-cursor cur-ix folding? nil box)) (rtext/mouse-press m-evt box)))
+      (code-fold-toggle-at-cursor cur-ix folding? nil box)) 
+    (= (:ClickCount m-evt) 2)
+    (select-twofour-click m-evt box false)
+    (= (:ClickCount m-evt) 3)
+    (select-tripleclick m-evt box)
+    (= (:ClickCount m-evt) 4)
+    (select-twofour-click m-evt box true)
+    
+    :else (rtext/mouse-press m-evt box)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Finding code locations ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
