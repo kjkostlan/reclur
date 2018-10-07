@@ -6,12 +6,12 @@
     [javac.gfx :as gfx] [javac.exception :as exception]
     [javac.clojurize :as clojurize]
     [app.orepl :as orepl]
-    [app.iteration :as iteration])
+    [app.iteration :as iteration]
+    [crossplatform.cp :as crossp])
   (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent ComponentAdapter]
     [javax.swing SwingUtilities]
     [java.awt FlowLayout] 
-    [javax.swing JFrame JPanel])
-  )
+    [javax.swing JFrame JPanel]))
 
 
 ;;;;;;;;;;;;;;;;;;;;; Settings ;;;;;;;;;;;;;;;;;;;;
@@ -181,6 +181,7 @@
     (.setVisible frame true)
     (if *add-keyl-to-frame?* (add-key-listeners! frame)
       (do (add-key-listeners! panel) (.setFocusable panel true) (.requestFocus panel)))
+    (crossp/add-quit-request-listener!! #(event-queue!! % :quit))
     [frame panel]))
 
 (defn swing-or-kludge [f]

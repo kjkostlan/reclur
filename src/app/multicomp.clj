@@ -123,6 +123,18 @@
     (if (not= (open-cache (assoc s :components comps1) fname) new-string) (throw (Exception. "Bug in multicomp/save-cache"))) ; TODO: DEBUG remove when trusted.
     (assoc s :components comps1)))
 
+(defn add-file [s fname folder?]
+   "Adds a file to the codeboxes in s if need be."
+  (let [comps (:components s)
+        pieces (string/split fname #"/")
+        diff [:add pieces {:folder folder?}]
+        do-diff #(fbrowser/implement-diffs % [diff])
+        comps1 (reduce #(let [c (get comps %2)]
+                          (if (= (:type c) :fbrowser)
+                            (assoc %1 %2 (do-diff c)) %1))
+                 comps (keys comps))]
+    (assoc s :components comps1)))
+
 (defn who-is-open [s]
   "Which files are open in our codeboxes."
   (set (mapv #(first (:path %)) (filterv #(= (:type %) :codebox) (vals (:components s))))))
@@ -258,7 +270,7 @@
             txt0 (if (jfile/exists? fname) (jfile/open fname))
             txt1 (open-cache s fname)]
         (if (not= txt0 txt1)
-          (let [opt (warnbox/yes-no-cancel? (str "Save file before closing? " fname))]
+          (let [opt (warnbox/choice (str "Save file before closing? " fname) [:yes :no :cancel] :yes)]
             (cond (= opt :yes) 
               (do (jfile/save!!! fname txt1)
                 (close-component-noprompt s kwd)) ; the cache is stored in the components; closing it removes the cache.

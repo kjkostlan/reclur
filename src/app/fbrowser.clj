@@ -214,7 +214,7 @@
         arbor {:fullname0 foldername-full}] ; children start off invisible.
     (assoc arbor :children ; everything starts out unexpanded.
       (mapv #(let [ffull (str foldername-full (jfile/sep) %)] ; this filder converted to a full-path.
-               (if (jfile/dir? ffull) (_load-from-folder ffull)
+               (if (jfile/folder? ffull) (_load-from-folder ffull)
                  {:fullname0 ffull})) filders))))
 
 (defn load-from-folder [foldername-full]

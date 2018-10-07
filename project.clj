@@ -34,3 +34,8 @@
                                         ;:plugins [[lein-nodisassemble "0.1.3"]] ; this slows us down on startup quite a bit.
   :plugins [[cider/cider-nrepl "0.18.0-SNAPSHOT"]]
 )
+
+; How to run on a mac in both java8 and java9 for compat testing, individual versions may vary:
+; export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk1.8.0_51.jdk/Contents/Home
+; export JAVA_HOME=Library/Java/JavaVirtualMachines/jdk-9.0.4.jdk/Contents/Home
+; (System/getProperty "java.version") => "1.8.0_51", "9.0.4"

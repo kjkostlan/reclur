@@ -67,7 +67,7 @@
 (defn hotkeys [] ; fn [s] => s, where s is the state.
   {#(kb/ctrl+? % "w") close ; all these are (fn [s]).
    #(kb/esc? %) toggle-typing
-   #(kb/ctrl-shift+? % "r") #(if (or (globals/are-we-child?) (warnbox/yes-no? "Relaunch app, losing any unsaved work? Does not affect the child app.")) 
+   #(kb/ctrl-shift+? % "r") #(if (or (globals/are-we-child?) (warnbox/yes-no? "Relaunch app, losing any unsaved work? Does not affect the child app." false)) 
                             (do (future (launch-main-app!!)) (throw (Exception. "This iteration is dead, reloading."))) %)
    #(kb/ctrl+? % "`") selectmovesize/swap-on-top 
    #(kb/ctrl+? % "f") (fn [s] (strfind/add-search-box s)) 
@@ -133,8 +133,8 @@
         evt (xform/xevt (xform/x-1 (singlecomp/pos-xform (:position comp))) evt-c)
         fname (if (and (= (:type evt-c) :mousePressed) (= (:type comp) :fbrowser)) 
                  (fbrowser/fullfile-click evt comp))
-        non-dir? (if fname (fbrowser/non-folder-file-click? evt comp))]
-    (if (and fname non-dir?) 
+        non-folder? (if fname (fbrowser/non-folder-file-click? evt comp))]
+    (if (and fname non-folder?) 
       (let [lix (fbrowser/pixel-to-line comp (:X evt) (:Y evt))
             pos (:position comp) sz (:size comp)
             cbox (assoc (if (jfile/exists? fname) (assoc (multicomp/load-from-file (:components s) fname) :path [fname]) 
@@ -199,12 +199,26 @@
         (= ek :mouseWheelMoved) (and (or (= ek :mousePressed) (= ek :mouseDragged)) (or meta? ctrl?))) (ut cam)
       :else (ut sms))))
 
+(defn on-quit-attempt [evt-q s]
+  (let [fs (iteration/file-status s)
+        n (apply + (mapv count [(:new-files fs) (:changed-files fs) (:deleted-files fs) (:renamed-map fs)]))]
+    (if (= n 0) ; no disk changes. 
+      (let [choice? (warnbox/yes-no? "quit?" false)]
+        (if choice? (System/exit 0) (do (println "Quit cancelled by user.") s)))
+      (let [choice (warnbox/choice (str n " files added/changed/renamed/deleted, save?") [:yes :no :cancel] :cancel)]
+        (cond (= choice :cancel) (do (println "Quit cancelled by user.") s)
+          (= choice :no) (System/exit 0)
+          (= choice :yes) (do (iteration/save-state-to-disk!!! s) (System/exit 0)))))))
+
 (defn dispatch-listener [evt-g s] 
   "Transforms and dispatches an event (that doesn't change :typing-mode? and :active-tool).
    Only certain changes to f need diff checking."
-  (if (and cpanel/*low-cpu?* (= (:type evt-g) :mouseMoved)) ; don't let mouse moves eat up CPU time.
+  (cond (= (:type evt-g) :quit)
+    (on-quit-attempt evt-g s)
+    (and cpanel/*low-cpu?* (= (:type evt-g) :mouseMoved)) ; don't let mouse moves eat up CPU time.
     (let [evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g)]
       (update-mouse evt-g evt-c s :mouseMoved))
+    :else
     (let [k (:type evt-g)
           s0 s evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g) 
           

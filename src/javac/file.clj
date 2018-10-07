@@ -34,11 +34,11 @@
 (defn _texty? [^File file] (and (not (.isDirectory file))
   (or (.endsWith (.getName file) ".clj") (.endsWith (.getName file) ".java") (.endsWith (.getName file) ".js")
       (.endsWith (.getName file) ".txt") (.endsWith (.getName file) ".text"))))
-(defn _dir? [^File file] (.isDirectory file))
+(defn _folder? [^File file] (.isDirectory file))
 (defn clj? [^String file] (_clj? (File. file)))
 (defn java? [^String file] (_java? (File. file)))
 (defn texty? [^String file] (_texty? (File. file)))
-(defn dir? [^String file] (_dir? (File. file)))
+(defn folder? [^String file] (_folder? (File. file)))
 (defn file? [^String file] (.isFile (File. file)))
 (defn exists? [^String file] (.exists (File. file)))
 
@@ -180,8 +180,8 @@
         common (ff (set/intersection ch-ref ch-tgt))
         deletes (ff (set/difference ch-tgt ch-ref))]
     (mapv #(delete!!! (str target-folder (sep) %)) deletes)
-    (mapv #(let [file-ref (str ref-folder (sep) %) folder-r? (dir? file-ref)
-                 file-tgt (str target-folder (sep) %) folder-t? (dir? file-tgt)]
+    (mapv #(let [file-ref (str ref-folder (sep) %) folder-r? (folder? file-ref)
+                 file-tgt (str target-folder (sep) %) folder-t? (folder? file-tgt)]
              (if (and folder-r? folder-t?)
                (_delete-missing!!! file-ref file-tgt ignore-git?))) common)))
 

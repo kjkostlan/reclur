@@ -79,7 +79,8 @@
   (let [del? (nil? txt) clj? (jfile/clj? fname)]
     (if del? (if (jfile/exists? fname) (jfile/delete!!! fname)) (jfile/save!!! fname txt))
     (if clj?
-      (update-ns1!! (if del? "Deleted: " "Saved: ") fname child-process))))
+      (update-ns1!! (if del? "Deleted: " "Saved: ") fname child-process)
+      (str (if del? "Deleted: " "Saved: ") fname))))
 
 (defn _save-core!!! [s usfiles open2text new-files changed-files deleted-files0 missing-files renamed-map copied-map]
   "Applys the save, with warning dialogues. Returns the modified s. All files are in 'local space' meaning 
@@ -88,13 +89,17 @@
   ; DEBUG: 
   ;(println "crtl+s results: new: " new-files "changed:" changed-files "deleted if click yes: " deleted-files0 "missing: " missing-files "renamed: " renamed-map "copied: " copied-map)
   (assert-notchild)
-  (let [deleted-files (if (and (> (count deleted-files0) 0) (warnbox/yes-no? (str "Delete: " deleted-files0))) deleted-files0 #{})
+  (let [deleted-files (if (and (> (count deleted-files0) 0) (warnbox/yes-no? (str "Delete: " deleted-files0) false)) deleted-files0 #{})
+        ; undeleted files refill the tree:
+        s (reduce #(multicomp/add-file %1 %2 (jfile/folder? %2)) 
+            s (set/difference deleted-files0 deleted-files))
+        
         child-process (let [cp (:child-process s)] 
                         (if (or cp (not (globals/can-child?))) cp (throw (Exception. "No child process, should be set up by code"))))
         ;_ (throw (Exception. "Save disabled for safety reasons.")) ; DEBUG safety.
         _  (mapv #(do (jfile/rename!!! %1 %2)) (keys renamed-map) (vals renamed-map))
-        rename-msgs1 (mapv #(update-ns1!! "Renamed from: " % child-process) (keys renamed-map))
-        rename-msgs2 (mapv #(update-ns1!! "Renamed to: " % child-process) (vals renamed-map))
+        rename-msgs1 (mapv #(if (jfile/clj? %) (update-ns1!! "Renamed from: " % child-process) (str "Renamed from:" %)) (keys renamed-map))
+        rename-msgs2 (mapv #(if (jfile/clj? %) (update-ns1!! "Renamed to: " % child-process) (str "Renamed from:" %)) (vals renamed-map))
         _ (mapv (fn [fname] 
                   (let [text (jfile/open fname)]
                     (mapv #(jfile/save!!! % text) (get copied-map fname)))) 
@@ -119,10 +124,8 @@
   (let [disk (multicomp/get-filelist {:components {:tmp (fbrowser/load-from-folder folder) :type :fbrowser}} false nil)]
     (apply hash-set (filterv (if only-clj? jfile/clj? identity) disk))))
 
-(defn save-state-to-disk!!! [s]
-   "Everything is saved, deletions will be prompted. Child = true will save to the child folder. Child = false won't.
-    We only call this from the parent."
-  (assert-notchild)
+(defn file-status [s]
+  "What files are new? Which have been renamed, changed, deleted, etc?"
   (let [; disk is in "local folder space" and has ./folder/file.clj format, and is more than just clj files.
         disk (get-disk (globals/get-working-folder) false)
 
@@ -146,6 +149,28 @@
                                (if (or (not old) (= (get renamed-map old) fname) (get new-files fname) (= old fname)) acc
                                  (update acc old #(if % (conj % fname) [fname]))))) {} (keys new2?old))
         deleted-files (apply hash-set (filterv #(and (not (get old2new %)) (not (contains? new2?old %))) disk))]
+    {:new2?old new2?old
+     :open2text open2text
+     :new-files new-files
+     :changed-files changed-files
+     :missing-files missing-files
+     :deleted-files deleted-files
+     :renamed-map renamed-map
+     :copied-map copied-map}))
+
+(defn save-state-to-disk!!! [s]
+   "Everything is saved, deletions will be prompted. Child = true will save to the child folder. Child = false won't.
+    We only call this from the parent."
+  (assert-notchild)
+  (let [fs (file-status s)
+        new2?old (:new2?old fs)
+        open2text (:open2text fs)
+        new-files (:new-files fs)
+        changed-files (:changed-files fs)
+        missing-files (:missing-files fs)
+        renamed-map (:renamed-map fs)
+        copied-map (:copied-map fs)
+        deleted-files (:deleted-files fs)]
     (_save-core!!! s (apply hash-set (keys new2?old)) open2text new-files changed-files deleted-files missing-files renamed-map copied-map)))
 
 ;;;;;;;;;;;;;;;;;;;; Copying folders us->child and child->us ;;;;;;;;;;;;;;;;;;;

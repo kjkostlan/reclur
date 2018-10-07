@@ -1,7 +1,8 @@
 ; Approximate conversion of clojure objects into java objects.
 ; Uses reflections and getters.
 (ns javac.clojurize
-  (:require [clojure.string :as string])
+  (:require [clojure.string :as string]
+    [crossplatform.cp :as crossp])
   (:import [java.awt Point Rectangle Dimension]
     [javax.swing SwingUtilities]
     [java.io StringWriter]))
@@ -89,11 +90,14 @@
   "Asserts that we are on the event dispatch thread, throws an error otherwise."
   (if (not (edt?)) (throw (Exception. "A function that needed to be ran on the event dispatch thread wasn't."))))
 
+(defn param-str [java-e]
+  (try (.paramString java-e) (catch Exception e "MI_SC")))
+
 (defn get-evt-type [java-e]
   "Java event -> :mousePressed. Parses the paramString (I can't seem to find a better way).
    This shouldn't need overriding."
   (assert-edt)
-  (let [^String s (.paramString java-e)
+  (let [^String s (param-str java-e)
         tokens (re-seq #"[A-Z_]+" s)
         tok (first (filter #(.contains % "_") tokens)) ; they tend to be at the beginning.
         tok-pieces (string/split tok #"_")]
@@ -105,7 +109,7 @@
   (assert-edt)
   (let [evt-type (get-evt-type java-e)]
     (let [clean-up #(dissoc % :Source :Component :Class)
-          add-sc #(assoc % :ParamString (.paramString java-e))
+          add-sc #(assoc % :ParamString (param-str java-e))
           f0 #(assoc (clean-up (add-sc %)) :Type evt-type)] ; a default function.
       (f0 (java-to-clj java-e nil simple-java-to-clj))))) ; direct java -> clj translation.
       
