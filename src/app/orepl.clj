@@ -140,12 +140,13 @@
    ;Fully-qualified symbols -> var for the old namespace vars. Thus we don't lose the old references.
    (atom {}))
 
-(defn _clear-vars!! [ns-symbol] ; sets to an error message.
-  (let [nms (find-ns ns-symbol)
-        interns (ns-interns nms)]
-    (zipmap (keys interns) 
-      (mapv (fn [k vr] (alter-var-root vr (fn [_] (fn [& args] (throw (Exception. (str "Variable:" k "/" ns-symbol " has been removed."))))))) 
-        (keys interns) (vals interns)))))
+(defn _clear-vars!! [ns-symbol] ; sets vars to throw or be an error message.
+  (let [nms (find-ns ns-symbol)]
+    (if nms
+      (let [interns (ns-interns nms)]
+        (zipmap (keys interns) 
+          (mapv (fn [k vr] (alter-var-root vr (fn [_] (fn [& args] (throw (Exception. (str "Variable:" k "/" ns-symbol " has been removed."))))))) 
+            (keys interns) (vals interns)))))))
 
 (defn _update-simple!! [ns-symbol removing?]
   (let [tmp-sym (gensym 'tmp) ns-tmp (create-ns tmp-sym)]
