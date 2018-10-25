@@ -33,8 +33,9 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;; Updating the precomputation ;;;;;;;;;;;;;;;;;;;
 
-(defn tokenize [lang s]
+(defn tokenize [lang s] ; this function is written in a yucky way.
   (cond (= lang :clojure) ((:tokenize (:clojure langs/supported-langs)) s)
+    (= lang :human) (langs/human-leaf-tokenize s)
     :else (throw (Exception. (str "Language not supported:" lang)))))
 
 (defn set-precompute [box]
@@ -229,6 +230,15 @@
   (set-precompute (assoc (new-codebox) :pieces [{:text txt}]
                    :lang lang-kwd)))
 
+(defn token-cur-ix01 [strings allowed?s ix]
+   "Returns the cursor indexes that select the token enclosing index ix.
+    allowed?s determine whether each token is allowed to be selected."
+  (let [cumsum (into [] (reductions + (mapv count strings)))
+        cumsum1 (assoc cumsum (dec (count cumsum)) 1e100)
+        tix-in (first (filter #(> (nth cumsum1 %) ix) (range)))
+        tix (first (filterv #(nth allowed?s %) (range tix-in (count strings))))]
+    [(if (= tix 0) 0 (nth cumsum (dec tix))) (nth cumsum tix) tix]))
+
 (defn select-twofour-click [m-evt box four?] 
   "double click with no shift, so selects text instead of code folding."
   (let [st (rtext/rendered-string box)
@@ -238,35 +248,31 @@
         sel-end (:selection-end box)
         l0 (if (> sel-end (inc sel-start)) 
              (apply min (mapv #(nth ils %) (range (inc sel-start) sel-end)))
-             (nth ils c-ix))
+             (nth ils (max 0 c-ix)))
         n (count ils)
         c-ix0 (loop [ix c-ix] ; has this code been written somewhere else?
-                (if (= ix 0) ix
-                  (if (= (nth ils ix) (dec l0)) ix (recur (dec ix)))))
+                (if (<= ix 0) 0
+                  (if (and (> l0 0) (= (nth ils ix) (dec l0))) ix (recur (dec ix)))))
         c-ix1 (loop [ix c-ix] ; has this code been written somewhere else?
-                (if (= ix (dec n)) ix
-                  (if (= (nth ils ix) (dec l0)) ix (recur (inc ix)))))
+                (if (>= ix (dec n)) (dec n)
+                  (if (and (> l0 0) (= (nth ils ix) (dec l0))) ix (recur (inc ix)))))
         toksty (tokenize (:lang box) (subs st c-ix0 c-ix1))
         toks (first toksty) ty (second toksty)
-        cumsum (into [] (reductions + (mapv count toks)))
-        cumsum1 (assoc cumsum (dec (count cumsum)) 1e100)
-        tix-in (first (filter #(>= (nth cumsum1 %) (- c-ix c-ix0)) (range)))
-        tix (first (filterv #(not= (nth ty %) 0) (range tix-in (count toks))))
-        jx0 (if (= tix 0) 0 (nth cumsum (dec tix)))
-        jx1 (nth cumsum tix)]
+        
+        cur-jx (- c-ix c-ix0)
+        jx01-tix (token-cur-ix01 toks (repeat true) cur-jx)
+        tix-in (nth jx01-tix 2)
+        t-in (get toks tix-in)
+        jx01 (if (and (= (get ty tix-in) 0) (re-find #"[a-zA-Z0-9]+" t-in)) ; Trigger for in-comment mode which uses human language instead.
+               (let [jx0 (first jx01-tix)
+                     piecesty (tokenize :human t-in)
+                     pieces (first piecesty) ty (second piecesty)
+                     kx01-tix (token-cur-ix01 pieces (repeat true) (inc (- cur-jx jx0)))]
+                [(+ jx0 (first kx01-tix) -1) (+ jx0 (second kx01-tix) -1)])
+                [(first jx01-tix) (second jx01-tix)])
+        jx0 (first jx01) jx1 (second jx01)]
     (if four? (assoc box :cursor-ix c-ix1 :selection-start c-ix0 :selection-end c-ix1) ; selects the whole enclosing form.
       (assoc box :cursor-ix (+ c-ix0 jx1) :selection-start (+ c-ix0 jx0) :selection-end (+ c-ix0 jx1)))))
-
-(defn select-tripleclick [m-evt box]
-   (let [box (rtext/mouse-press m-evt box)
-         c-ix (:cursor-ix box)
-         st (rtext/rendered-string box)
-         lines (string/split-lines st)
-         line-ends (into [] (reductions + (mapv #(inc (count %)) lines)))
-         lix (first (filter #(>= (nth line-ends %) c-ix) (range)))]
-    (assoc box :cursor-ix (nth line-ends lix)
-      :selection-start (- (nth line-ends lix) (inc (count (nth lines lix))))
-      :selection-end (nth line-ends lix))))
 
 ;;;;;;;;;;;;;;;;;;;;;;; Line number updating ;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -340,11 +346,8 @@
       (code-fold-toggle-at-cursor cur-ix folding? nil box)) 
     (= (:ClickCount m-evt) 2)
     (select-twofour-click m-evt box false)
-    (= (:ClickCount m-evt) 3)
-    (select-tripleclick m-evt box)
     (= (:ClickCount m-evt) 4)
     (select-twofour-click m-evt box true)
-    
     :else (rtext/mouse-press m-evt box)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Finding code locations ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

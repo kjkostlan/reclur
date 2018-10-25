@@ -178,6 +178,16 @@
 (defn delete-and-update!!! [cljfile]
   (jfile/delete!!! cljfile) (reload-file!! cljfile) {:error false :message (str "Deleted" cljfile)})
 
+(defn mouse-press [m-evt comp]
+  (let [nc (:ClickCount m-evt) ctxt (:text (first (:pieces comp)))]
+    (if (and (or (= nc 2) (= nc 4)) (<= (:cursor-ix comp) (count ctxt)))
+      (let [cbox (codebox/from-text ctxt (:lang comp))
+            ckys [:selection-start :selection-end :cursor-ix]
+            cbox (merge cbox (select-keys comp ckys))
+            cbox1 (codebox/select-twofour-click m-evt cbox (= nc 4))]
+        (merge comp (select-keys cbox1 ckys)))
+      (rtext/mouse-press m-evt comp))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;; Component interface ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ; No child UI is planned in the near future.
@@ -193,7 +203,7 @@
 
 (def dispatch 
   (plurality/->simple-multi-fn
-    {:mousePressed rtext/mouse-press
+    {:mousePressed mouse-press
      :mouseDragged rtext/mouse-drag
      :mouseWheelMoved rtext/mouse-wheel
      :keyPressed key-press

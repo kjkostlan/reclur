@@ -103,6 +103,36 @@
   "Gets a single piece given a piece, the grabbed text, and the indexes of the text."
   (assoc x :text txt))
 
+;;;;;;;;;;;;;;;;;;;; String and font:
+
+(defn rendered-string [box]
+  "Gets the string that is rendered (for i.e. code folding the actual string we mean is different).
+   box is a textbox such as (place-holder-text), same for all arguments in this file called box.
+   Does not account for scrolling."
+  (apply str (mapv :text (:pieces box))))
+
+(defn inserted-string [value]
+  "Converts something that could be inserted into a string, useful to see how the rendered string will change."
+  (if (string? value) value (apply str (mapv :text value))))
+
+(defn string-digest [^String s]
+  "Newline analysis of a given string s.
+    :counts = # chars/line. :num-b4[i] = # chars before line[i], it has one more element than length of lines."
+  (let [lines (into [] (.split ^String (str s " ") "\n")) ;each line.
+        lines (update lines (dec (count lines)) #(subs % 0 (dec (count %)))) ; remove the extra space
+        line-counts (mapv count lines)]
+    {:counts line-counts :nlines (count lines)
+     :num-b4 (into [] (reductions + 0 (mapv inc line-counts))) ; puts the \n on the previous line, and an extra at the end.
+     :nchars (count s)})); [0 123 456, etc], inc to include line feeds.
+
+(defn gran2 [box]
+  "[horizontal vertical] size needed per character in pixels.
+   This determinies the grid size, the actual character size depends on the 
+   graphic's rendering and *text-params* that scale it for a fit."
+  (if (nil? (:font-size box)) (throw (Exception. (str "you gave us: " (keys box) " instead of the box."))))
+  [(* (:font-size box) (:font-width-to-size *text-params*)) 
+   (* (:font-size box) (:font-linespace-to-size *text-params*))])
+
 ;;;;;;;;;;;;;;;;;;;; Helper functions ;;;;;;;;;;;;;;;;
 
 (defn v [box]
@@ -213,7 +243,7 @@
    :show-line-nums? true
    :optimize {:pure-gfx? true} ; not quite true (the cursor blink) but one day we will fix this. 
    :insert-fn default-insert :delete-fn default-delete
-   :colorize-fn default-colorize :double-click-fn default-doubleclick})
+   :colorize-fn default-colorize})
    
 ;;;;;;;;;;;;;;;;;;;; Mutable:
 
@@ -228,36 +258,6 @@
         ixs (get cpa :ixs)
         agree? (= (apply str (mapv :text v)) txt)]
     (if (and agree? (not always-as-str?)) (with-meta v {:ixs ixs}) txt)))
-
-;;;;;;;;;;;;;;;;;;;; String and font:
-
-(defn rendered-string [box]
-  "Gets the string that is rendered (for i.e. code folding the actual string we mean is different).
-   box is a textbox such as (place-holder-text), same for all arguments in this file called box.
-   Does not account for scrolling."
-  (apply str (mapv :text (:pieces box))))
-
-(defn inserted-string [value]
-  "Converts something that could be inserted into a string, useful to see how the rendered string will change."
-  (if (string? value) value (apply str (mapv :text value))))
-
-(defn string-digest [^String s]
-  "Newline analysis of a given string s.
-    :counts = # chars/line. :num-b4[i] = # chars before line[i], it has one more element than length of lines."
-  (let [lines (into [] (.split ^String (str s " ") "\n")) ;each line.
-        lines (update lines (dec (count lines)) #(subs % 0 (dec (count %)))) ; remove the extra space
-        line-counts (mapv count lines)]
-    {:counts line-counts :nlines (count lines)
-     :num-b4 (into [] (reductions + 0 (mapv inc line-counts))) ; puts the \n on the previous line, and an extra at the end.
-     :nchars (count s)})); [0 123 456, etc], inc to include line feeds.
-
-(defn gran2 [box]
-  "[horizontal vertical] size needed per character in pixels.
-   This determinies the grid size, the actual character size depends on the 
-   graphic's rendering and *text-params* that scale it for a fit."
-  (if (nil? (:font-size box)) (throw (Exception. (str "you gave us: " (keys box) " instead of the box."))))
-  [(* (:font-size box) (:font-width-to-size *text-params*)) 
-   (* (:font-size box) (:font-linespace-to-size *text-params*))])
 
 ;;;;;;;;;;;;;;;;;;;; Node sizing:
 
@@ -547,32 +547,50 @@
 (defn arrow-cursor [box arrow-code shifting?] 
   "The user moves the cursor. The node scrolls to keep the cursor in view if it moves out of view.
    Arrow codes are: < > v ^. Shift + arrow means select."
-  (let [box (v box) global-xy-grid (cursor-ix-to-ugrid box)
-        global-x-grid (first global-xy-grid) global-y-grid (second global-xy-grid)
-        arrow-code (str arrow-code)
-        gxy (cond (= arrow-code "<") [(dec global-x-grid) global-y-grid] ; it wasn't even on the screen.
-                  (= arrow-code ">") [(inc global-x-grid) global-y-grid]
-                  (= arrow-code "v") [global-x-grid (inc global-y-grid)]
-                  (= arrow-code "^") [global-x-grid (dec global-y-grid)]
-                  :else (throw (Exception. (str "Unrecognized arrow code: " arrow-code))))
-        d (string-digest (rendered-string box)) lc (:counts d) nl (count lc) nb4 (:num-b4 d) nc (:nchars d) 
-        cl #(max 0 (min % (dec nl))) gx (first gxy) gy (second gxy)
-        gxy (cond (or (< gy 0) (and (< gx 0) (= gy 0))) [0 0] ; various overflow and wrap-around rules in this cond.
-              (< gx 0) [(nth lc (dec gy)) (dec gy)]
-              (or (>= gy nl) (and (= gy (dec nl)) (> gx (last lc)))) [(last lc) (dec nl)]
-              (and (> gx (nth lc gy)) (or (= arrow-code "^") (= arrow-code "v"))) [(nth lc gy) gy]
-              (> gx (nth lc gy)) [0 (inc gy)]
-              :else [gx gy])
-        cur-ix0 (:cursor-ix box) ; old cursor index.
-        cur-ix (+ (first gxy) (nth nb4 (second gxy)))]; new cursor index after arrowing. 
-  (scroll-to-see-cursor 
-    (assoc 
-      (if shifting? ; arrow key selections.
-        (if (> (:selection-end box) (:selection-start box)) ; init selection.
-          (update (update box :selection-start #(if (= % cur-ix0) cur-ix %))
-            :selection-end #(if (= % cur-ix0) cur-ix %))
-         (assoc box :selection-start (min cur-ix0 cur-ix) :selection-end (max cur-ix0 cur-ix)))
-        (assoc box :selection-start 0 :selection-end 0)) :cursor-ix cur-ix))))
+  (let [sel0 (:selection-start box) sel1 (:selection-end box) arrow-code (str arrow-code)]
+    (if (and (> sel1 sel0) (not shifting?) (or (= arrow-code "<") (= arrow-code ">")))
+      (let [cix1 (if (= arrow-code "<") sel0 sel1)]
+        (assoc box :selection-start cix1 :selection-end cix1 :cursor-ix cix1))
+      (let [box (if (and (not shifting?) (> (- sel1 sel0) 0))
+                  (assoc box :cursor-ix (if (or (= arrow-code "<") (= arrow-code "^")) sel0 sel1)) box)
+            box (v box) global-xy-grid (cursor-ix-to-ugrid box)
+            global-x-grid (first global-xy-grid) global-y-grid (second global-xy-grid)
+            gxy (cond (= arrow-code "<") [(dec global-x-grid) global-y-grid] ; it wasn't even on the screen.
+                      (= arrow-code ">") [(inc global-x-grid) global-y-grid]
+                      (= arrow-code "v") [global-x-grid (inc global-y-grid)]
+                      (= arrow-code "^") [global-x-grid (dec global-y-grid)]
+                      :else (throw (Exception. (str "Unrecognized arrow code: " arrow-code))))
+            d (string-digest (rendered-string box)) lc (:counts d) nl (count lc) nb4 (:num-b4 d) nc (:nchars d) 
+            cl #(max 0 (min % (dec nl))) gx (first gxy) gy (second gxy)
+            gxy (cond (or (< gy 0) (and (< gx 0) (= gy 0))) [0 0] ; various overflow and wrap-around rules in this cond.
+                  (< gx 0) [(nth lc (dec gy)) (dec gy)]
+                  (or (>= gy nl) (and (= gy (dec nl)) (> gx (last lc)))) [(last lc) (dec nl)]
+                  (and (> gx (nth lc gy)) (or (= arrow-code "^") (= arrow-code "v"))) [(nth lc gy) gy]
+                  (> gx (nth lc gy)) [0 (inc gy)]
+                  :else [gx gy])
+            cur-ix0 (:cursor-ix box)
+            cur-ix (+ (first gxy) (nth nb4 (second gxy)))]; new cursor index after arrowing. 
+        (scroll-to-see-cursor 
+          (assoc 
+            (if shifting? ; arrow key selections.
+              (let [sel-st (if (= cur-ix0 sel0) cur-ix sel0)
+                    sel-en (if (= cur-ix0 sel1) cur-ix sel1)]
+                (if (and (> sel1 sel0) (>= sel-en sel-st)) 
+                  (assoc box :selection-start sel-st :selection-end sel-en)
+                  (assoc box :selection-start (min cur-ix0 cur-ix) :selection-end (max cur-ix0 cur-ix))))
+                (assoc box :selection-start 0 :selection-end 0))
+              :cursor-ix cur-ix))))))
+
+(defn _tripleclick [m-evt box mouse-press-fn]
+   (let [box (mouse-press-fn (assoc m-evt :ClickCount 1) box)
+         c-ix (:cursor-ix box)
+         st (rendered-string box)
+         lines (string/split-lines st)
+         line-ends (into [] (reductions + (mapv #(inc (count %)) lines)))
+         lix (first (filter #(>= (nth line-ends %) c-ix) (range)))]
+    (assoc box :cursor-ix (nth line-ends lix)
+      :selection-start (- (nth line-ends lix) (inc (count (nth lines lix))))
+      :selection-end (nth line-ends lix))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Mouse and key interaction itself
 
@@ -581,9 +599,12 @@
   (let [box (v box) x (:X mouse-evt) y (:Y mouse-evt)
         sh? (:ShiftDown mouse-evt)
         i1 (:cursor-ix box) i2 (cursor-pixel-to-ix box x y)]
-    (if (= (:ClickCount mouse-evt) 2) ; double-click select.
+    (cond (= (:ClickCount mouse-evt) 2) ; double-click select.
       (let [ij (ixjx-pieces (:pieces box) i2 i2)]
-        ((:double-click-fn box) box i2 (first ij) (nth ij 2)))
+        (default-doubleclick box i2 (first ij) (nth ij 2)))
+      (= (:ClickCount mouse-evt) 3) ; triple-click line select.
+      (_tripleclick mouse-evt box mouse-press)
+      :else
       (assoc box :cursor-ix i2
         :selection-start (if sh? (min i1 i2) 0) 
         :selection-end (if sh? (max i1 i2) 0)))))
