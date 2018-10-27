@@ -252,15 +252,15 @@
                        (mapv (fn [k] 
                                (let [c (get comps k)
                                      cam1 (xform/xx cam (singlecomp/pos-xform (:position c)))]
-                                 {:camera cam1 :gfx (get local-comp-renders k) :z (:z c)}))
+                                 {:bitmap-cache? true :camera cam1 :gfx (get local-comp-renders k) :z (:z c)}))
                              (keys comps)))
         bg-scale 10.0
         bg-perspective-effect 2.0 ; make it in the background.
-        bg {:no-sprite? true :camera cam :z -1e100
+        bg {:camera cam :z -1e100
             :gfx [[:bitmap [(* bg-scale -500) (* bg-scale -500) bg-scale bg-perspective-effect "./assets/forest.jpg"]]]}
-        sel-sprite {:no-sprite? true :camera cam :z 2e10
+        sel-sprite {:camera cam :z 2e10
                     :gfx (into [] (apply concat (mapv #(multicomp/draw-select-box comps % [0 0 1 1]) sel-keys)))}
-        haze-sprite {:no-sprite? true :camera [0 0 1 1] :z -1e99
+        haze-sprite {:camera [0 0 1 1] :z -1e99
                      :gfx (if typing? [[:fillRect [0 0 1500 1500] {:Color [0 0 0 0.333]}]] [])}]
     (assoc comp-sprites ::TOOL-SPRITE-CORE tool-sprite ::TOOL-SMS-SPRITE sel-move-sz-sprite ::TOOL-SEL-SPRITE sel-sprite 
     ::BACKGROUND-SPRITE bg ::HAZE-SPRITE haze-sprite)))
@@ -284,11 +284,11 @@
         
         tool (:active-tool s) ; don't precompute the tools, not necessary, at least for now.
         ; TODO: use the cam or use no cam?
-        tool-sprite {:camera cam :gfx (if-let [rf (:render tool)] (rf s) []) :no-sprite? true}
+        tool-sprite {:camera cam :gfx (if-let [rf (:render tool)] (rf s) [])}
         
         sel-move-sz-sprite (if (:typing-mode? s) {:camera [0 0 1 1] :gfx []} 
-                             {:camera cam :gfx ((:render (selectmovesize/get-tool)) s) :z 1e10 :no-sprite? true})
-        ;tool-hud-sprite {:no-sprite? true :camera [0 0 1 1] :z 1e100
+                             {:camera cam :gfx ((:render (selectmovesize/get-tool)) s) :z 1e10})
+        ;tool-hud-sprite {:camera [0 0 1 1] :z 1e100
         ;                 :gfx (multicomp/which-tool-hud s)}
         global-gfx (globalize-gfx (:components s) (:camera s) gfx-comps-l (:selected-comp-keys s) tool-sprite sel-move-sz-sprite
                      (:typing-mode? s))]
@@ -296,7 +296,7 @@
 
 (defn app-render [s]
   "Creates a map of kys to sprites. Each sprite has a :camera that renders it's :gfx,
-   a :z value, and an optional :no-sprite? value.
+   a :z value, and an optional :bitmap-cache? value.
    This function itself should be minimal since no logging is possible, thus we only pull precomputed stuff out."
    (get-in s [:precompute :gfx :global]))
 

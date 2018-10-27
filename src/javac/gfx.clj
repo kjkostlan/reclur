@@ -328,7 +328,7 @@
                                  sp-old (get sprites-oldp %1)
                                  t-old (if-let [t (::paint-time cmd)] t t-now) ; no ::paint-time = fresh.
                                  enough-for-sprite? (> (- t-now t-old) wait-ns)
-                                 sp? (and (not (:no-sprite? %2)) enough-for-sprite?)]
+                                 sp? (and (:bitmap-cache? %2) enough-for-sprite?)]
                              (if (and sp? sp-old (= gc-old gc)) sp-old
                                (if sp? (make-imagep gc)))) kys vls))
         camg (fn [cm] #(xform/xgfx cm %1 true))]
