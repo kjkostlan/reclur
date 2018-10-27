@@ -255,9 +255,9 @@
 (defn clipboard-read [always-as-str?] ; returns a string or vector, the vector puts the copy indexes in the meta.
   (let [cpa @clip-atom txt (clipboard/get-as-string) ; the clipboard takes precedence if the atom disagrees.
         k (first (keys cpa)) v (:x (get cpa k)) ; will be nil if nothing was copied.
-        ixs (get cpa :ixs)
+        ixs (get (get cpa k) :ixs) comp-type (get (get cpa k) :comp-type)
         agree? (= (apply str (mapv :text v)) txt)]
-    (if (and agree? (not always-as-str?)) (with-meta v {:ixs ixs}) txt)))
+    (if (and agree? (not always-as-str?)) (with-meta v {:ixs ixs :comp-type comp-type}) txt)))
 
 ;;;;;;;;;;;;;;;;;;;; Node sizing:
 
@@ -630,8 +630,8 @@
                            txt (apply str (mapv :text slice)) ; txt is the lookup key on paste.
                            i0 (first (ixjx-pieces (:pieces box) x0 x1)) 
                            copy-ixs (mapv #(+ % i0) (range (count slice)))] ; which index each comes from.
-                       (clipboard/put-as-string!! txt) 
-                       (reset! clip-atom (hash-map txt {:x slice :ixs copy-ixs}))))))]
+                       (clipboard/put-as-string!! txt) ; The visual string.
+                       (reset! clip-atom (hash-map txt {:x slice :ixs copy-ixs :comp-type (:type box)}))))))]
     (cond (= ty :backspace) (edit box (:ix0 ed) (:ix1 ed) "" [])
       (= ty :select-all) (assoc box :selection-start 0 :selection-end (:ix1 ed))
       (= ty :cut) (if (copy!!) (edit box (:ix0 ed) (:ix1 ed) "" []) box) ; remove and store if there is a selection.

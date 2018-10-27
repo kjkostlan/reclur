@@ -116,7 +116,7 @@
     (if-let [x (cmd?-parse txt)] 
       (run-cmd s1 (first x) (second x) repl-k)
       (run-standard-repl s1 repl-k txt))))
- 
+
 (defn ensure-three-pieces [box]
   (let [ps (mapv #(if (:text %) % {:text ""}) (:pieces box)) n (count ps)]
     (assoc box :pieces
@@ -127,8 +127,16 @@
                {:text "\n"} (nth ps 2)]))))
 
 (defn key-press [key-evt box]
-  (if (kb/shift-enter? key-evt) box ; this wa handled in the heavy dispatch.
-    (let [box1 (rtext/key-press key-evt box)]
+  (if (kb/shift-enter? key-evt) box ; this was handled in the heavy dispatch.
+    (let [ed (rtext/key-to-edit box key-evt)
+          box1 (if (= (:type ed) :paste)
+                 (rtext/dispatch-edit-event box
+                   (let [v (:value ed) ty (:comp-type (meta v))
+                         v1 (cond (string? v) v
+                              (= ty :codebox) (apply str (codebox/real-strings {:pieces v}))
+                              :else (apply str (mapv :text v)))]
+                     (assoc ed :value v1)))
+                 (rtext/key-press key-evt box))]
       (ensure-three-pieces box1))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Namespace reloading et al ;;;;;;;;;;;;;;;;;;;;;;;;;;
