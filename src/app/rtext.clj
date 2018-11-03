@@ -494,7 +494,7 @@
   "Fits the node's size to the text in it."
   (let [box (v box) g2 (gran2 box) m (:fit-to-text-margin *text-params*)
         mns (:margin *text-params*)
-        d (string-digest box)
+        d (string-digest (rendered-string box))
         n-l (:nlines d) max-l (apply max (:counts d))
         box (assoc box :scroll-top 0 :scroll-left 0)]
     (assoc box :size 
@@ -503,7 +503,7 @@
 
 (defn fit-to-text-if-small [box]
   "Only calls fit-to-text if the box is small."
-  (let [box (v box) d (string-digest box) xx (apply max (:counts d)) yy (:nlines d)
+  (let [box (v box) d (string-digest (rendered-string box)) xx (apply max (:counts d)) yy (:nlines d)
         n (:max-autofit-size-chars *text-params*)]
     (if (or (<= xx n) (<= yy n)) (fit-to-text box (<= xx n) (<= yy n)) box)))
 
@@ -744,17 +744,18 @@
 (defn render-border [box] [[:drawRect [0 0 (first (:size box)) (second (:size box))] {:Color (:outline-color box)}]])
 
 (defn render-path [box]
-  (let [box1 (assoc box :font-size 15) s (:path box1) sz (:size box1) g2 (gran2 box1) bc (:outline-color box1)
-        s (if (string? s) s (apply str (interpose "/" s)))
-        n (count s) places (mapv #(cursor-ugrid-to-pixel box1 % 0) (range n))
-        m (:margin *text-params*) 
-        tc (mapv #(+ (* % 0.5) 0.5) bc) width (+ (* m 2) (* (first g2) n))
-        height (+ (* m 2) (second g2)) ft-pts (:font-size box1)
-        put-above? false
-        x0 (- (* (first sz) 0.5) (* width 0.5)) y0 (if put-above? (- height) 0)]
-    (into [] (concat 
-      [[:drawRect [x0 y0 width height] {:Color (:outline-color box1)}]]
-      (mapv #(vector :drawString [(str %2) (+ (first %1) x0) (+ (second %1) y0)] {:Color tc :FontSize ft-pts}) places s)))))
+  (if (and (not= (:path box) "") (not= (:path box) []))
+    (let [box1 (assoc box :font-size 15) s (:path box1) sz (:size box1) g2 (gran2 box1) bc (:outline-color box1)
+          s (if (string? s) s (apply str (interpose "/" s)))
+          n (count s) places (mapv #(cursor-ugrid-to-pixel box1 % 0) (range n))
+          m (:margin *text-params*) 
+          tc (mapv #(+ (* % 0.5) 0.5) bc) width (+ (* m 2) (* (first g2) n))
+          height (+ (* m 2) (second g2)) ft-pts (:font-size box1)
+          put-above? false
+          x0 (- (* (first sz) 0.5) (* width 0.5)) y0 (if put-above? (- height) 0)]
+      (into [] (concat 
+        [[:drawRect [x0 y0 width height] {:Color (:outline-color box1)}]]
+        (mapv #(vector :drawString [(str %2) (+ (first %1) x0) (+ (second %1) y0)] {:Color tc :FontSize ft-pts}) places s)))) []))
 
 (defn render-background [box]
   [[:fillRect [0 0 (first (:size box)) (second (:size box))] {:Color (:background-color box)}]])

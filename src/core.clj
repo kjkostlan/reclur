@@ -21,6 +21,7 @@
     [app.orepl :as orepl]
     [app.fbrowser :as fbrowser] 
     [app.codebox :as codebox]
+    [app.hintbox :as hintbox]
     [app.singlecomp :as singlecomp]
     [app.selectmovesize :as selectmovesize]
     [app.xform :as xform]
@@ -81,6 +82,11 @@
                            (if (and (globals/can-child?) (not (globals/are-we-child?)))
                              (let [s1 (iteration/ensure-childapp-folder-init!!! s)]
                                (iteration/copy-child-to-us!!! s1) s1) s))
+   #(kb/ctrl-shift+? % "h") (fn [s] ; show the hint box
+                              (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
+                                (if (= (:type fc) :codebox)
+                                  (if-let [hb (hintbox/codebox-hint s fc)] 
+                                    (assoc-in s [:components ::hintbox] hb) s) s) s))
    #(kb/ctrl-shift+? % "c") store-state!
    #(kb/ctrl-shift+? % "z") (fn [_] (retrieve-state!))
    #(kb/ctrl+? % "p") (fn [s] (logger/log-toggle-at-cursor s))})

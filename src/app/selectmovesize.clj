@@ -115,6 +115,17 @@
      (apply min (mapv #(second (:position %)) comps)) 
      (apply max (mapv #(+ (second (:position %)) (second (:size %))) comps))]))
 
+(defn fit-to-screen [s comp]
+  "Moves the comp, and resizes it if necessary, to make it fit in the screen."
+(let [screen-pix (layoutcore/screen-pixels)
+      i-cam (xform/x-1 (:camera s))
+      corner-nw (xform/xv i-cam 0 0) corner-se (apply xform/xv i-cam screen-pix)
+      pos (:position comp) sz (:size comp)
+      sz (mapv min sz (mapv - corner-se corner-nw))
+      pos (mapv max pos corner-nw)
+      pos (mapv min pos (mapv - corner-se sz))]
+  (assoc comp :position pos :size sz)))
+
 (defn derive-key [kwd]
   (keyword (gensym 'copy)))
 

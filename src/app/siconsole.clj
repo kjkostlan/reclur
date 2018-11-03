@@ -10,7 +10,7 @@
 
 (declare interact-fns) ; Possible dependency cycle with the new function being used by some interact fns.
 
-(defn colorize [s pieces piece-ixs char-ix0 char-ix1]
+(defn colorize [box pieces piece-ixs char-ix0 char-ix1]
   "Use colorfulness."
   (let [max-ix (if-let [x (last piece-ixs)] x 0)
         cols (mapv #(conj (colorful/printix2rgb %) 1) (range (inc max-ix)))]

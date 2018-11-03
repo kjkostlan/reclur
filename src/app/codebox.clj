@@ -239,7 +239,7 @@
         tix (first (filterv #(nth allowed?s %) (range tix-in (count strings))))]
     [(if (= tix 0) 0 (nth cumsum (dec tix))) (nth cumsum tix) tix]))
 
-(defn select-twofour-click [m-evt box four?] 
+(defn select-twofour-click [box four?] 
   "double click with no shift, so selects text instead of code folding."
   (let [st (rtext/rendered-string box)
         c-ix (:cursor-ix box)
@@ -345,9 +345,9 @@
                      (not (folded? (nth (:pieces box) cur-pieceix1))))]
       (code-fold-toggle-at-cursor cur-ix folding? nil box)) 
     (= (:ClickCount m-evt) 2)
-    (select-twofour-click m-evt box false)
+    (select-twofour-click box false)
     (= (:ClickCount m-evt) 4)
-    (select-twofour-click m-evt box true)
+    (select-twofour-click box true)
     :else (rtext/mouse-press m-evt box)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Finding code locations ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
