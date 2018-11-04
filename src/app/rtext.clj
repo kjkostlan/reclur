@@ -292,7 +292,7 @@
 ; ugrid = not adding scrolling.
 ; pixel = 2D location of cursor in pixels (local coords, camera is moved/zoomed and physics).
 
-(defn line-char-ixs [box add-one-on-right?]
+(defn vis-line-char-ixs [box add-one-on-right?]
   "Two vectors, the first is the char ix at the start of the line.
    The second is the first + # chars in line + 1 if add-one-on-right?"
   (let [box (v box) d (string-digest (rendered-string box))
@@ -338,19 +338,26 @@
         shy (* (:font-yshift-to-size *text-params*) ft-pts)]
     [(+ (first naive-bottom) shx) (+ (second naive-bottom) shy)]))
 
-(defn cursor-ugrid-to-ix [box x y]
+(defn cursor-grid-to-ix [box x y]
   (let [x1 (+ x (:scroll-left box))
-        l-start-ends (line-char-ixs box false)
+        l-start-ends (vis-line-char-ixs box false)
         lst (first l-start-ends) len (second l-start-ends) n (count lst)]
     (if (= n 0) 0
       (let [y (max 0 (min y (dec n)))]
         (min (+ (nth lst y) x1) (nth len y))))))
 
+(defn cursor-ugrid-to-ix [box x y] 
+  (let [sd (string-digest (rendered-string box))
+        n-b4 (:num-b4 sd)
+        y-clamp (max (min y (dec (count n-b4))) 0)
+        x-clamp (max (min x (nth (:counts sd) y-clamp)) 0)]
+    (+ (nth n-b4 y-clamp) x-clamp)))
+
 (defn cursor-pixel-to-ix [box pixel-x pixel-y]
   "Gets the cursor index from a node and a cursor position.
    For a string of length n, the cursor ix ranges from 0 to n inclusive (n+1 different values)."
   (let [uxy (cursor-pixel-to-ugrid box pixel-x pixel-y)] ; don't do scrolling yet.
-    (cursor-ugrid-to-ix box (first uxy) (second uxy)))) ; scrolling is accounted for here.
+    (cursor-grid-to-ix box (first uxy) (second uxy)))) ; scrolling is accounted for here.
 
 (defn cursor-ix-to-ugrid [box] 
   "Gets the x and y global grid, never nil and out-of-bounds cursors are clamped.
@@ -362,13 +369,14 @@
 
 (defn cursor-ix-to-lix [box] (second (cursor-ix-to-ugrid box))) ; convience.
 
-(defn cursor-ix-to-grid [box] 
-  "Gets the x and y grid, returns nil if they aren't on the screen."
+(defn cursor-ix-to-grid [box & off-screen?] 
+  "Gets the x and y grid as on the screen, returns nil if they aren't on the screen unless off-screen?."
   (let [xy (cursor-ix-to-ugrid box) sl (:scroll-left box) st (:scroll-top box)]
     (if xy
       (let [gx (- (first xy) sl) gy (- (second xy) st)
             wh (view-wh box) w (first wh) h (second wh)]
-        (if (and (>= gx 0) (>= gy 0) (<= gx (inc w)) (<= gy (inc h))) [gx gy])))))
+        (if (or (first off-screen?) 
+              (and (>= gx 0) (>= gy 0) (<= gx (inc w)) (<= gy (inc h)))) [gx gy])))))
 
 (defn cursor-ix-to-pixel [box]
   "The cursor's coordinates [x y] center, before translation and scaling. nil if the cursor is not rendered."
@@ -404,7 +412,7 @@
             
             m (:margin *text-params*)
             
-            st-en (line-char-ixs box false) starts (first st-en) ends (second st-en) nl (count starts)
+            st-en (vis-line-char-ixs box false) starts (first st-en) ends (second st-en) nl (count starts)
             line0 (if (> nl 0) (first (filter #(>= (nth ends %) ix0) (range nl))))
             line1 (if line0 (first (filter #(<= (nth starts %) ix1) (range (dec nl) -1 -1))))]
          (if (and line0 line1)
@@ -598,7 +606,7 @@
   "Mouse :X and :Y are local points and not necessarily integers."
   (let [box (v box) x (:X mouse-evt) y (:Y mouse-evt)
         sh? (:ShiftDown mouse-evt)
-        i1 (:cursor-ix box) i2 (cursor-pixel-to-ix box x y)]
+        i1 (:cursor-ix box) i2 (max 0 (cursor-pixel-to-ix box x y))]
     (cond (= (:ClickCount mouse-evt) 2) ; double-click select.
       (let [ij (ixjx-pieces (:pieces box) i2 i2)]
         (default-doubleclick box i2 (first ij) (nth ij 2)))
@@ -612,8 +620,9 @@
 (defn mouse-drag [mouse-evt box]
   (let [box (v box) cursor1 (cursor-pixel-to-ix box (:X0 mouse-evt) (:Y0 mouse-evt))
         cursor2 (cursor-pixel-to-ix box (:X mouse-evt) (:Y mouse-evt))]
-    (assoc box :selection-start (min cursor1 cursor2) 
-      :selection-end (max cursor1 cursor2) :cursor-ix cursor2)))
+    (if (:ShiftDown mouse-evt) box
+      (assoc box :selection-start (min cursor1 cursor2)
+        :selection-end (max cursor1 cursor2) :cursor-ix cursor2))))
 
 (defn mouse-wheel [wheel-evt box]
   "Mouse wheel scrolling. Only vertical is supported, sorry mac trackpads."
@@ -690,7 +699,7 @@
 
 (defn render-text [box]
   "Renders the characters of box with the line numbers, using :line-num-start and :hidden-nlines to have line nums be properly calculated."
-  (let [st-end (line-char-ixs box false)
+  (let [st-end (vis-line-char-ixs box false)
         line-starts (first st-end) line-ends (second st-end)
         n (count line-ends)
         view-r (view-range box)

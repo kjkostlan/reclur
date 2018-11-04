@@ -148,21 +148,40 @@
    ;Fully-qualified symbols -> var for the old namespace vars. Thus we don't lose the old references.
    (atom {}))
 
-(defn _clear-vars!! [ns-symbol] ; sets vars to throw or be an error message.
-  (let [nms (find-ns ns-symbol)]
+(defn _clear-var!! [ns-sym var-sym var-ob]
+  "sets vars to throw or be an error message."
+  (alter-var-root var-ob
+   (fn [_] (fn [& args] (throw (Exception. (str "Variable:" ns-sym "/" var-sym " has been removed."))))))) 
+
+(defn _mark-vars!! [ns-symbol]
+  "Makes variables with an ::old flag."
+  (let [nms (find-ns ns-symbol)
+        alter (fn [vr] (if (instance? clojure.lang.IObj vr)
+                         (vary-meta vr #(assoc % ::old true)) vr))]
     (if nms
       (let [interns (ns-interns nms)]
-        (zipmap (keys interns) 
-          (mapv (fn [k vr] (alter-var-root vr (fn [_] (fn [& args] (throw (Exception. (str "Variable:" k "/" ns-symbol " has been removed."))))))) 
-            (keys interns) (vals interns)))))))
+        (mapv (fn [v] (alter-var-root v alter))
+          (vals interns))))))
+
+(defn _get-marked-vars [ns-symbol]
+  "Returns a map from symbols to var obs with the marked symbol."
+  (let [nms (find-ns ns-symbol)]
+    (if nms
+      (let [interns (ns-interns nms)
+            var?obs (mapv #(if (::old (meta (var-get %))) % false) (vals interns))
+            intern?s (zipmap (keys interns) var?obs)
+            kys (filterv #(get intern?s %) (keys interns))]
+        (zipmap kys (mapv #(get interns %) kys))) {})))
 
 (defn _update-simple!! [ns-symbol removing?]
   (let [tmp-sym (gensym 'tmp) ns-tmp (create-ns tmp-sym)]
-    (_clear-vars!! ns-symbol)
+    (_mark-vars!! ns-symbol)
     (binding [*ns* ns-tmp]
       (let [maybe-e (if removing? false ; the actual reloading part.
                       (try (do (require ns-symbol :reload) false)
-                              (catch Exception e e)))]
+                              (catch Exception e e)))
+            rm-vars (_get-marked-vars ns-symbol)]
+        (if (not maybe-e) (mapv #(_clear-var!! ns-symbol %1 %2) (keys rm-vars) (vals rm-vars)))
         maybe-e))))
 
 (defn reload-file!! [cljfile]

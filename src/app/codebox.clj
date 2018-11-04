@@ -312,29 +312,45 @@
    Other fns work normally."
   (let [ed (rtext/key-to-edit box key-evt) bk-sp? (= (str (:value ed) (str \backspace)))
         render-str (rtext/rendered-string box)
-        shifting? (:ShiftDown key-evt)]
+        shifting? (:ShiftDown key-evt)
+        get-xy #(rtext/cursor-ix-to-ugrid (assoc box :cursor-ix %))]
     (keep-fe-length
-    (if (and (= (:type ed) :type) (= (:value ed) "    ")) ; line-by line indent or dedent.
-      (let [c-ix (:cursor-ix box)
-            c-range (contain-ixs box c-ix)
-            xy0 (rtext/cursor-ix-to-ugrid box)
-            y0 (second (rtext/cursor-ix-to-ugrid (assoc box :cursor-ix (first c-range))))
-	        y1 (second (rtext/cursor-ix-to-ugrid (assoc box :cursor-ix (second c-range))))
-	        line-begin-ixs (mapv #(rtext/cursor-ugrid-to-ix box 0 %) (range y0 y1))
+    (cond (and (= (:type ed) :type) (or (= (:value ed) "    ") (= (:value ed) "\t"))) ; line-by line indent or dedent.
+      (let [y01 (if (< (:selection-start box) (:selection-end box))
+                  (let [xy0 (get-xy (:selection-start box))
+                        xy1 (get-xy (:selection-end box))]
+                    [(second xy0) (second xy1) (first xy0)])
+                  (let [c-ix (:cursor-ix box)
+                        c-range (#(vector (max (first %1) (first %2)) (min (second %1) (second %2))) 
+                                  (contain-ixs box c-ix) (contain-ixs box (inc c-ix)))
+                        xy0 (get-xy (first c-range))
+                        xy1 (get-xy (second c-range))]
+                    [(second xy0) (second xy1) (first xy0)])) ; sneak in an x0.
+            y0 (first y01) y1 (second y01) x0 (nth y01 2)
+            indent "  " nind (count indent)
+	           line-begin-ixs (mapv #(rtext/cursor-ugrid-to-ix box 0 %) (range y0 y1))
             lines (if shifting? (string/split (rtext/rendered-string box) #"\n"))
             n-space (fn [l] (count (re-find #"[ \t]*" l)))
             ; Slow line-by-line, can be improved:
             box1 (reduce 
                    (fn [bx y] 
                     (let [ix0 (rtext/cursor-ugrid-to-ix bx 0 y)
-                          ix1 (if shifting? (+ ix0 (min 4 (n-space (nth lines y)))) ix0)]
-                      (rtext/edit bx ix0 ix1 (if shifting? "" "    ") [] shifting?)))
+                          ix1 (if shifting? (+ ix0 (min nind (n-space (nth lines y)))) ix0)]
+                      (rtext/edit bx ix0 ix1 (if shifting? "" indent) [])))
                     box (range y0 (inc y1)))
             box2 (assoc box1 :cursor-ix 
                    (rtext/cursor-ugrid-to-ix box1 
-                     (max 0 (+ (first xy0) (if shifting? -4 4))) (second xy0)))]
+                     (max 0 (+ x0 (if shifting? (- nind) nind))) y0))]
          (set-precompute box2))
-      (set-precompute (rtext/key-press key-evt box))))))
+      (= (:KeyCode key-evt) 10) ; indent current line as far.
+      (let [box1 (rtext/key-press key-evt box) cix (:cursor-ix box)
+            ix0 (first (contain-ixs box cix))
+            indent-add (if (= (try (subs (rtext/rendered-string box) ix0 (inc ix0)) (catch Exception e false)) "(") 2 1)
+            n-indented (+ (first (get-xy ix0)) indent-add)
+            spacer (apply str (repeat n-indented " "))
+            box2 (rtext/edit box1 (:cursor-ix box1) (:cursor-ix box1) spacer [])]
+        (set-precompute box2))
+      :else (set-precompute (rtext/key-press key-evt box))))))
 
 (defn mouse-press [m-evt box] ; shift+double click = code folding.
   (cond (and (= (:ClickCount m-evt) 2) (:ShiftDown m-evt))
