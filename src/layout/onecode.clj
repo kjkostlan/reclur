@@ -32,7 +32,6 @@
         new-unit (if (or (< (- (sc-free 1) (sc-free 0)) minspace) (< (- (sc-free 3) (sc-free 2)) minspace))
                    [0.25 0.75 0.25 0.75]
                    sc-free)]
-    ;(println "pos-newcommer: " new-unit () (keys comp))
     (layoutcore/set-unitscreen-xxyy comp (layoutcore/visible-xxyy (:camera s)) new-unit)))
 
 (defn add-component [s comp kwd & popup?]
@@ -45,11 +44,7 @@
   (let [s1 (add-component s comp kwd false)]
     (update-in s1 [:components kwd] f)))
 
-(defn goto-code [s k key-is-file? char-ix0 char-ix1]
-  "Manipulates s by going to the filename or component between char-ix0 and char-ix1.
-   If there is something already open within view we can simply use it, otherwise open a new component.
-   for key-is-file? we go to the real text in char-ix0 and char-ix1, which may involve opening a component.
-   Otherwise we go to the component specified."
+(defn _goto-code [s k key-is-file? char-ix0 char-ix1 force-new?]
   (if key-is-file? ; the more complex one that may make a new component if need be and must go to the char-ix on the real string.
     (let [kys-loc (multicomp/who-has s k char-ix0) ;[codeboxkys real-ix-within-component char-ix-within-piece]
           kys (first kys-loc) ; only matching comps.
@@ -73,11 +68,12 @@
                  (range (count comp-uxxyys))))
           ky (if kyix (nth kys kyix))
           who-has? (> (count kys) 0)
-          hilite #(if who-has? (codebox/select-our-who-has % loc (- char-ix1 char-ix0))
-                    (codebox/select-our-who-has % [0 char-ix0] (- char-ix1 char-ix0)))] ; fresh codebox.
-      (cond ky ; The comp is close enough, move to the key and adjust the key to select us.
-            (update-in s [:components ky] hilite)
-            who-has? ; no comps close enough, but can copy one of them (must make a copy since all exported stuff must be in agreement).
+          z-1 (+ (layoutcore/max-z (update s :components (fn [cs] (select-keys cs (filterv #(= (:type (get cs %)) :codebox) (keys cs)))))) 1.0)
+          hilite #(assoc (if who-has? (codebox/select-our-who-has % loc (- char-ix1 char-ix0))
+                    (codebox/select-our-who-has % [0 char-ix0] (- char-ix1 char-ix0))) :z z-1)] ; fresh codebox.
+      (cond (and (not force-new?) ky) ; The comp is close enough, move to the key and adjust the key to select us.
+        (update-in s [:components ky] hilite)
+        who-has? ; no comps close enough, but can copy one of them (must make a copy since all exported stuff must be in agreement).
         (let [comp (get comps (first kys)) ; copy and move this comp.
               ky1 (keyword (gensym 'goto-target))]
           (add-then s comp ky1 hilite))
@@ -86,14 +82,39 @@
               ky1 (keyword (gensym 'goto-target))]
           (add-then s comp ky1 hilite))))
     (let [comp (get-in s [:components k])
+          z-1 (+ (layoutcore/max-z s) 1.0)
           _ (if (not comp) (throw (Exception. "Nil component for dumb search.")))
           ; Dumb text-as-is search:
-          comp1 (assoc comp :cursor-ix char-ix0 :selection-start char-ix0 :selection-end char-ix1)]
+          comp1 (assoc comp :cursor-ix char-ix0 :selection-start char-ix0 :selection-end char-ix1 :z z-1)]
       (assoc-in s [:components k] (rtext/scroll-to-see-cursor comp1)))))
+
+(defn goto-code [s k key-is-file? char-ix0 char-ix1]
+  "Manipulates s by going to the filename or component between char-ix0 and char-ix1.
+   If there is something already open within view we can simply use it, otherwise open a new component.
+   for key-is-file? we go to the real text in char-ix0 and char-ix1, which may involve opening a component.
+   Otherwise we go to the component specified."
+  (_goto-code s k key-is-file? char-ix0 char-ix1 false))
+
+(defn goto-codes [s filenames char-ix0s char-ix1s]
+  "Like multible goto-codes."
+  (let [n (count filenames)
+        sc (loop [ix 0 s-acc s new-comps []]
+             (if (= ix n) [s-acc new-comps]
+               (let [s1 (_goto-code s-acc (nth filenames ix) true (nth char-ix0s ix) (nth char-ix1s ix) true)
+                     z (layoutcore/max-z s1) comps (:components s1)
+                     comp-k (first (filterv #(= (:z (get comps %)) z) (keys comps)))]
+                 (recur (inc ix) s1 (conj new-comps comp-k)))))
+        s1 (first sc) comp-ks (second sc)
+        comp (get (:components s1) (first comp-ks)) pos (:position comp) sz (:size comp)
+        xxyy [(pos 0) (+ (pos 0) (sz 0)) (pos 1) (+ (pos 1) (sz 1))]
+        comp-gr (mapv rtext/scroll-to-see-cursor (apply layoutcore/make-grid (mapv #(get (:components s1) %) comp-ks) xxyy))
+        comps1 (merge (:components s1) (zipmap comp-ks comp-gr))]
+    (assoc s1 :components comps1)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Compile it all together ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn layout []
   {:initial-position (fn [& args] (apply initial-position args))
-  :add-component (fn [& args] (apply add-component args))
-   :goto (fn [& args] (apply goto-code args))})
+   :add-component (fn [& args] (apply add-component args))
+   :goto (fn [& args] (apply goto-code args))
+   :gotos (fn [& args] (apply goto-codes args))})

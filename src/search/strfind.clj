@@ -56,8 +56,8 @@
         go-fn (fn [s k key-is-file? char-ix0 char-ix1] 
                 (let [s1 ((:goto (:layout s)) s k key-is-file? char-ix0 char-ix1)
                       cam0 (:camera s) cam1 (:camera s1)
-                      max-z (layoutcore/max-z (dissoc (:components s1) boxk))]
-                  (update-in s1 [:components boxk] #(layoutcore/dont-move % cam0 cam1))))
+                      max-z (layoutcore/max-z {:components (dissoc (:components s1) boxk)})]
+                  (update-in s1 [:components boxk] #(assoc (layoutcore/dont-move % cam0 cam1) :z (inc max-z)))))
         fail (fn [] (siconsole/log s (str "not found: " (pr-str (:key opts)))))
         file2k (fn [filename]
                  (first (filterv #(let [c (get comps %)] 

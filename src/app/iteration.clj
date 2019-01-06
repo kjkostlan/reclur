@@ -7,7 +7,8 @@
 (ns app.iteration
   (:require [javac.file :as jfile] [javac.warnbox :as warnbox]
     [clojure.set :as set] globals [app.chfile :as chfile]
-    [app.multicomp :as multicomp] [app.fbrowser :as fbrowser] [app.orepl :as orepl] [app.siconsole :as siconsole]))
+    [app.multicomp :as multicomp] [app.fbrowser :as fbrowser] [app.orepl :as orepl] [app.siconsole :as siconsole]
+    [coder.logger :as logger]))
 
 (defn assert-notchild []
   (if (globals/are-we-child?)

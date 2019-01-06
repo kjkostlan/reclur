@@ -105,3 +105,65 @@
         max-area (apply max 0 areas)]
     (if (= rects []) [(vis-xxyy 0) (vis-xxyy 0) (vis-xxyy 2) (vis-xxyy 2)] ; can happen once in a while when there is no space.
       (nth rects (first (filter #(= (nth areas %) max-area) (range)))))))
+
+(defn most-on-screen [s f]
+  "Most not-offscreen component's key for which (f comp) is true.
+   Returns [k onscreen-score], the score goes from 0 to 1. nil for f failing."
+  (let [vis-xxyy (visible-xxyy (:camera s))
+        on-ness #(let [uxxyy (unitscreen-xxyy vis-xxyy (xxyy %))
+                       x0 (first uxxyy) x1 (second uxxyy)
+                       y0 (nth uxxyy 2) y1 (nth uxxyy 3)
+                       dx (- x1 x0) dy (- y1 y0)
+                       left (min dx (max 0 (- x0)))
+                       horiz (min dx (+ left (max 0 (- x1 1))))
+                       top (min dy (max 0 (- y0)))
+                       vert (min dy (+ top (max 0 (- y1 1))))]
+                   (/ (* (- dx horiz) (- dy vert)) (* dx dy)))
+        comps (:components s)
+        ks (filterv #(f (get comps %)) (keys comps))]
+     (if (> (count ks) 0)
+       (let [scores (mapv #(on-ness (get comps %)) ks)
+             max-sc (apply max scores)]
+         [(nth ks (first (filter #(= (nth scores %) max-sc) (range)))) max-sc]))))
+
+(defn linspace
+  ;https://crossclj.info/ns/anglican/1.0.0/anglican.ais.html#_linspace
+  "returns a equally spaced sequence of points"
+  [start end size]
+  (let [delta (/ (- end start) (dec size))]
+    (map (fn [n] (+ start (* n delta)))
+         (range size))))
+
+(defn make-grid [comps x0 x1 y0 y1]
+  "As square as possible."
+  (let [n (count comps)
+        nx (cond (<= n 3) 1
+             (<= n 6) 2
+             (<= n 12) 3
+             (<= n 20) 4
+             (<= n 30) 5
+             (<= n 40) 6
+             :else (Math/round (Math/sqrt n)))
+        ny (int (+ (/ n nx) 1 -1e-9))
+        x-values (linspace x0 x1 (inc nx))
+        y-values (linspace y0 y1 (inc ny))
+        x0-values (into [] (butlast x-values))
+        x1-values (into [] (rest x-values))
+        y0-values (into [] (butlast y-values))
+        y1-values (into [] (rest y-values))
+        xxyys (loop [acc [] ix 0 ix-x 0 ix-y 0]
+                (if (= ix n) acc
+                  (let [wrap? (= ix-x (dec nx))]
+                    (recur (conj acc [(nth x0-values ix-x)
+                                      (nth x1-values ix-x)
+                                      (nth y0-values ix-y)
+                                      (nth y1-values ix-y)])
+                      (inc ix)
+                      (if wrap? 0 (inc ix-x))
+                      (if wrap? (inc ix-y) ix-y)))))
+        aply (fn [c ix] (let [xxyy (nth xxyys ix)] 
+                          (assoc c :position [(first xxyy) (nth xxyy 2)]
+                            :size [(- (second xxyy) (first xxyy)) 
+                                   (- (nth xxyy 3) (nth xxyy 2))])))]
+    (if (map? comps) (zipmap (keys comps) (mapv aply (vals comps) (range)))
+      (mapv aply comps (range)))))

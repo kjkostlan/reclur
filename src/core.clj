@@ -27,6 +27,7 @@
     [app.xform :as xform]
     [app.siconsole :as siconsole]
     [app.iteration :as iteration]
+    [app.funcjump :as funcjump]
     [search.strfind :as strfind]
     [layout.keybind :as kb]
     [coder.logger :as logger]))
@@ -72,7 +73,14 @@
                             (do (future (launch-main-app!!)) (throw (Exception. "This iteration is dead, reloading."))) %)
    #(kb/ctrl+? % "`") selectmovesize/swap-on-top 
    #(kb/ctrl+? % "f") (fn [s] (strfind/add-search-box s)) 
-   #(kb/ctrl+? % "p") (fn [s] (logger/log-toggle-at-cursor s))
+   #(kb/ctrl+? % "p") (fn [s] 
+                        (let [k (first (:selected-comp-keys s))]
+                          (if (= (:type (get-in s [:components k])) :codebox)
+                            (let [filename-ix (multicomp/cursor-locate s k)
+                                  fname (first filename-ix) cursor-ix (second filename-ix)
+                                  cache-txt (multicomp/open-cache s fname)]
+                              (logger/log-toggle-at-cursor s fname cursor-ix cache-txt (orepl/new-repl)))
+                            s)))
    ; The saving system: 
    ; ctrl+s = save onto child generation.
    ; ctrl+shift+s = pull child onto ourselves (TODO: do this when we quit as well).
@@ -89,7 +97,22 @@
                                     (assoc-in s [:components ::hintbox] hb) s) s) s))
    #(kb/ctrl-shift+? % "c") store-state!
    #(kb/ctrl-shift+? % "z") (fn [_] (retrieve-state!))
-   #(kb/ctrl+? % "p") (fn [s] (logger/log-toggle-at-cursor s))})
+   #(kb/ctrlarrow+? % "^") (fn [s]
+                             (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
+                                (if (= (:type fc) :codebox)
+                                  (if-let [file-ix01s (funcjump/find-users s fc)]
+                                    (let [fnames (first file-ix01s)
+                                          ix0s (second file-ix01s) ix1s (nth file-ix01s 2)
+                                          lys (:gotos (:layout s))] 
+                                      (lys s fnames ix0s ix1s)) s) s) s))
+   #(kb/ctrlarrow+? % "v") (fn [s]
+                             (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
+                                (if (= (:type fc) :codebox)
+                                  (if-let [file-ix01 (funcjump/find-def s fc)]
+                                    (let [fname (first file-ix01)
+                                          ix0 (second file-ix01) ix1 (nth file-ix01 2)
+                                          ly (:goto (:layout s))] 
+                                      (ly s fname true ix0 ix1)) s) s) s))})
 
 ;;;;;;;;;;;;;;;; Adding a component on the top of the z-stack ;;;;;;;;;;;;;;;;;;;;;
 
@@ -257,6 +280,7 @@
         comp-sprites (zipmap (keys comps) 
                        (mapv (fn [k] 
                                (let [c (get comps k)
+
                                      cam1 (xform/xx cam (singlecomp/pos-xform (:position c)))]
                                  {:bitmap-cache? true :camera cam1 :gfx (get local-comp-renders k) :z (:z c)}))
                              (keys comps)))

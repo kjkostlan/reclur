@@ -13,14 +13,14 @@
 (declare interact-fns) ; Possible dependency cycle with the new function being used by some interact fns.
 
 (defn colorize [box pieces piece-ixs char-ix0 char-ix1]
-  (let [cols [[1 1 1 1] [0.5 0.75 1 1] [1 1 0 1]]]
+  (let [cols [[1 1 1 1] [1 1 0 1] [0.5 0.75 1 1]]]
     (mapv (fn [ix] (nth cols ix)) piece-ixs)))
 
 (defn new-hintbox []
   (assoc rtext/empty-text :interact-fns (interact-fns) :pieces [{:text "\n"}]
     :outline-color [0 0.75 0 1] :path "" :type :hintbox :colorize-fn colorize
-    :subtype nil))
-
+    :subtype false))
+ 
 (defn get-text [box]
   (:text (first (:pieces box))))
 
@@ -52,11 +52,10 @@
                            (conj %1 s))) [""] syms)]
     (apply str (interpose "\n" lines))))
 
-
-(defn codebox-hint [s cbox]
-  "Generates a component based on the cursor's position in the codebox.
-   nil = no hint could be found, so no box generated."
-  (let [cbox (update cbox :cursor-ix dec) cix (:cursor-ix cbox)
+(defn _whats-at-cursor [cbox]
+  "Returns the symbol or literal at the cursor, resolved as a fully qualified symbol if possible.
+   Metadata has :special? and :resolved? keywords."
+  (let [cix (:cursor-ix cbox)
         ph (:path cbox) vis (rtext/rendered-string cbox)
         cbox1 (codebox/select-twofour-click cbox false)
         piece (subs vis (:selection-start cbox1) (:selection-end cbox1))        
@@ -65,27 +64,41 @@
                        [piece (subs piece 0 (dec (count piece)))])))
         no? (= piece "false")
         specials #{'def 'let* 'if 'quote 'var 'recur 'throw 'catch 'monitor-enter 'monitor-exit 'set!}]
-    (cond
+    (cond (= piece "nil") nil
+      no? false
       (and (symbol? sym) (get specials sym))
-      (add-hint-box s cbox [(str sym) " (special form)"] :doc)
-      (and sym (symbol? sym) (not no?))
+      (with-meta sym {:special? true})
+      (symbol? sym)
       (let [ns-sym (cbase/file2ns (first (:path cbox)))
             sym-resolved (cbase/resolved ns-sym sym)]
-        (if sym-resolved
-          (let [info (cbase/var-info sym-resolved true)
-                doc (if (coll? (:source info)) (second (rest (rest (:source info)))))
-                doc (if (:doc info) (str (:doc info) "\n")
-                      (if (string? doc)
-                        (str doc "\n") ""))
-                txts [(str sym-resolved "\n") (str doc)
-                       (apply str (interpose "\n" (:arglists info)))]] 
-           (add-hint-box s cbox txts :doc))
-           ; hints:
-           (let [hints (cbase/auto-complete ns-sym sym)]
-             (if (> (count hints) 0) 
-               (add-hint-box s cbox [(_lineanate hints)] :autocomplete)))))
-     (or sym no?) 
-     (add-hint-box s cbox ["Type = " (str (type (if no? false sym)))] :doc))))
+        (if sym-resolved (with-meta sym-resolved {:resolved? true}) sym))
+      :else sym)))
+
+(defn whats-at-cursor [cbox]
+  (if-let [x (_whats-at-cursor cbox)] x
+    (_whats-at-cursor (update cbox :cursor-ix dec))))
+
+(defn codebox-hint [s cbox]
+  "Generates a component based on the cursor's position in the codebox.
+   nil = no hint could be found, so no box generated."
+  (let [x (whats-at-cursor cbox) mx (meta x)]
+    (cond (nil? x) (add-hint-box s cbox ["Nothing here"] :doc)
+      (and (symbol? x) (:special? mx))
+      (add-hint-box s cbox [(str x) " (special form)" ] :doc)
+      (and (symbol? x) (:resolved? mx))
+      (let [info (cbase/var-info x true)
+            doc (if (coll? (:source info)) (second (rest (rest (:source info)))))
+            doc (if (:doc info) (str (:doc info)) (str doc))
+            txts [(str x " ") (apply str (interpose " " (:arglists info)))
+                  (str "\n" doc)]]
+        (add-hint-box s cbox txts :doc))
+      (symbol? x)
+      (let [ns-sym (cbase/file2ns (first (:path cbox)))
+            hints (cbase/auto-complete ns-sym x)]
+        (if (> (count hints) 0)
+          (add-hint-box s cbox [(_lineanate hints)] :autocomplete)
+          (add-hint-box s cbox [(str x " (java method, local variable or can't be resolved).")] :doc)))
+      :else (add-hint-box s cbox ["Literal " (.replace ^String (str (type x)) "class " "")] :doc))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Interactions beyond the usual rtext interactions.

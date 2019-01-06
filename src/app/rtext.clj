@@ -237,7 +237,7 @@
    :scroll-top (- (:lines-above-top-allowed *text-params*)) :scroll-left 0 :pieces [{:text ""}] :size [600 400] :read-only? #{}
    :partial-grab-fn default-partial-grab
    :selection-color [0.5 0.8 1 1]
-   :outline-color [0 0 1 1] :background-color [0 0 0 0.5] 
+   :outline-color [0 0 1 1] :background-color [0 0 0 0.655] 
    :path "nopath"
    :line-num-start 1
    :show-line-nums? true
@@ -763,7 +763,8 @@
           put-above? false
           x0 (- (* (first sz) 0.5) (* width 0.5)) y0 (if put-above? (- height) 0)]
       (into [] (concat 
-        [[:drawRect [x0 y0 width height] {:Color (:outline-color box1)}]]
+        [[:fillRect [x0 y0 width height] {:Color [0 0 0 0.5]}]
+         [:drawRect [x0 y0 width height] {:Color (:outline-color box1)}]]
         (mapv #(vector :drawString [(str %2) (+ (first %1) x0) (+ (second %1) y0)] {:Color tc :FontSize ft-pts}) places s)))) []))
 
 (defn render-background [box]

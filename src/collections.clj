@@ -4,7 +4,7 @@
 ; Allowing a wider range of collections, i.e. cassoc allows lists and nil-pads vectors when out of bounds.
 ; Matching the input type, i.e. cmap (and it's cousin rmap).
 ; Several design choices were made, there is no "best" option:
-;    false or nil elements in vectors or maps don't count as bieng there for keys or set operations.
+;    false or nil elements in sequentials or maps don't count as bieng there for keys or set operations, unless overidden for ckeys.
 ;      But filter doesn't set elements to nil it just contracts the vector.
 ;    keys and vals are the same for sets. keys are indexes for vectors.
 ;    The output metadata is always the first collection or the union of input collections (even for difference operations), 
@@ -156,8 +156,10 @@
   (if (and (not (vector? x)) (sequential? x)) (find (into [] x) k)
       (find x k)))
 
-(defn ckeys [x] ; only true vectors count.
-  (cond (sequential? x) (let [xv (into [] x)]
+(defn ckeys [x & include-seq-falses] ; only true vectors count.
+  (cond (and (sequential? x) (first include-seq-falses))
+        (apply list (range (count x)))
+        (sequential? x) (let [xv (into [] x)]
                           (apply list (filterv #(get xv %) (range (count x)))))
         (set? x) (apply list x)
         :else (keys x)))

@@ -51,7 +51,7 @@
 (defn level2rgb [level]
   ; a nice color scheme. Returns a clojure vector form 0 to 1.
   (let [hvals (into [] (map #(/ % 360) [0 37 55 80 115 153 180 220 320]))
-        b (if (= level 0) 1 (+ 0.87 (* 0.08 (mod level 2))))
+        b (if (= level 0) 1 (+ 0.84 (* 0.10 (mod level 2))))
         h (nth hvals (mod (dec level) (count hvals)))
         s (if (<= level (count hvals)) 1 0.5)] (hsl2rgb [h s b])))
 

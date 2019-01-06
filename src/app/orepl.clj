@@ -4,6 +4,7 @@
     [clojure.set :as set]
     [app.codebox :as codebox]
     [app.rtext :as rtext]
+    [coder.logger :as logger]
     [javac.clipboard :as clipboard] 
     [javac.file :as jfile]
     [javac.exception :as jexc]
@@ -176,13 +177,12 @@
 (defn _update-simple!! [ns-symbol removing?]
   (let [tmp-sym (gensym 'tmp) ns-tmp (create-ns tmp-sym)]
     (_mark-vars!! ns-symbol)
-    (binding [*ns* ns-tmp]
-      (let [maybe-e (if removing? false ; the actual reloading part.
-                      (try (do (require ns-symbol :reload) false)
-                              (catch Exception e e)))
-            rm-vars (_get-marked-vars ns-symbol)]
-        (if (not maybe-e) (mapv #(_clear-var!! ns-symbol %1 %2) (keys rm-vars) (vals rm-vars)))
-        maybe-e))))
+    (let [maybe-e (if removing? false ; the actual reloading part.
+                    (try (do (logger/reload-but-keep-loggers!! ns-symbol) false)
+                            (catch Exception e e)))
+          rm-vars (_get-marked-vars ns-symbol)]
+      (if (not maybe-e) (mapv #(_clear-var!! ns-symbol %1 %2) (keys rm-vars) (vals rm-vars)))
+      maybe-e)))
 
 (defn reload-file!! [cljfile]
   "Reloads a given clj file, removing the ns if the file no longer exists."
