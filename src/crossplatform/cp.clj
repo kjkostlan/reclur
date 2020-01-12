@@ -41,27 +41,27 @@
 
 (eval import-code)
 
-(defmacro handler-code [quit-listener!!]
+(defmacro handler-code [quit-listener!]
   (cond (or (java9?) (mac?))
    `(proxy [QuitHandler] []
       (handleQuitRequestWith [e# response#]
-        (~quit-listener!! e#)
+        (~quit-listener! e#)
         (.cancelQuit response#)))
     :else false))
 
-(defmacro quit-request-listener-code [quit-listener!!]
+(defmacro quit-request-listener-code [quit-listener!]
   (cond (java9?)
-    `(let [^QuitHandler handler# (handler-code ~quit-listener!!)
+    `(let [^QuitHandler handler# (handler-code ~quit-listener!)
           ^Desktop d# (Desktop/getDesktop)]
        (.setQuitHandler d# handler#) true)
     (mac?)
-    `(let [^QuitHandler handler# (handler-code ~quit-listener!!)
+    `(let [^QuitHandler handler# (handler-code ~quit-listener!)
            ^Application mac-app# (Application/getApplication)]
         (.setQuitHandler mac-app# handler#) true)
     :else `(fn [ignore#] true)))
 
-(defn add-quit-request-listener!! [quit-listener!!]
+(defn add-quit-request-listener! [quit-listener!]
   "Quit handlers are confusing, and need to be tested on multiple os's.
-   calls (quit-listener!! e) and cancels the quit.
+   calls (quit-listener! e) and cancels the quit.
    The app then should add the quit request to it's event queue to handle it later."
-    (quit-request-listener-code quit-listener!!))
+    (quit-request-listener-code quit-listener!))

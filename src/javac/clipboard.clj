@@ -7,7 +7,7 @@
   (:import [java.awt.datatransfer Clipboard ClipboardOwner Transferable StringSelection DataFlavor]
     [java.awt Toolkit]))
 
-(defn put-as-string!! [s]
+(defn put-as-string! [s]
   "Converts non-strings into strings."
   (let [string-sel (StringSelection. (str s))
         cb (.getSystemClipboard (Toolkit/getDefaultToolkit))]

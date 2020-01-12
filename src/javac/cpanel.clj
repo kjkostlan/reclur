@@ -18,10 +18,9 @@
 
 (def ^:dynamic *frame-time-ms* 30) ; a somewhat complex mechanism to ensure graceful degradation when the events are heavy.
 (def ^:dynamic *drop-frames-queue-length-threshold* 3)
-(def ^:dynamic *low-cpu?* true) ; mousemotion and everyframe events ignored.
 (def ^:dynamic *mac-keyboard-kludge?* false) ; A huuuuuuge bug with typing involving accents stealing focus. 
 (def ^:dynamic *add-keyl-to-frame?* true) ; tab only works on the frame. False goes to panel.
-
+ 
 ;;;;;;;;;;;;;;;;;;;;; Other Support functions ;;;;;;;;;;;;;;;;;;;;;
 
 (defonce _ (println "If you are on a mac don't forget:   defaults write -g ApplePressAndHoldEnabled -bool false"))
@@ -79,7 +78,7 @@
           new-external (update-external-state evt (:type evt) extern)
           new-state (try (if f (f evt (:app-state x)) (:app-state x))
                       (catch Exception e (println e) (:app-state x)))
-          ud? (or (:needs-gfx-update? x) (not *low-cpu?*) (not= kwd :mouseMoved)) ud? true]
+          ud? true] ; TODO: better gfx update.
      {:app-state new-state :external-state new-external :needs-gfx-update? ud?}) {}))
 
 ;;;;;;;;;;;;;;;;;;;;; Mutation ;;;;;;;;;;;;;;;;;;;;;
@@ -87,14 +86,16 @@
 (def one-atom globals/one-atom)
 (defonce _ (reset! one-atom (empty-state)))
 
-(defn update-graphics!! []
+(defn update-graphics! []
   (let [x @one-atom 
-        gfx-updated-app-state (try ((:update-gfx-fn x) (:app-state x)) (catch Exception e (do (println "gfx update error") (:app-state x))))
-        new-gfx (try ((:render-fn x) gfx-updated-app-state) (catch Exception e (do (println "gfx render error.") {})))]
-    (if-let [panel (:JPanel x)] (gfx/update-graphics! panel (:last-drawn-gfx x) new-gfx))
-    (swap! one-atom #(assoc % :last-drawn-gfx new-gfx :app-state gfx-updated-app-state :needs-gfx-update? false))))
+        udgfx (:update-gfx-fn x)]
+    (if udgfx
+      (let [gfx-updated-app-state (try (udgfx (:app-state x)) (catch Exception e (do (println "gfx update error:" e) (:app-state x))))
+            new-gfx (try ((:render-fn x) gfx-updated-app-state) (catch Exception e (do (println "gfx render error.") {})))]
+        (if-let [panel (:JPanel x)] (gfx/update-graphics! panel (:last-drawn-gfx x) new-gfx))
+        (swap! one-atom #(assoc % :last-drawn-gfx new-gfx :app-state gfx-updated-app-state :needs-gfx-update? false))))))
 
-(defn dispatch-loop!! []
+(defn dispatch-loop! []
   "Keeps dispatching events from the atom. This function is NOT thread safe, the price we pay for ensuring dequeue1 only is called once per event.
    Note that dequeue1 will sometimes have side-effects and/or be expensive."
   (while (> (count (:evt-queue @one-atom)) 0)
@@ -102,61 +103,70 @@
       (swap! one-atom #(let [x1 (merge % xd) evq (:evt-queue %)]
                         (assoc x1 :evt-queue (into [] (rest evq)))))))) ; O(n) but should stay small.
 
-; Continuously polling is a tiny CPU drain, but it is way easier than a lock system that must ensure we don't get overlapping calls to dispatch-loop!!
-; The idle CPU is 0.6% of one core for the total program (tested May 19th 2018).
-(defonce _polling? (atom false)) ; only used to make sure we don't have multiple calls to this file, an extra safeguard.
-(if (not @_polling?)
-  (future (while true (do (Thread/sleep *frame-time-ms*) (dispatch-loop!!) (if (:needs-gfx-update? @one-atom) (update-graphics!!))))))
-(reset! _polling? true)
-
-(defn event-queue!! [e kwd]
+(defn event-queue! [e kwd]
   (swap! one-atom #(queue1 % e kwd)))
 
-(defn store-window-size!! [^JFrame frame]
+(defn store-window-size! [^JFrame frame]
   (swap! one-atom #(assoc-in % [:external-state :window-size] 
                      (let [^java.awt.Dimension sz (.getSize (.getContentPane frame))]
                        [(.getWidth sz) (.getHeight sz)]))))
+
+; Continuously polling is a (tiny) CPU drain, but it is way easier than a lock system that must ensure we don't get overlapping calls to dispatch-loop!
+; The idle CPU is 0.7% of one core for the total program (tested Aug 13th 2019).
+(defonce _polling? (atom false)) ; only used to make sure we don't have multiple frame loops, an extra safeguard.
+(if (not @_polling?)
+  (future 
+    (loop [last-millis -1e100] ; Loop is never left.
+        (let [elapsed-millis (max 0 (- (System/currentTimeMillis) last-millis))
+              sleep-time (- *frame-time-ms* elapsed-millis)]
+          (if (> sleep-time 0) (Thread/sleep *frame-time-ms*)))
+        (if (> (count (:hot-repls (:app-state @one-atom))) 0) ; A single empty hot repl makes the idle CPU 2.0%
+          (event-queue! {:Time (System/currentTimeMillis)} :everyFrame))
+        (dispatch-loop!)
+        (if (:needs-gfx-update? @one-atom) (update-graphics!))
+        (recur (System/currentTimeMillis)))))
+(reset! _polling? true)
 
 ;;;;;;;;;;;;;;;;;;;;; Java listeners and windowing ;;;;;;;;;;;;;;;;;;;;;
 
 (defn add-mouse-listeners! [^JPanel panel]
   (.addMouseListener panel
     (proxy [MouseAdapter] []
-      (mouseClicked [e] (event-queue!! e :mouseClicked))
-      (mouseEntered [e] (event-queue!! e :mouseEntered))
-      (mouseExited [e] (event-queue!! e :mouseExited))
+      (mouseClicked [e] (event-queue! e :mouseClicked))
+      (mouseEntered [e] (event-queue! e :mouseEntered))
+      (mouseExited [e] (event-queue! e :mouseExited))
       (mousePressed [e]
         #_(.requestFocus (:JPanel @one-atom))
         #_(let [frame (.getParent (.getParent (.getParent (.getParent (.getSource e)))))]
           (.requestFocus frame)) 
-        (event-queue!! e :mousePressed))
-      (mouseReleased [e] (event-queue!! e :mouseReleased))))
+        (event-queue! e :mousePressed))
+      (mouseReleased [e] (event-queue! e :mouseReleased))))
   (.addMouseWheelListener panel
     (proxy [MouseAdapter] []
-      (mouseWheelMoved [e] (event-queue!! e :mouseWheelMoved))))
+      (mouseWheelMoved [e] (event-queue! e :mouseWheelMoved))))
   (.addMouseMotionListener panel
     (proxy [MouseAdapter] []
-      (mouseMoved [e] (event-queue!! e :mouseMoved))
-      (mouseDragged [e] (event-queue!! e :mouseDragged)))))
+      (mouseMoved [e] (event-queue! e :mouseMoved))
+      (mouseDragged [e] (event-queue! e :mouseDragged)))))
 
 (defn add-key-listeners! [x]
   (.addKeyListener x
     (proxy [KeyAdapter] []
-      (keyPressed [e] (event-queue!! e :keyPressed))
-      (keyReleased [e] (event-queue!! e :keyReleased)))))
+      (keyPressed [e] (event-queue! e :keyPressed))
+      (keyReleased [e] (event-queue! e :keyReleased)))))
 
 (defn add-resize-listener! [^JFrame frame]
    (.addComponentListener frame
      (proxy [ComponentAdapter] []
-       (componentShown [e] (store-window-size!! frame))
-       (componentResized [e] (store-window-size!! frame)))))
+       (componentShown [e] (store-window-size! frame))
+       (componentResized [e] (store-window-size! frame)))))
 
 (defn add-parentin-listener! [] 
   "Adds a listener for stdin."
   (future
     (while [true]
       (let [s (try (iteration/get-input) (catch Exception e (do (Thread/sleep 1000) (str "ERROR in iteration/get-input:\\n" (orepl/pr-error e)))))] ; waits here until the stream has stuff in it.
-        (SwingUtilities/invokeLater #(event-queue!! {:contents s :type :parent-in} :parent-in)))))) ; all evts are queued on the edt thread, not sure if this is ideal.
+        (SwingUtilities/invokeLater #(event-queue! {:contents s :type :parent-in} :parent-in)))))) ; all evts are queued on the edt thread, not sure if this is ideal.
 (if (globals/are-we-child?) (add-parentin-listener!))
 
 (defn proxy-panel []
@@ -181,19 +191,18 @@
     (.setVisible frame true)
     (if *add-keyl-to-frame?* (add-key-listeners! frame)
       (do (add-key-listeners! panel) (.setFocusable panel true) (.requestFocus panel)))
-    (crossp/add-quit-request-listener!! #(event-queue!! % :quit))
+    (crossp/add-quit-request-listener! #(event-queue! % :quit))
     [frame panel]))
 
 (defn swing-or-kludge [f]
   (if *mac-keyboard-kludge?* (f)
     (SwingUtilities/invokeAndWait f)))
 
-(defn launch-app!! [init-state dispatch-fn update-gfx-fn render-fn]
+(defn launch-app! [init-state dispatch-fn update-gfx-fn render-fn]
   "app is singleton, launching 
    dispatch-fn including is (f evt-clj state), we make our own every-frame event.
    update-gfx-fn is (f state-clj), returns the new state, and should cache any expensive gfx cmds.
    render-fn is (f state-clj) but some render commands are functions on the java object."
-  (if *low-cpu?* (println "Low CPU mode, less mouse moves and no animations.")) 
   (swing-or-kludge
     (fn [& args]
       ;; https://stackoverflow.com/questions/1234912/how-to-programmatically-close-a-jframe
@@ -209,6 +218,6 @@
                       :evt-queue []
                       :JFrame frame :JPanel panel))))))
 
-(defn stop-app!! []
-  (if (not= @one-atom (empty-state)) (println "stopping app"))
-  (launch-app!! {} {} (fn [state] []) (fn [state] [])))
+(defn stop-app! []
+  (if (not= (dissoc @one-atom :evt-queue) (dissoc (empty-state) :evt-queue)) (println "stopping app (IF any app was open)"))
+  (launch-app! {} {} (fn [state] []) (fn [state] [])))

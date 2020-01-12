@@ -2,6 +2,7 @@
 (ns app.siconsole
  (:require [app.rtext :as rtext]
    [layout.colorful :as colorful]
+   [layout.keybind :as kb]
    [coder.plurality :as plurality]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -31,8 +32,9 @@
 
 (defn key-press [key-evt box]
   "Read-only"
-  (let [ed (rtext/key-to-edit box key-evt)]
-    (if (or (= (:type ed) :arrow) (= (:type ed) :copy)) (rtext/key-press key-evt box) box)))
+  (if (kb/emacs-hit? "C-k" key-evt) (assoc box :pieces [] :cursor-ix 0)
+    (let [ed (rtext/key-to-edit box key-evt)]
+      (if (or (= (:type ed) :arrow) (= (:type ed) :copy)) (rtext/key-press key-evt box) box))))
 
 (defn log1 [console msg]
   (let [pieces0 (:pieces console)

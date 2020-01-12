@@ -18,7 +18,7 @@
 ; :cursor-ix is the current cursor index, counting the space between the pieces.
 ; :font-size is the font size. The actual font size can be different because of physics-induced compression, etc.
 ; :selection-start and :selection-end are the selected text range, inclusive.
-  ; Dragging the cursor to location x makes :selection-end x-1. 
+  ; Dragging the cursor to location x makes :selection-end x. 
 ; :scroll-top and :scroll-left = upper left corner scroll position.
 ; :size is a two element vector in pixels.
 ; TODO: maybe use inclusive-exclusive patterns for ranges.
@@ -110,6 +110,15 @@
    box is a textbox such as (place-holder-text), same for all arguments in this file called box.
    Does not account for scrolling."
   (apply str (mapv :text (:pieces box))))
+
+(defn selected-rendered-string [box]
+  "Only the selected part, empty if nothing is selected."
+  (let [txt (rendered-string box)
+        ix0 (:selection-start box) ix0 (if ix0 ix0 0)
+        ix1 (:selection-end box) ix1 (if ix1 ix1 0)
+        ix0 (max ix0 0) ix0 (min ix0 (count txt))
+        ix1 (min ix1 (count txt)) ix1 (max ix1 ix0)]
+    (subs txt ix0 ix1)))
 
 (defn inserted-string [value]
   "Converts something that could be inserted into a string, useful to see how the rendered string will change."
@@ -632,19 +641,19 @@
 
 (defn dispatch-edit-event [box ed]
   (let [box (v box) ty (:type ed)
-        copy!! (fn [] ; maybe make this customizable?
+        copy! (fn [] ; maybe make this customizable?
                  (let [x0 (:ix0 ed) x1 (:ix1 ed)] ; selection indexes.
                    (if (<= x1 x0) false ; nothing selected.
                      (let [slice (grab-selection-by (:pieces box) x0 x1 (:partial-grab-fn box))
                            txt (apply str (mapv :text slice)) ; txt is the lookup key on paste.
                            i0 (first (ixjx-pieces (:pieces box) x0 x1)) 
                            copy-ixs (mapv #(+ % i0) (range (count slice)))] ; which index each comes from.
-                       (clipboard/put-as-string!! txt) ; The visual string.
+                       (clipboard/put-as-string! txt) ; The visual string.
                        (reset! clip-atom (hash-map txt {:x slice :ixs copy-ixs :comp-type (:type box)}))))))]
     (cond (= ty :backspace) (edit box (:ix0 ed) (:ix1 ed) "" [])
       (= ty :select-all) (assoc box :selection-start 0 :selection-end (:ix1 ed))
-      (= ty :cut) (if (copy!!) (edit box (:ix0 ed) (:ix1 ed) "" []) box) ; remove and store if there is a selection.
-      (= ty :copy)  (do (copy!!) box)
+      (= ty :cut) (if (copy!) (edit box (:ix0 ed) (:ix1 ed) "" []) box) ; remove and store if there is a selection.
+      (= ty :copy)  (do (copy!) box)
       (= ty :paste) (let [x (:value ed) agree? (not (string? x))]
                       (edit box (:ix0 ed) (:ix1 ed)
                         x (if agree? (:ixs (meta x)) [])))

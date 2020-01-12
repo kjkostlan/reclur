@@ -272,7 +272,7 @@
         (if (not= txt0 txt1)
           (let [opt (warnbox/choice (str "Save file before closing? " fname) [:yes :no :cancel] :yes)]
             (cond (= opt :yes) 
-              (do (jfile/save!!! fname txt1)
+              (do (jfile/save!! fname txt1)
                 (close-component-noprompt s kwd)) ; the cache is stored in the components; closing it removes the cache.
               (= opt :no)
               (close-component-noprompt s kwd)

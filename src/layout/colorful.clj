@@ -1,5 +1,4 @@
 ; Lisps love indentation. Lets make it beautiful!
-; TODO: move to layout/colorful.
 ; TODO: use rgba colors here rather than using a conj.
 (ns layout.colorful)
 
@@ -64,4 +63,4 @@
 
 (defn printix2rgb [cmd-ix]
   (let [brt (mod (/ cmd-ix (double (num-cmd-cycle))) 1.0)]
-    [(Math/pow brt 1.0) (+ 0.5 (* (Math/pow brt 0.333) 0.4999)) (Math/pow brt 0.5)]))
+    [(Math/pow brt 1.0) (+ 0.4 (* (Math/pow brt 0.333) 0.4999)) (Math/pow brt 0.5)]))

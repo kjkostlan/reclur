@@ -5,6 +5,7 @@
     [app.codebox :as codebox]
     [app.rtext :as rtext]
     [coder.logger :as logger]
+    [coder.cbase :as cbase]
     [javac.clipboard :as clipboard] 
     [javac.file :as jfile]
     [javac.exception :as jexc]
@@ -19,88 +20,122 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Look and feel ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn pr-error [e] ; shows the stack trace.
-  (let [e-clj (jexc/clje e)]
-    (apply str (:Message e-clj) " (" (subs (str (type e)) 6) ")" "\n"
-      (let [st (:StackTrace e-clj)]
+(defn pr-error [e & hide-stack?]
+  (let [e-clj (logger/clean-error-stack (jexc/clje e) ["app.orepl$eval" "app.orepl$get_repl_result"])
+        msg0 (if (:Message e-clj) (:Message e-clj) "<no Message>")
+        msg (apply str (interpose "\ncompiling:" (string/split msg0 #", compiling:")))]
+    (apply str msg " (" (subs (str (type e)) 6) ")" "\n"
+      (let [st (if (first hide-stack?) [] (:StackTrace e-clj))]
         (interpose "\n" (mapv #(str  "  " (:ClassName %) " " (:LineNumber %)) st))))))
 
+(def colorize-top codebox/colorize)
+
+(defn colorize-out [box s piece-ix char-ix0 char-ix1]
+  (let [rgba (conj (colorful/cmdix2rgb (:num-run-times box)) 1)]
+    (into [] (repeat (inc (- char-ix1 char-ix0)) rgba))))
+
 (defn colorize [box s piece-ix char-ix0 char-ix1]
-  "levels and sp?s are one element per character. 
-    non-white chars in sp?s are rendered the same as comments." ; 380 ms.
-  (let [box1 (codebox/set-precompute (update box :pieces #(vector (first %))))
-        t1 (:text (first (:pieces box1))) n1 (+ (count (:text (second (:pieces box)))) (count (:text (nth (:pieces box) 2))))
-        col-output (conj (colorful/cmdix2rgb (:num-run-times box)) 1)]
-    (subvec (into [] (concat (codebox/colorize box1 t1 (into [] (repeat (count t1) 0)) 0 (count t1))
-                     (repeat n1 col-output)))
-      char-ix0 char-ix1))) ; lazy way.
+  (let [box (codebox/set-precompute box)
+        cols-if-top (colorize-top box s piece-ix char-ix0 char-ix1)
+        cols-if-out (colorize-out box s piece-ix char-ix0 char-ix1)]
+    (mapv #(if (= %1 0) (nth cols-if-top %2)
+             (nth cols-if-out %2)) piece-ix (range (count cols-if-top)))))
 
 (defn limit-length [s]
   (let [max-len 10000 tmp "...<too long to show>"]
     (if (> (count s) max-len) (str (subs s 0 (- max-len (count tmp))) tmp) s)))
 
+
 ;;;;;;;;;;;;;;;;;;;;;;;;; Setting up a repl ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn new-repl []
-  (assoc rtext/empty-text :type :orepl :lang :clojure :pieces [{:text "(+ 1 2)"} {:text "\n"} {:text "3"}]
+  (assoc rtext/empty-text :type :orepl :lang :clojure :pieces [{:text "(+ 1 2)"}] :result "3"
    :num-run-times 0
    :outline-color [0.2 0.2 1 1]
+   :cmd-history [] :cmd-history-viewix 1e100
    :interact-fns (interact-fns) :path "repl" :show-line-nums? false :colorize-fn colorize))
 
-(defn command-wrapped-repl [app-state-symbol code cursor-ix0]
+(defn filled-repl [app-state-symbol code cursor-ix0]
   "Generates a fresh repl that is set up to run command code applied to the overall state, encoded as app-state-symbol.
    Code should be a pprinted string since we care about cursor index."
   (let [b4 (str "(let [" app-state-symbol " @_state-atom\n"
                        "result\n")
         afr "] \n (reset! _state-atom result) [])"
-        
         cursor-ix (+ (count b4) cursor-ix0)
         code (str b4 code afr)]
     (assoc (new-repl) :cursor-ix cursor-ix
-      :pieces [{:text code} {:text "\n"} {:text ""}])))
+      :pieces [{:text code}])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Running the repl ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(def r-ns *ns*)
 
-(def _state-atom (atom {})) ; only used locally for the mutation-free run-standard-repl function.
-(defn set-state [s-new] "No effect outside of repl." (reset! _state-atom s-new))
-(defn swap-state [f] "No effect outside of repl." (swap! _state-atom f))
+(def r-ns *ns*) ; default ns for the repls.
 
+(defonce _state-atom (atom {})) ; only used locally for the mutation-free run-standard-repl function.
+(defn set-world! [s-new] "No effect outside of repl." (reset! _state-atom s-new))
+(defn swap-world! [f] "No effect outside of repl." (swap! _state-atom f))
+(def ^:dynamic *this-k* nil) ; so we know who we are.
+(def ^:dynamic *world* nil) ; access to the (almost?) entire application's state.
 
-(defn recognized-cmd? [sym] (boolean (ns-resolve r-ns sym)))
+(defn auto-require! [e]
+  "Attempts to require a namespace given a java.lang.ClassNotFoundException e.
+   Returns false and does nothing if the exception isnt that.
+   Requires the needed class and returns true if the exception is that (TODO: import as well).
+   Will throw an exception if the require does so."
+  (let [msg (.getMessage e)
+        pieces (string/split msg #"[ :,]+")
+        ix0 (first (filter #(= (nth pieces %) "java.lang.ClassNotFoundException") (range (count pieces))))
+        ns-str (get pieces (inc ix0))]
+    (if ns-str
+      (do (println "Loading:" ns-str)
+        (require (symbol ns-str)) true) false)))
 
-(defn cmd?-parse [s] 
-  "Sugar. Returns [cmd-sym, [arg symbols]] if a valid cmd shorthand, otherwise returns nil."
-  (let [tokens (string/split s #"[, ;]+")
-        sym (if (> (count tokens) 0) (symbol (first tokens)))]
-    (if (and sym (recognized-cmd? sym))
-      [sym (mapv read-string (rest tokens))])))
+(defn wrapped-auto-require! [e]
+  (try (auto-require! e)
+    (catch Exception e false)))
 
-(defn run-standard-repl [s repl-k txt]
-    (reset! _state-atom s)
-    (let [result (try (let [code (read-string txt)] ; internal mutation of _state-atom possible.
-                        (try (let [y (str (binding [*ns* r-ns] (eval code)))]
-                               (limit-length y))
-                             (catch Exception e (limit-length (str "Runtime error:\n" (pr-error e))))))
-                     (catch Exception e (limit-length (str "Syntax error: " e))))]
-      (assoc-in @_state-atom [:components repl-k :pieces 2 :text] result)))
+(defn repl-err-msg-tweak [msg]
+  (string/replace msg #"compiling:\(javac\/cpanel.clj:\d+:\d+\)" ""))
 
-(defn _run-cmd [s cmd-sym args]
-  "Returns the modified state."
-  ; TODO: add a sort of spell-check.
-  (if (recognized-cmd? cmd-sym) 
-    (let [tool-fn (binding [*ns* r-ns] (eval cmd-sym))] 
-      (apply tool-fn s args))
-    (throw (Exception. (str "Unrecognized command: " cmd-sym)))))
-(defn run-cmd [s cmd-sym arg-symbols repl-k]
-  "Special cmd sequence that is more like shell scripting."
-  (let [args (binding [*ns* r-ns] (mapv #(if (symbol? %) (eval %) %) arg-symbols))]
-    (try (_run-cmd s cmd-sym args)
-      (catch Exception e
-        (assoc-in s [:components repl-k :pieces 2 :text] (limit-length (str "Cmd err: " e)))))))
+(defn get-repl-result [s repl-k txt tmp-namespace-atom]
+  "The result will contain error messages if there is a problem."
+  (let [_err? (atom true)
+        code-or-e (try
+               (let [codei (read-string txt)]
+                 (reset! _err? false) codei)
+               (catch Exception e e))
+        lim-len (fn [x] (try (limit-length x)
+                          (catch Exception e "LIMIT LEN NOT WORKING -(:")))]
+    (if @_err?
+      (lim-len (str "Syntax error:" (.getMessage code-or-e) " " (type code-or-e)))
+      (try
+        (let [current-ns-sym (get-in s [:components repl-k :*ns*])
+              r-ns1 (if current-ns-sym (cbase/ns-sym2ob current-ns-sym) r-ns)
+              y (str (binding [*ns* r-ns1 *this-k* repl-k *world* s] 
+                  ;(clojure.stacktrace/print-stack-trace (Exception. "foo"))
+                  ;(clojure.stacktrace/print-stack-trace (try (eval code) (catch Exception e e)))
+                  (let [out (eval code-or-e)] (reset! tmp-namespace-atom *ns*) out)))]
+          (limit-length y))
+        (catch Exception e
+                (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
+                  (lim-len (str "Runtime error:\n" (repl-err-msg-tweak (pr-error e))))))))))
 
-(defn run-repl [s repl-k] 
+#_(defn get-repl-result [s repl-k txt tmp-namespace-atom]
+  "The result will contain error messages if there is a problem."
+  (try (let [code (read-string txt)] ; internal mutation of _state-atom possible.
+         (try (let [current-ns-sym (get-in s [:components repl-k :*ns*])
+                    r-ns1 (if current-ns-sym (cbase/ns-sym2ob current-ns-sym) r-ns)
+                    y (str (binding [*ns* r-ns1 *this-k* repl-k *world* s] 
+                             ;(clojure.stacktrace/print-stack-trace (Exception. "foo"))
+                             ;(clojure.stacktrace/print-stack-trace (try (eval code) (catch Exception e e)))
+                             (let [out (eval code)] (reset! tmp-namespace-atom *ns*) out)))]
+                (limit-length y))
+              (catch Exception e
+                (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
+                  (limit-length (str "Runtime error:\n" (repl-err-msg-tweak (pr-error e))))))))
+    (catch Exception e (limit-length (str "Syntax error: " (.getMessage e) " " (type e))))))
+
+(defn run-repl [s repl-k]
   ; TODO: put repls on another process with it's own threads.
   ; The other process has no windows (headless).
   ; Sync our namespace variables with that process.
@@ -111,34 +146,43 @@
     ; Have two servers open at once for insta-switch.
   ; If there is a *gui-atom* in the input we run it locally on a future.
     ; Crashes can leak into here but at least this gives us a way to modify the gui.
-  (let [box (get-in s [:components repl-k])
-        txt (:text (first (:pieces box)))
-        s1 (update-in s [:components repl-k :num-run-times] inc)]
-    (if-let [x (cmd?-parse txt)] 
-      (run-cmd s1 (first x) (second x) repl-k)
-      (run-standard-repl s1 repl-k txt))))
+    (reset! _state-atom s) ; allow user modifications.
+    (let [txt (rtext/rendered-string (get-in s [:components repl-k]))
+          new-ns-at (atom r-ns)
+          result (get-repl-result s repl-k txt new-ns-at)
+          ;_ (println "result:" result)
+          state1 @_state-atom
+          repl1 (-> (get-in state1 [:components repl-k]) (assoc :result result)
+                  (assoc :*ns* (cbase/ns-ob2sym @new-ns-at))
+                  (update :num-run-times inc)
+                  (update :cmd-history #(conj % txt)))]
+      (assoc-in @_state-atom [:components repl-k] repl1)))
 
-(defn ensure-three-pieces [box]
-  (let [ps (mapv #(if (:text %) % {:text ""}) (:pieces box)) n (count ps)]
-    (assoc box :pieces
-      (cond (= n 0) [{:text ""} {:text "\n"} {:text ""}]
-        (= n 1) [(first ps) {:text "\n"} {:text ""}]
-        (= n 2) [(first ps) {:text "\n"} {:text ""}]
-        :else [{:text (apply str (:text (first ps)) (drop-last (:text (second ps))))}
-               {:text "\n"} (nth ps 2)]))))
+(defn old-cmd-search [box delta]
+   "Select a region of text to narrow-down old cmds."
+  (let [txt-sel (rtext/selected-rendered-string box)
+        hit? #(.contains ^String % txt-sel)
+        n-cmd (count (:cmd-history box))
+        cx (max (min (+ (:cmd-history-viewix box) delta) (dec n-cmd)) 0)]
+    (loop [cx cx n 0]
+      (if (>= n n-cmd) (do (println (if (= n 0) "No prior commands in repl." "No box cmd history match to selection found.")) box)
+        (let [cx (if (< cx 0) (dec n-cmd) cx) cx (if (>= cx n-cmd) 0 cx) ;wrap
+              cmd (nth (:cmd-history box) cx)]
+          (if (.contains ^String cmd txt-sel)
+             (let [box1 (assoc box :cmd-history-viewix cx :result "" :pieces [{:text cmd}])]
+               (if (> (count txt-sel) 0)
+                  (let [sel0 (string/index-of cmd txt-sel)
+                        sel1 (+ sel0 (count txt-sel))]
+                    (assoc box1 :cursor-ix sel0 :selection-start sel0 :selection-end sel1))
+                 box1))
+             (recur (inc cx) (inc n))))))))
 
 (defn key-press [key-evt box]
-  (if (kb/shift-enter? key-evt) box ; this was handled in the heavy dispatch.
-    (let [ed (rtext/key-to-edit box key-evt)
-          box1 (if (= (:type ed) :paste)
-                 (rtext/dispatch-edit-event box
-                   (let [v (:value ed) ty (:comp-type (meta v))
-                         v1 (cond (string? v) v
-                              (= ty :codebox) (apply str (codebox/real-strings {:pieces v}))
-                              :else (apply str (mapv :text v)))]
-                     (assoc ed :value v1)))
-                 (rtext/key-press key-evt box))]
-      (ensure-three-pieces box1))))
+  (cond (kb/emacs-hit? "S-ret" key-evt) box ; this was handled in the heavy dispatch.
+    (kb/emacs-hit? "S-^^" key-evt) (old-cmd-search box -1)
+    (kb/emacs-hit? "S-vv" key-evt) (old-cmd-search box 1)
+    :else
+    (rtext/key-press key-evt box)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Namespace reloading et al ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -149,12 +193,12 @@
    ;Fully-qualified symbols -> var for the old namespace vars. Thus we don't lose the old references.
    (atom {}))
 
-(defn _clear-var!! [ns-sym var-sym var-ob]
+(defn _clear-var! [ns-sym var-sym var-ob]
   "sets vars to throw or be an error message."
   (alter-var-root var-ob
    (fn [_] (fn [& args] (throw (Exception. (str "Variable:" ns-sym "/" var-sym " has been removed."))))))) 
 
-(defn _mark-vars!! [ns-symbol]
+(defn _mark-vars! [ns-symbol]
   "Makes variables with an ::old flag."
   (let [nms (find-ns ns-symbol)
         alter (fn [vr] (if (instance? clojure.lang.IObj vr)
@@ -174,17 +218,17 @@
             kys (filterv #(get intern?s %) (keys interns))]
         (zipmap kys (mapv #(get interns %) kys))) {})))
 
-(defn _update-simple!! [ns-symbol removing?]
+(defn _update-simple! [ns-symbol removing?]
   (let [tmp-sym (gensym 'tmp) ns-tmp (create-ns tmp-sym)]
-    (_mark-vars!! ns-symbol)
+    (_mark-vars! ns-symbol)
     (let [maybe-e (if removing? false ; the actual reloading part.
-                    (try (do (logger/reload-but-keep-loggers!! ns-symbol) false)
+                    (try (do (logger/reload-but-keep-loggers! ns-symbol) false)
                             (catch Exception e e)))
           rm-vars (_get-marked-vars ns-symbol)]
-      (if (not maybe-e) (mapv #(_clear-var!! ns-symbol %1 %2) (keys rm-vars) (vals rm-vars)))
+      (if (not maybe-e) (mapv #(_clear-var! ns-symbol %1 %2) (keys rm-vars) (vals rm-vars)))
       maybe-e)))
 
-(defn reload-file!! [cljfile]
+(defn reload-file! [cljfile]
   "Reloads a given clj file, removing the ns if the file no longer exists."
   (let [ns-symbol (symbol (jfile/file2dotpath cljfile))
         file-exists? (jfile/exists? cljfile)]
@@ -192,18 +236,18 @@
       (= ns-symbol 'ect) {:error false :message "The project.clj file has no namespace."} ; special for saving changes to the project.clj
       (and (not (find-ns ns-symbol)) (not file-exists?)) {:error false :message "Non-existant namespace with non-existant file, no reloading needed."}
       file-exists?
-      (let [maybe-e (_update-simple!! ns-symbol false) ;(_update-core!! ns-symbol false)
-            report (if maybe-e {:error (pr-error maybe-e) :message "Compile error"}
+      (let [maybe-e (_update-simple! ns-symbol false) ;(_update-core! ns-symbol false)
+            report (if maybe-e {:error (pr-error maybe-e true) :message "Compile error"}
                       {:error false :message (str cljfile " saved and updated without error.")})] report)
-      :else (do (_update-simple!! ns-symbol true) {:error false :message "File no longer exists, deleted ns."}))))
+      :else (do (_update-simple! ns-symbol true) {:error false :message "File no longer exists, deleted ns."}))))
 
-(defn save-and-update!!! [cljfile text]
+(defn save-and-update!! [cljfile text]
   "Saves a clj file and attempts to reload the namespace, returning the error info if there is a compile error."
-  (jfile/save!!! cljfile text)
-  (reload-file!! cljfile))
+  (jfile/save!! cljfile text)
+  (reload-file! cljfile))
 
-(defn delete-and-update!!! [cljfile]
-  (jfile/delete!!! cljfile) (reload-file!! cljfile) {:error false :message (str "Deleted" cljfile)})
+(defn delete-and-update!! [cljfile]
+  (jfile/delete!! cljfile) (reload-file! cljfile) {:error false :message (str "Deleted" cljfile)})
 
 (defn mouse-press [m-evt comp]
   (let [nc (:ClickCount m-evt) ctxt (:text (first (:pieces comp)))]
@@ -215,7 +259,29 @@
         (merge comp (select-keys cbox1 ckys)))
       (rtext/mouse-press m-evt comp))))
 
+;;;;;;;;;;;;;;;;;;;;;;;;; Event switchyard with defaults ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn allow-override-fns [fn-map bubble?]
+  "Lets the user override what happens. With bubble? we always apply the true function;
+   minimize the risk of getting locked out."
+  (zipmap (keys fn-map)
+    (mapv (fn [k f]
+            (fn [evt box]
+              (let [the-f (get box k)
+                    box1 (if (and bubble? (not (:unselected? evt))) (f evt box) box)]
+                (if-let [the-f (get box k)] (the-f evt box1) box1))))
+      (keys fn-map) (vals fn-map))))
+
+(defn allow-append [f k]
+  "For functions that return a vector (i.e. rendering), lets the user append onto it"
+  (fn [box & args]
+    (into [] (concat (apply f box args) (if-let [g (get box k)] (apply g box args) [])))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;; Component interface ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn render+ [box & show-cursor?]
+  (let [box-with-out (assoc box :pieces [(first (:pieces box)) {:text (str " \n" (:result box))}])]
+    (apply rtext/render box-with-out show-cursor?)))
 
 ; No child UI is planned in the near future.
 (defn expandable? [mouse-evt box] false)
@@ -224,19 +290,23 @@
 
 (defn dispatch-heavy [evt s k]
   "Running the repl may affect s, depending on the command. This is agnostic to which repl is focused, i.e the k value."
-  (if (and (= (:type evt) :keyPressed) (kb/shift-enter? evt))
+  (if (and (= (:type evt) :keyPressed) (kb/emacs-hit? "S-ret" evt))
     (reduce #(if (= (:type (get (:components %1) %2)) :orepl)
                (run-repl %1 %2) %1) s (:selected-comp-keys s)) s))
 
 (def dispatch 
   (plurality/->simple-multi-fn
-    {:mousePressed mouse-press
-     :mouseDragged rtext/mouse-drag
-     :mouseWheelMoved rtext/mouse-wheel
-     :keyPressed key-press
-     :keyReleased rtext/key-release}
-     (fn [e-clj comp] comp)
-     (fn [e-clj comp] (:type e-clj))))
+    (allow-override-fns
+      {:mousePressed mouse-press
+       :mouseReleased (fn [_ box] box)
+       :mouseDragged rtext/mouse-drag
+       :mouseWheelMoved rtext/mouse-wheel
+       :keyPressed key-press
+       :keyReleased rtext/key-release
+       :mouseMoved (fn [_ box] box) ; These are normally ignored for idle CPU, orepls are an exception.
+       :everyFrame (fn [_ box] box)} true)
+    (fn [e-clj comp] comp)
+    (fn [e-clj comp] (:type e-clj))))
 
 (defmacro updaty-fns [code] 
   (let [a1 (gensym 'args)] 
@@ -245,8 +315,7 @@
   (updaty-fns
   {:dispatch dispatch 
    :dispatch-heavy dispatch-heavy
-   :render rtext/render
-   :mouseMoved (fn [_ box] box)
+   :render (allow-append render+ :render)
    :expandable? expandable?
    :is-child? (fn [box] false)
    :expand-child expand-child :contract-child contract-child}))

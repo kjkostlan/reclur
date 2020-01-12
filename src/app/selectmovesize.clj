@@ -277,7 +277,7 @@
 (defn get-camera-tool []
   {:mouseWheelMoved wheel-zoom
    :keyPressed (fn [k-evt s]
-                 (if (kb/ctrl+? k-evt "1") ; Zoom where (or very near where) the mouse currently is to zoom 1, best fitting to componens.
+                 (if (kb/emacs-hit? "C-1" k-evt) ; Zoom where (or very near where) the mouse currently is to zoom 1, best fitting to componens.
                    (insta-zoom k-evt s) s))
    :mouseDragged
     (fn [mevt-c s]

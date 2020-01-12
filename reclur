@@ -1,3 +1,4 @@
 #!/bin/bash
+echo "If this hangs try turning off your wifi"
 cd "$(dirname "$0")"
 lein run

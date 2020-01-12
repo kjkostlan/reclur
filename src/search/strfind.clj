@@ -111,7 +111,7 @@
                        (list 'search.strfind/search-step 's m))
             code (pretty code)
             cursor-ix0 (+ (first (first (boring-find code ":key \"\"" false))) 6)
-            new-comp (orepl/command-wrapped-repl 's code cursor-ix0)
+            new-comp (orepl/filled-repl 's code cursor-ix0)
             s1 (assoc s :selected-comp-keys #{boxk} :typing-mode? true)
             s2 (if (> (count ckys) 1) (siconsole/log s1 "Multible components selected, only selecting the first one.") s1)]
         ((:add-component (:layout s2)) s2 new-comp boxk true)))))

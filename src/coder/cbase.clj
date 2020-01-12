@@ -7,10 +7,30 @@
     [clojure.set :as set]
     [coder.clojure :as cljparse]))
 
+;; Entering and exiting clojure land
+
+(defn ns-ob2sym [ns-ob]
+  "Also works for Java classes."
+  (let [txt (str ns-ob)
+        coffee \u2615
+        class? (and (> (count txt) 5) (= (subs txt 0 6) "class "))
+        txt (if class? (symbol (str coffee "." (subs txt 6))) txt)]
+    (symbol txt)))
+
+(defn ns-sym2ob [ns-sym]
+  "Also works for Java classes."
+  (let [coffee \u2615
+        txt (str ns-sym)
+        class? (= (first txt) coffee)]
+    (if class? (try (eval (symbol (subs txt 2))) 
+                 (catch Exception e)) (find-ns ns-sym))))
+
+;(print (ns-ob2sym java.lang.String))
+
 ;; Simple conversion fns.
 
 (defn ns-of [qual-sym]
-  "Splits the symbol-as-a-string."
+  "Splits the symbol-as-a-string. Returns a symbol."
   (if (.contains ^String (str qual-sym) "/")
     (symbol (re-find #"[A-Za-z\.*+!\-'?=:\_]+" (str qual-sym)))))
 
@@ -21,7 +41,6 @@
 (defn unqual [qual-sym]
   "Unqualified symbol."
   (symbol (subs (str qual-sym) (inc (count (str (ns-of qual-sym)))))))
-
 
 (defn resolved [ns-sym code-sym]
   "Resolves code-sym in ns-sym, which depends on the :requires, :imports, etc.
@@ -39,7 +58,8 @@
 
 (defn file2ns [file]
   "Converts a local filepath to a namespace symbol."
-  (let [pieces (rest (rest (string/split file #"/")))
+  (let [file (jfile/full-to-local file)
+        pieces (rest (rest (string/split file #"/")))
         st (string/join "." pieces)]
     (symbol (subs st 0 (- (count st) 4)))))
 
@@ -48,7 +68,17 @@
   (let [txt (.replace ^String (str ns-sym) "." "/")]
     (str "./src/" txt ".clj")))
 
+(defn var2sym [v]
+  "Fully qualified."
+  (let [st (str v)]
+    (symbol (subs st 2))))
+
 ;; Extraction fns.
+
+(defn resolve+ [sym-qual]
+  "Like resolve but loads the namespace if possible. Same behavior as resolve."
+  (let [ns-sym (ns-of sym-qual)]
+    (throw (Exception. "TODO: needs lots of debugging here."))))
 
 (defn defs [ns-sym]
   (into [] (keys (ns-interns ns-sym))))
@@ -84,7 +114,7 @@
         (read-string clip-txt)))))
 
 (defn get-codes [file]
-  "All functions defined in a file, map from qualified symbols to names."
+  "All functions directly defined with a def, etc, in a file, map from qualified symbols to names."
   (let [txt (jfile/open file)]
     (if txt
       (let [ns-sym (file2ns file)
@@ -96,6 +126,7 @@
 (defn var-info [qual-sym source?]
   "Gets information about a var in the form of clojure datastructures."
   (let [ns-sym (ns-of qual-sym) ns-obj (find-ns ns-sym)
+        _ (if (nil? ns-obj) (throw (Exception. (str "Namespace not found:" qual-sym))))
         sym2var (ns-map ns-obj)
         var-obj (get sym2var (unqual qual-sym))
         out (meta var-obj) out (assoc out :ns ns-sym)
@@ -103,14 +134,15 @@
                           (if src (assoc out :source src) out)) out)]
     out))
 
-;; Navigating the code graph, TODO: performance.
+;; Navigating the code graph, TODO: performance (not yet a problem, but when we scale up...)
 
 (defn nonlocal-syms [code locals]
   "Set of external symbols, i.e. symbols that point outside of the code.
    Doesn't qualify anything.
   POLYGLOT: either shoehorn i.e java/python code into a format that works with this fn, or
             have unique symbols that we can add to this fn (if the behavior is different)."
-  (let [l? (and (sequential? code) (not (vector? code)))
+  (let [locals (if (set? locals) locals (set locals))
+        l? (and (sequential? code) (not (vector? code)))
         c0 (if (coll? code) (first code)) c1 (if (coll? code) (second code))
         c2 (if (coll? code) (get code 2))
         macros #{'definline 'definterface 'defmacro 'defmethod 'defn 'defn- 'defmulti 'let 'letfn}]
@@ -170,3 +202,42 @@
         ixs (filterv #(get (nth non-locals-qual %) qual-sym) (range (count non-locals-qual)))
         ks (keys vv1)]
     (mapv #(nth ks %) ixs)))
+
+(defn used-by [qual-sym]
+  "What is used by this function."
+  (let [nms (ns-of qual-sym)
+        code-file (ns2file nms)
+        vv-lite (get-codes code-file) ; only need to check a single file.
+        code (get vv-lite qual-sym)
+        _ (if (not code) (throw (Exception. (str qual-sym " not found in file: " code-file))))
+        xtracted-symbols (nonlocal-syms code (hash-set))]
+    (mapv #(qual nms %) xtracted-symbols)))
+
+;;; Startup load everything optional (does this add cost?).
+
+
+(defn ensure-src-ns-loaded! []
+  (let [t0 (System/nanoTime)
+        loaded-ns-syms (set (mapv ns-name (all-ns)))
+        all-clj-files (filterv jfile/clj? (jfile/all-files-inside "./src"))
+        src-ns-syms (set (mapv file2ns all-clj-files))
+        needed-ns-syms (set/difference src-ns-syms loaded-ns-syms)
+        _ (println "# namespaces loaded:" (count loaded-ns-syms) 
+            "# namespaces in src" (count src-ns-syms)
+             " # namespaces need to load for coder/cbase:" 
+            (count needed-ns-syms))
+        _ (binding [*ns* (create-ns (gensym 'tmploadnscbase))]
+            (mapv #(try (require %)
+              (catch Exception e
+                (println "Failed to load ns (bad clj file?):" %)))
+              needed-ns-syms))
+        t1 (System/nanoTime)]
+    (println "Elapsed time (s) to make sure all files in ./src are loaded:" (/ (- t1 t0) 1.0e9))))
+
+(def ^:dynamic *load-all-ns?* true)
+
+(defonce ns-load-atom (atom false))
+
+(if (and *load-all-ns?* (not @ns-load-atom))
+  (future (do (Thread/sleep 3000) (ensure-src-ns-loaded!))))
+

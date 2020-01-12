@@ -156,13 +156,14 @@
   (if (and (not (vector? x)) (sequential? x)) (find (into [] x) k)
       (find x k)))
 
-(defn ckeys [x & include-seq-falses] ; only true vectors count.
-  (cond (and (sequential? x) (first include-seq-falses))
-        (apply list (range (count x)))
-        (sequential? x) (let [xv (into [] x)]
-                          (apply list (filterv #(get xv %) (range (count x)))))
-        (set? x) (apply list x)
-        :else (keys x)))
+(defn ckeys [x]
+  (let [include-seq-falses true] ; the controversy.
+      (cond (and (sequential? x) include-seq-falses)
+            (apply list (range (count x)))
+            (sequential? x) (let [xv (into [] x)]
+                              (apply list (filterv #(get xv %) (range (count x)))))
+            (set? x) (apply list x)
+            :else (keys x))))
 
 (defn cvals [x]
   (cond (vector? x) (apply list x)

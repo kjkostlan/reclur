@@ -7,89 +7,193 @@
     [coder.clojure :as cljparse]
     [coder.cbase :as cbase]
     [clojure.walk :as walk]
+    [clojure.test :as test]
     [clojure.set :as set]
+    [clojure.string :as string]
+    [coder.unerror :as unerror]
+    [javac.exception :as jexc]
     [layout.layoutcore :as layoutcore]
+    [layout.blit :as blit]
     [globals]))
 
+(defn error [] "Debug"
+  (/ 0))
 
-(def req-code 
-  (let [x (first (cljparse/forwards "(require '[coder.logger :as logger])"))]
-    (-> x (vary-meta #(assoc-in % [:PARSE 0 :txt 0 0] "\n"))
-      (vary-meta #(assoc-in % [:PARSE 0 :txt 2 2] "\n")))))
+(def ^:dynamic *debug-shorten-code?* false)
 
-(def log-code 
-  (let [x (first (cljparse/forwards "coder.logger/logmacro"))]
-   (-> x (vary-meta #(assoc-in % [:PARSE 0 :txt 0] "\n"))
-      (vary-meta #(assoc-in % [:PARSE 0 :txt 2] "\n")))))
+(defonce eval-lasterr (atom ""))
 
-(defn log!! [x path]
+(defn clean-error-stack [e-clj stop-stack]
+  "No need to go into the guts of clojure or java."
+  (let [stack (:StackTrace e-clj) root (fn [elem] (first (string/split (:ClassName elem) #"\.")))
+        of-clojure? (fn [elem] (= (root elem) "clojure"))
+        of-java? (fn [elem] (= (root elem) "java"))
+        stack1 (filterv #(not (or (of-clojure? %) (of-java? %))) stack)
+        ;_ (println stop-call)
+        ;_ (mapv println stack1)
+        stop-stack (if (coll? stop-stack) stop-stack [stop-stack])
+        stop? (fn [txt] (boolean (first (filter #(string/starts-with? txt %) stop-stack))))
+        stop-ix (first (filter #(stop? (:ClassName (nth stack1 %)))
+                         (range (count stack1))))
+        stack2 (if stop-ix (subvec stack1 0 (inc stop-ix)) stack1)
+        stack3 (if stop-ix (conj stack2 {:ClassName "..." :FileName "" :LineNumber "" :MethodName ""}) stack2)]
+    ; {:ClassName clojure.lang.Compiler, :FileName Compiler.java, 
+    ;  :LineNumber 6792, :MethodName analyze}
+    ;(println (first stack))) 
+    (assoc e-clj :StackTrace stack3)))
+
+(defn eval+ [code]
+  "Like eval but also logs any compilation error message, for debugging. Still throws said error.
+   @coder.logger/eval-lasterr"
+  (try (eval code)
+    (catch Exception e
+      (do (unerror/errprint? code)
+          (reset! coder.logger/eval-lasterr 
+            (merge {:ns (cbase/ns-ob2sym *ns*) :code code} 
+              (clean-error-stack (jexc/clje e) "none"))) (throw e)))))
+
+(defn log! [x path]
   "Called when the logged code runs." 
   (swap! globals/one-atom
-    #(let [log {:path path :time (System/nanoTime) :value x}
+    #(let [log {:path path :time (System/nanoTime) :value x :Thread (Thread/currentThread)}
            logs (if (:logs %) (:logs %) [])]
       (assoc % :logs (conj logs log)))) x)
 
-(defn logify-code [path code in-let? in-fn?]
-  "Recursive log of any collections."
-  (pprint/pprint code)
-  (if (coll? code)
-    (let [pathq (mapv #(if (symbol? %) (list 'quote %) %) path)
+(defn get-logs [] (:logs @globals/one-atom))
+
+(defn get-logger [sym-qual] "nil = no logger."
+  (get-in @globals/one-atom [:loggers sym-qual]))
+
+(defn logify-code [path code in-let? in-fn? shallow-only?]
+  "Logs every path within the code recursively.
+   Path should start with a fully qualified symbol."
+  ;(println "CODE TO LOGIFY:") (pprint/pprint code) ; For debugging
+  (if (or (not shallow-only?)
+        (<= (count path) 4)) ; [symbol fn-body arity location-within-subbody]
+    (let [log!-sym (if *debug-shorten-code?* '! `log!)
+          iddent (if *debug-shorten-code?* #(apply str (rest %)) identity)
+          ;_ (println path code)
+          ;_ (println "Path:" path "code head: " (first code))
+          pathq (mapv #(if (symbol? %) (list 'quote %) %) path)
           listy? (and (sequential? code) (not (vector? code)))
-          in-let1? (and listy? (= (first code) 'let*))
-          in-fn1? (and listy? (= (first code) 'fn*))
-          code1 (if (map? code) 
-                  (zipmap (keys code) (mapv #(logify-code (conj path %1) %2 false false) (keys code) (vals code)))
-                  (collections/cmap #(logify-code (conj path %2) % in-let1? in-fn1?) code (collections/ckeys code true)))
-          code1 (if in-fn? (collections/cassoc code1 0 (first code)) code1)] ; the first is the argument.    
-      (if (or (and listy? (= (first code) 'def*)) in-let? in-fn?) code1 
-        (list 'coder.logger/log!! code1 pathq)))
+          in-let1? (and listy? (get #{'let* 'let 'loop 'loop* 'binding 'binding*} (first code)))
+          in-fn1? (and listy? (contains? #{'fn 'fn*} (first code)))
+          logify (fn [add-path sub-code] (logify-code (conj path add-path) sub-code in-let1? in-fn1? shallow-only?))
+          code1 (cond (map? code)
+                  (zipmap (keys code) (mapv logify (keys code) (vals code)))
+                  (and (vector? code) in-let?)
+                  (mapv #(if (even? %1) %2 (logify %1 %2)) (range) code)
+                  (vector? code)
+                  (mapv logify (range) code)
+                  (set? code) code ; can't logify the keys!
+                  (and in-fn? (vector? (first code))) ; (fn ***([x y] (+ x y))***) -> (fn ([x y] (log! [x y]) (log! (+ x y))))
+                  (let [argv (filterv #(not= % '&) (first code))
+                        argvl (list log!-sym argv (iddent path))
+                        codel (mapv logify (range) code)]
+                    (apply list (first code) argvl (rest codel)))
+                  in-fn1? (let [unboxed? (not= (count code) 2)] ; ***(fn ([x y] (+ x y)))***
+                            (if unboxed? 
+                              (apply list (first code)
+                                (second code) (list log!-sym (second code) (iddent (conj path 1)))
+                                (mapv logify (range 1 1e100) (rest (rest code))))
+                              (apply list (first code)
+                                (mapv logify (range 1 1e100) (rest code)))))
+                  (symbol? code) (list log!-sym code (iddent path))
+                  (not (coll? code)) code 
+                  (= (first code) 'new) ; Java interop!
+                  (apply list (first code) (second code) (mapv logify (range 2 1e100) (rest (rest code))))
+                  (= (first code) 'recur) code ; Loop-recur format.
+                  (not in-fn1?) (list log!-sym
+                                  (apply list (first code) (mapv logify (range 1 1e100) (rest code)))                  
+                                  (iddent path))
+                  :else (apply list (first code) (mapv logify (range 1 1e100) (rest code))))]
+      ;(println "Stuff:" in-fn? in-fn1? (type code) (type code1))
+      (if (meta code) (with-meta code1 (meta code)) code1))
     code))
 
-(defmacro logmacro [& args]
-  "Applied to a single form, such as a fn. 
-   Acts recursively. The first two elements of the path are [file, form]."
-  (let [code (apply list args)
-        code1 (walk/macroexpand-all code)] 
-    (logify-code [*file* (:line (meta &form))] code1 false false)))
+(defn sym2log [sym-qual shallow-only]
+  "Symbol -> logged code. Throws errors."
+  (if *debug-shorten-code?* (println "WARNING: *debug-shorten-code?* enabled, loggers won't work."))
+  (let [v-info (cbase/var-info sym-qual true)
+        _ (if (not v-info) (throw (Exception. (str "This (assumbed to be fully qualified symbol) can't be found: " sym-qual))))
+        s-code (:source v-info)
+        _ (if (nil? s-code) (throw (Exception. (str "Found variable, but no source code for:" sym-qual))))
+        ns-obj (find-ns (cbase/ns-of sym-qual))
+        _ (if (not ns-obj) (throw "Strange where did the ns go?"))
+        s-code1 (into [] (binding [*ns* ns-obj] 
+                               (clojure.walk/macroexpand-all s-code)))
+        _ (if (not= (count s-code1) 3) (throw (Exception. "Loggers on vars can only be added to functions.")))
+        _ (if (not (contains? #{'fn 'fn*} (first (last s-code1)))) (throw (Exception. "Loggers can only be added on def'ed functions.")))
 
-(defn add-logger!! [sym-qual & for-reload]
+        the-def (first s-code1) ; 'def
+        the-name (second s-code1) ; my-fn
+        fn-code (nth s-code1 2) ; (fn* ([x] ...) ([x y] ...))
+        logged-fn (logify-code [sym-qual (dec (count s-code1))] fn-code false false shallow-only)]
+    (list the-def the-name logged-fn)))
+
+(defn log-error-report [bad-code]
+  "Should be in the target namespace."
+  (println "Logging failed:")
+  (unerror/errprint? bad-code))
+
+(defn add-logger! [sym-qual shallow-only & use-reload-message]
   "Adds a logger at the qualified sym by modifying it's code."
-  (let [s-code (:source (cbase/var-info sym-qual true))]
-    (if s-code
-      (let [ns-obj (find-ns (cbase/ns-of sym-qual))
-            s-code1 (binding [*ns* ns-obj] 
-                      (walk/macroexpand-all s-code))
-            body (last s-code1)
-            logged-body (second (logify-code [sym-qual] (last s-code1) false false))]
-        (swap! globals/one-atom 
-          #(assoc-in % [:loggers sym-qual] true))
-        (binding [*ns* ns-obj]
-          (do
-            (if (first for-reload)
-              (println "Re-added logger for:" sym-qual)
-              (println "Added logger for:" sym-qual))
-            ;(clojure.pprint/pprint logged-body) ; debugging when the logger breaks the code
-            (alter-var-root (find-var sym-qual)
-              (fn [old-val] 
-                (collections/keep-meta old-val (fn [_] (eval logged-body)))))))))))
+  ;(println "Logging:" sym-qual) ; Debug (extra print).
+  (let [use-reload-message (first use-reload-message)
+        logged-code (sym2log sym-qual shallow-only)
+        logged-fn-code (second (rest logged-code))
+        ns-obj (find-ns (cbase/ns-of sym-qual))
+        old-logger (get-in @globals/one-atom [:loggers sym-qual]) ; only used for a printout hint
+        new-logger {:shallow-only? shallow-only}]
+    (binding [*ns* ns-obj]
+      ;(clojure.pprint/pprint s-code1)
+      ;(clojure.pprint/pprint logged-body) ; debugging in case the logger misbehaves.
+      (alter-var-root (find-var sym-qual)
+        (fn [old-val] 
+          ;(println "target-of eval:" logged-fn)
+          ;(try (eval+ logged-body) (catch Exception e (do (println *ns*) (println e))))
+          (collections/keep-meta old-val (fn [_] (eval+ logged-fn-code)))))
+      (swap! globals/one-atom
+         #(assoc-in % [:loggers sym-qual] new-logger))
+      (if use-reload-message
+        (if (= old-logger new-logger) 
+          (println sym-qual " seems to be already logged, but re-added just in case.")
+          (println "Added logger for:" sym-qual (if shallow-only "only shallow." "")))))))
+ 
+(defn add-most-loggers! []
+  "Attempts to be a comprehensive logger, which will generate a large number of logs that 
+   can be analyzed."
+  (let [all-vars (keys (cbase/varaverse))
+        vars-no-log (filterv #(not (get-logger %)) all-vars) ; No prior logger.
+        vars-fn (filterv #(clojure.test/function? %) vars-no-log)
+        vars-not-us (filterv #(not (string/starts-with? (str %) "coder.logger")) vars-fn) ; dont log the loggers or else infinite loop!
+        vars-not-inner-loop (filterv identity vars-not-us)] ; TODO: performance-based exclude.
+    (mapv #(add-logger! % true false) vars-not-inner-loop)))
 
 (def _junk-ns (create-ns 'logger-ns))
 
-(defn reload-but-keep-loggers!! [ns-sym]
+(defn reload-but-keep-loggers! [ns-sym]
   "Reloads the namespace, keeping all loggers we need."
   (let [_ (binding [*ns* _junk-ns]
             (require ns-sym :reload))
         syms (keys (ns-interns ns-sym))
         sym-quals (set (mapv #(cbase/qual ns-sym %) syms))
-        sym-logged (set (keys (:loggers @globals/one-atom)))
+        loggers (:loggers @globals/one-atom)
+        sym-logged (set (keys loggers))
         need-logged (set/intersection sym-quals sym-logged)]
-    (mapv #(add-logger!! % true) need-logged) nil))
+    (mapv #(add-logger! % (:shallow-only? (get loggers %)) true) need-logged) nil))
 
-(defn remove-logger!! [sym-qual]
-  (let [_ (println "Removing the logger of:" sym-qual)
+(defn remove-logger! [sym-qual]
+  (let [logged? (boolean (get-in @globals/one-atom [:loggers sym-qual])) ; only used for a printout hint
+        _ (if logged? (println "Removing the logger of:" sym-qual)
+            (println "No logger found for " sym-qual " but removing just in case."))
         ns-sym (cbase/ns-of sym-qual)]
     (swap! globals/one-atom #(assoc % :loggers (dissoc (:loggers %) sym-qual)))
-    (reload-but-keep-loggers!! ns-sym)))
+    (reload-but-keep-loggers! ns-sym)))
+
+(defn remove-all-loggers! []
+  (let [loggers (:loggers @globals/one-atom)]
+    (mapv remove-logger! (keys loggers))))
 
 (defn log-toggle-at-cursor [s fname cursor-ix cache-txt blanck-repl] 
   "Toggles logging code in the form enclosing the cursor, 
@@ -105,8 +209,8 @@
         ns-sym (cbase/file2ns fname)
         qual-sym (cbase/qual ns-sym func-name)
         logged? (get-in @globals/one-atom [:loggers qual-sym])]
-    (if logged? (do (remove-logger!! qual-sym) s)
-      (let [_ (add-logger!! qual-sym)
+    (if logged? (do (remove-logger! qual-sym) s)
+      (let [_ (add-logger! qual-sym)
         
             ; Add a repl that has a basic inspection engine:
             repl-code "(do (require 'globals) \n  (let [logs (:logs @globals/one-atom)\n        loggers (:loggers @globals/one-atom)] \n    ))"
@@ -124,61 +228,20 @@
                  ((:add-component (:layout s)) s the-repl k true))] 
        s1))))
 
+(defn clear-logs! [] (swap! globals/one-atom #(assoc % :logs [])))
 
-#_(defn log-toggle [txt cursor-ix]
-  "Toggle the logging code for txt given cursor-ix on txt.
-   DEPRECATED: we instead desire to do everything in ram rather than modifying a file."
-  (let [x (cljparse/forwards txt)
-        
-        char-ix (let [ch (get txt (dec cursor-ix))]
-                  (if (or (= ch \)) (= ch \]) (= ch \}))
-                    cursor-ix (dec cursor-ix)))
+(defn toggle-core [loggers toggled-keys]
+  "Are at least 50% of them currently included?"
+  (let [toggled-keys (set toggled-keys)
+        included (filterv #(get loggers %) toggled-keys)
+        excluded (filterv #(not (get loggers %)) toggled-keys)
+        on? (>= (count excluded) (count included))]
+    [on? (if on? excluded included)]))
 
-        ; Path to whatever collection encloses our cursor:
-        ph (if (= char-ix -1) [] (cljparse/path-at x char-ix false))
-
-        ph (if (coll? (collections/cget-in x ph)) ph (into [] (butlast ph)))
-
-        xi (collections/cget-in x ph)
-        can-toggle? (and (not= ph []) (sequential? xi) (not (vector? xi)))
-        set-ends1 (fn [c] (refactor/set-ends-length c [0] 1 1))]
-     (if can-toggle? 
-       (let [log-import? (= (second x) req-code)
-             logged? (= (first xi) log-code)
-             x1 (collections/cupdate-in x ph
-                  (fn [xi]
-                    (if logged?
-                      (let [xi1 (set-ends1 xi)]
-                        (refactor/lv-update xi1 rest))
-                      (collections/keep-meta xi #(conj % log-code)))))
-             x2 (if log-import?
-                  (if (collections/find-value-in x1 log-code) 
-                    x1 ; if we still have log code somewhere don't remove the require.
-                    (let [x1 (refactor/set-ends-length x1 [1] 1 1)]
-                      (refactor/lv-update x1 #(into [] (concat [(first %)] (subvec % 2))))))
-                  (refactor/lv-update x1 #(into [] (concat [(first %)] [req-code] (subvec % 1)))))
-             txt2 (cljparse/backwards x2)]
-         txt2) (do (println "can't toggle the logger at that cursor location.") txt))))
-
-
-#_(defn log-toggle-at-cursor [s] 
-  "Toggles logging code in the form enclosing the cursor. \n   Does not save, the user will have to ctrl+s."    
-  (let [k (first (:selected-comp-keys s))]
-    (if (= (:type (get-in s [:components k])) :codebox)
-      (let [filename-ix (multicomp/cursor-locate s k)
-            fname (first filename-ix) ix (second filename-ix)
-        
-            txt (multicomp/open-cache s fname)
-            txt1 (log-toggle txt ix)
-            s1 (multicomp/save-cache s fname txt1)
-            ; Add a repl that has a basic inspection engine:
-            added-code "(do (require 'globals) \n  (let [logs (:logs @globals/one-atom)] \n  )))"
-            k-sc (layoutcore/most-on-screen s #(= (:type %) :orepl))
-            k (first k-sc) sc (second k-sc)
-            use? (and sc (> sc 0.5))
-            p0 {:text added-code} p1 {:text ""} p2 p1
-            the-repl (assoc (assoc (if use? (get (:components s1) k) (orepl/new-repl)) :pieces [p0 p1 p2]) :cursor-ix 67)
-            k (if use? k (gensym 'logrepl))
-            s2 (if use? (assoc-in s1 [:components k] the-repl) 
-                 ((:add-component (:layout s1)) s1 the-repl k true))] s2) s)))
+(defn toggle-ui-loggers! []
+  (let [syms #{'core/dispatch-listener} oc (toggle-core (get @globals/one-atom :loggers))
+        on? (first oc) changes (second oc)]
+    (if on? (println "Added global UI logger") (println "Removed global UI logger"))
+    ; Adding a loger twice is OK, so the multi-use of atom is OK.
+    (if on? (mapv add-logger! changes) (mapv remove-logger! changes))))
  

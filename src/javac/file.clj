@@ -44,20 +44,32 @@
 
 ;;;;;;;;;;;;;;;;;;;;; Trees:
 
-(defn _visible-children-file-obj1 ; an ugly fn that accepts a File obj and returns a vector of strings.
+(defn _visible-children-file-obj ; accepts a File obj and returns a vector of File objs.
   [^File file]
   (->> (.listFiles file)
        (remove #(.startsWith (.getName %) "."))
        (remove #(.endsWith (.getName %) "~"))
        vec))
-(defn _visible-children-file-obj [^String file] ; also ugly in the same way as above.
-  (mapv #(let [^File f %] (.getName f)) (_visible-children-file-obj1 (File. file))))   
+
+(defn visible-children-leaf-names [^String file] ; Returns the leaf name.
+  (mapv #(let [^File f %] (.getName f)) (_visible-children-file-obj (File. file))))   
+
+(defn visible-children-full-names [^String file] ; Returns the leaf name.
+  (mapv #(let [^File f %] (.getCanonicalPath f)) (_visible-children-file-obj (File. file)))) 
 
 (defn visible-children [folder full-path?]
   "Get a vector of a directory's children, if there are any.
    Omits hidden and temporary files.
    Works with both absolute and relative paths."
-  (mapv #(let [^File f (File. %)] (if full-path? (.getAbsolutePath f) (.getName f))) (_visible-children-file-obj folder)))
+  (let [files (_visible-children-file-obj (File. folder))]
+    (mapv #(let [^File f %] (if full-path? (.getCanonicalPath %) (.getName %))) 
+      files)))
+
+(defn all-files-inside [folder]
+  "Every file inside a given folder."
+  (let [ch (visible-children folder true)
+        pieces (mapv #(if (folder? %) (all-files-inside %) [%]) ch)]
+    (into [] (apply concat pieces))))
 
 ;;;;;;;;;;;;;;;;;;;;;; environment:
 
@@ -110,6 +122,19 @@
 (defn full-to-leaf [^String file]
   (last (string/split file (str-to-regex (sep)))))
 
+(defn full-to-local [file]
+  "Does nothing for files already local apart from ./ formatting."
+  (let [file (.getCanonicalPath ^File (File. file))
+        root (.getCanonicalPath ^File (File. "."))
+        _ (if (or (< (count file) (count root)) 
+                (not= (subs file 0 (count root)) root))
+            (throw (Exception. "Need to use .. for local TODO")))]
+    (str "." (subs file (count root)))))
+
+(defn local-to-full [^String file]
+  "Does nothing for files already fullpath execpt for formatting."
+  (.getCanonicalPath ^String (File. file)))
+
 ;;;;;;;;;;;;;;;;;;;; Saving and loading, etc:
 
 ; store files in memory that we can revert (we currently don't use this feature but may be useful):
@@ -137,7 +162,7 @@
     false ;(println (.getMessage e))
     )))
 
-(defn save!!! [^String file ^String contents] ; three ! means that the disk is mutated.
+(defn save!! [^String file ^String contents] ; three ! means that the disk is mutated.
   (assert-in-our-folders file)
   (try (do
          ; check for folder: 
@@ -149,11 +174,11 @@
     (println (.getMessage e))
     )))
 
-(defn rename!!! [^String file-old ^String file-new]
+(defn rename!! [^String file-old ^String file-new]
   (assert-in-our-folders file-old) (assert-in-our-folders file-new)
   (let [^File f0 (File. file-old) ^File f1 (File. file-new)] (.renameTo f0 f1)))
 
-(defn delete!!! [^String file]
+(defn delete!! [^String file]
   "File or folder, all contents in folder (if it is a folder) are also deleted just like GUI delete."
   (assert-in-our-folders file)
   (let [^File f (File. file)]
@@ -165,34 +190,34 @@
   (.lastModified (let [^File f (File. file)] f)))
 
 ; reverts to a buffered version, if we have one. Also returns the reverted string.
-(defn revert!!! [^String file]
+(defn revert!! [^String file]
   (assert-in-our-folders file)
   (let [old (get-buffer file)]
     (if (nil? old)
       (do (println "unable to revert file, maybe it fell off the finite buffer.") "")
-      (do (save!!! file old) old))))
+      (do (save!! file old) old))))
 
-(defn _delete-missing!!! [ref-folder target-folder ignore-git?]
+(defn _delete-missing!! [ref-folder target-folder ignore-git?]
   "Deletes files that are in the ref-folder but not in the target-folder. Acts recursively."
   (let [ch-ref (apply hash-set (visible-children ref-folder false))
         ch-tgt (apply hash-set (visible-children target-folder false))
         ff (fn [x] (if ignore-git? (filterv #(not= % ".git") x) x))
         common (ff (set/intersection ch-ref ch-tgt))
         deletes (ff (set/difference ch-tgt ch-ref))]
-    (mapv #(delete!!! (str target-folder (sep) %)) deletes)
+    (mapv #(delete!! (str target-folder (sep) %)) deletes)
     (mapv #(let [file-ref (str ref-folder (sep) %) folder-r? (folder? file-ref)
                  file-tgt (str target-folder (sep) %) folder-t? (folder? file-tgt)]
              (if (and folder-r? folder-t?)
-               (_delete-missing!!! file-ref file-tgt ignore-git?))) common)))
+               (_delete-missing!! file-ref file-tgt ignore-git?))) common)))
 
-(defn copy!!! [^String orig ^String dest & dot-git-kludge]
+(defn copy!! [^String orig ^String dest & dot-git-kludge]
   "Copies a file/folder from origin to destination, overwriting any data. 
    For folders, removes files/folders in the dest that aren't in orig.
   dot-git-kludge fixes a strange not file-not-found error in the .git that I don't understand."
   (assert-in-our-folders orig) (assert-in-our-folders dest)
   (let [^File origf (File. orig) ^File destf (File. dest) ignore-git? (boolean (first dot-git-kludge))]
     (if (and ignore-git? (not= orig chfile/us-folder))
-      (let [f1 (str orig "/.git")] (if (exists? f1) (delete!!! f1))))
-    (cond (.isDirectory origf) (do (FileUtils/copyDirectory origf destf) (_delete-missing!!! orig dest ignore-git?))
+      (let [f1 (str orig "/.git")] (if (exists? f1) (delete!! f1))))
+    (cond (.isDirectory origf) (do (FileUtils/copyDirectory origf destf) (_delete-missing!! orig dest ignore-git?))
       (.isFile origf) (FileUtils/copyFile origf destf)
       :else (throw (Exception. "Original file isn't a file or folder ... somehow.")))))

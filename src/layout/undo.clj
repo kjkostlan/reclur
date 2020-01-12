@@ -32,7 +32,7 @@
             (if (= changed []) "non-edit component change."
               (str "changed texts of: " changed)))))))))
 
-(defn report!! [evt s-old s]
+(defn report! [evt s-old s]
   "Stores an event, but remember that the *max-undo* is used up."
   (swap! globals/one-atom
     #(let [undo-ix (?0 (:undo-index %)) ; nil when just starting up.
@@ -49,16 +49,16 @@
       (assoc % :undo-index undo-ix :undo-stack undos 
        :num-undos-deleted new-num-deleted))))
 
-(defn maybe-report!! [evt s-old s]
+(defn maybe-report! [evt s-old s]
   "Doesn't report all events, so undos do jumps."
   (cond (= s-old s) nil ; no change.
     (and (= (:camera s-old) (:camera s))
       (= (:components s-old) (:components s))) nil
     (or (= (:type evt) :mouseMoved) (= (:type evt) :mouseDragged)) nil ; too common to record.
     :else
-    (report!! evt s-old s)))
+    (report! evt s-old s)))
 
-(defn unredoo!! [delta]
+(defn unredoo! [delta]
   (let [tmp (atom nil)]
     (swap! globals/one-atom 
       #(let [undos (?vec (:undo-stack %))
@@ -82,9 +82,9 @@
       (siconsole/log (:main @tmp) 
         (str (if (> delta 0) "Redo " "Undo ") change " " ft bgd)))))
 
-(defn undo!! []
+(defn undo! []
   "Sets undo. Returns the unmodified app-state except with a log."
-  (unredoo!! -1))
+  (unredoo! -1))
 
-(defn redo!! []
-  (unredoo!! 1))
+(defn redo! []
+  (unredoo! 1))
