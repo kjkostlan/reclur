@@ -397,13 +397,13 @@
 (defn logged-function-run [f s & args]
   "(apply f s args), logging printlns within f as well as exceptions to s.
    f returns the new value of s. If f throws an exception s isn't changed apart from logging."
-  (let [tuple (apply clojurize/capture-out-tuple f s args)
-        s1-or-ex (first tuple)
-        txt (second tuple)
+  (let [outs clojurize/*our-out*
+        s1-or-ex (binding [*out* outs] (try (apply f s args) (catch Exception e e)))
+        txt (clojurize/extract! outs)
         _ (if (> (count txt) 0) (println txt)) ; mirror the output in the real console.
         err? (instance? java.lang.Exception s1-or-ex) 
         s2 (if err? s s1-or-ex)
-        s3 (if (= (count txt) 0) s2 (siconsole/log s2 (str txt "\n")))]
+        s3 (if (= (count txt) 0) s2 (siconsole/log s2 txt))]
      (if err? (do (println (orepl/pr-error s1-or-ex)) (siconsole/log s3 (orepl/pr-error s1-or-ex))) s3)))
 
 (defn undo-wrapped-listener [evt-g s]

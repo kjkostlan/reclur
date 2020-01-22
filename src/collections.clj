@@ -205,17 +205,38 @@
             :else (wtf x0))
       (apply merge (mapv meta xs))))))
 
-(defn cmap [f & xs]
+;;;;;;;;;;;;;;;;;;;;;;;;;;; Iterative functions ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn cmap [f x & xs]
   "cmap treats map entires as [k v] vectors, passing them into f."
-  (let [x0 (first xs)]
-    (with-meta 
-      (cond (nil? x0) ()
-        (sequential? x0)
-        (#(if (vector? x0) (into [] %) (apply list %))
-         (apply map f xs))
-        (map? x0) (zipmap (keys x0) (apply map f xs))
-        :else (set (apply map f xs)))
-      (meta x0))))
+  (with-meta 
+    (cond (nil? x) ()
+      (sequential? x)
+      (#(if (vector? x) (into [] %) (apply list %))
+       (apply map f x xs))
+      (map? x) (zipmap (keys x) (apply map f x xs))
+      :else (set (apply map f x xs)))
+    (meta x)))
+
+(defn rmap [f x & xs]
+  "Doesn't tuple map elements, just runs f on all keys and vals separately, useful in recursive functions."
+  (with-meta
+    (cond (or (not x) (vector? x)) (apply mapv f x xs)
+          (sequential? x) (apply list (apply mapv f x xs))
+          (map? x) (zipmap (apply mapv f (keys x) xs) (apply mapv f (vals x) xs))
+          (set? x) (set (apply map f x xs))
+          :else (wtf x))
+    (meta x)))
+
+(defn vmap [f x & xs]
+  "Doesn't tuple map elements, just runs f on all vals but NOT keys. Also useful in recursive fns."
+  (with-meta
+    (cond (or (not x) (vector? x)) (apply mapv f x xs)
+          (sequential? x) (apply list (apply mapv f x xs))
+          (map? x) (zipmap (keys x) (apply mapv f (vals x) xs))
+          (set? x) (set (apply map f x xs))
+          :else (wtf x))
+    (meta x)))
 
 (defn cfilter [f x]
   (with-meta
@@ -227,6 +248,23 @@
           :else (wtf x))
     (meta x)))
 
+(defn cfilter-1 [f x] "Only one element gets returned." (first (cfilter f x)))
+
+(defn juice-1 [pred coll]
+  "Returns the first result of pred applied to coll.
+   Contrast with cfilter-1 which returns the first *element*
+   Not lazy (could be made lazy but with difficulty)."
+  (let [vals (into [] (cvals coll)) n (count vals)]
+    (loop [ix 0]
+      (if (= ix n) nil
+        (if-let [xtract (pred (nth vals ix))] xtract (recur (inc ix)))))))
+
+(defn where [pred coll]
+  "Returns where in coll (the key) pred is true. 
+   Not lazy (could be made lazy but with difficulty)."
+  (let [kys (into [] (ckeys coll)) vals (into [] (cvals coll))
+        ixs (filterv #(pred (nth vals %)) (range (count vals)))]
+    (apply list (mapv #(nth kys %) ixs))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Working with metadata ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -256,16 +294,6 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; More unique functions ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-
-(defn rmap [f x]
-  "Doesn't tuple map elements, just runs f on all keys and vals separately, useful in recursive functions."
-  (with-meta
-    (cond (or (not x) (vector? x)) (mapv f x)
-          (sequential? x) (apply list (mapv f x))
-          (map? x) (zipmap (mapv f (keys x)) (mapv f (vals x)))
-          (set? x) (set (map f x))
-          :else (wtf x))
-    (meta x)))
 
 (defn _find-value-in [x v p]
   (cond (= x v) p

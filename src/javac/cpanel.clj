@@ -17,6 +17,7 @@
 ;;;;;;;;;;;;;;;;;;;;; Settings ;;;;;;;;;;;;;;;;;;;;
 
 (def ^:dynamic *frame-time-ms* 30) ; a somewhat complex mechanism to ensure graceful degradation when the events are heavy.
+(def ^:dynamic *flush-every-nframe* 15) ; Flush our output stream.
 (def ^:dynamic *drop-frames-queue-length-threshold* 3)
 (def ^:dynamic *mac-keyboard-kludge?* false) ; A huuuuuuge bug with typing involving accents stealing focus. 
 (def ^:dynamic *add-keyl-to-frame?* true) ; tab only works on the frame. False goes to panel.
@@ -114,14 +115,19 @@
 ; Continuously polling is a (tiny) CPU drain, but it is way easier than a lock system that must ensure we don't get overlapping calls to dispatch-loop!
 ; The idle CPU is 0.7% of one core for the total program (tested Aug 13th 2019).
 (defonce _polling? (atom false)) ; only used to make sure we don't have multiple frame loops, an extra safeguard.
+(defonce _frame-counter (atom -1)) ; Only used locally, to reduce locking concerns setting the main atom.
 (if (not @_polling?)
   (future 
     (loop [last-millis -1e100] ; Loop is never left.
         (let [elapsed-millis (max 0 (- (System/currentTimeMillis) last-millis))
               sleep-time (- *frame-time-ms* elapsed-millis)]
           (if (> sleep-time 0) (Thread/sleep *frame-time-ms*)))
-        (if (> (count (:hot-repls (:app-state @one-atom))) 0) ; A single empty hot repl makes the idle CPU 2.0%
-          (event-queue! {:Time (System/currentTimeMillis)} :everyFrame))
+        (let [x @one-atom
+              s (:app-state x)
+              t (swap! _frame-counter inc)]
+          (if (or (> (count (:hot-repls s)) 0) ; A single empty hot repl adds idle CPU about 1.25%
+                (= (mod t *flush-every-nframe*) 0)) 
+            (event-queue! {:Time (System/currentTimeMillis)} :everyFrame)))
         (dispatch-loop!)
         (if (:needs-gfx-update? @one-atom) (update-graphics!))
         (recur (System/currentTimeMillis)))))

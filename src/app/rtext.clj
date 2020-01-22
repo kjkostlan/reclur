@@ -550,7 +550,7 @@
   (let [box (v box) ck (ctrl+ key-evt) ak (arrow-key key-evt)
         tk (if-let [x (typed-key key-evt)] (str x)) ek (esc? key-evt)
         ix01 (exon box) ix0 (first ix01) ix1 (second ix01)]
-    (cond (= ck \a) {:type :select-all :ix0 0 :ix1 (dec (count (rendered-string box)))}
+    (cond (= ck \a) {:type :select-all :ix0 0 :ix1 (count (rendered-string box))}
       (= ck \x) {:type :cut :ix0 ix0 :ix1 ix1 :value ""}
       (= ck \c) {:type :copy :ix0 ix0 :ix1 ix1 :value ""}
       (= ck \v) {:type :paste :ix0 ix0 :ix1 ix1 :value (clipboard-read false)}
@@ -651,7 +651,7 @@
                        (clipboard/put-as-string! txt) ; The visual string.
                        (reset! clip-atom (hash-map txt {:x slice :ixs copy-ixs :comp-type (:type box)}))))))]
     (cond (= ty :backspace) (edit box (:ix0 ed) (:ix1 ed) "" [])
-      (= ty :select-all) (assoc box :selection-start 0 :selection-end (:ix1 ed))
+      (= ty :select-all) (assoc box :selection-start 0 :selection-end (:ix1 ed) :cursor-ix 0)
       (= ty :cut) (if (copy!) (edit box (:ix0 ed) (:ix1 ed) "" []) box) ; remove and store if there is a selection.
       (= ty :copy)  (do (copy!) box)
       (= ty :paste) (let [x (:value ed) agree? (not (string? x))]

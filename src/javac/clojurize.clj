@@ -5,7 +5,8 @@
     [crossplatform.cp :as crossp])
   (:import [java.awt Point Rectangle Dimension]
     [javax.swing SwingUtilities]
-    [java.io StringWriter]))
+    [java.io StringWriter]
+    [java.nio Buffer]))
 
 (defn edt? [] (SwingUtilities/isEventDispatchThread))
 
@@ -115,11 +116,12 @@
       
 (defn translate-generic [java-ob]
   (java-to-clj java-ob nil simple-java-to-clj))
-  
-(defn capture-out-tuple [f & args]
-  "Runs f and returns a tuple of [output of f, stuff that would go to *out*].
-   Similar to with-out-str only the output of f is also returned.
-   If f causes an error the exception object is returned instead."
-  (let [w (StringWriter.)
-        val (binding [*out* w] (try (apply f args) (catch Exception e e)))]
-    [val (str w)]))
+
+(defn extract! [^StringWriter dump-prints-here] 
+  (let [out (str dump-prints-here)
+        buf ^Buffer (.getBuffer dump-prints-here)]
+    (.setLength buf 0) out))
+
+(def default-out *out*)
+
+(def ^:dynamic ^StringWriter *our-out* (StringWriter.))

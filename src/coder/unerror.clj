@@ -23,13 +23,6 @@
   (let [maybe-cl (try (eval (symbol sym)) (catch Exception e))]
     (if (instance? java.lang.Class maybe-cl) maybe-cl))) 
 
-(defn _juice [pred coll]
-  "Useful function for collections?"
-  (let [vals (into [] (collections/cvals coll)) n (count vals)]
-    (loop [ix 0]
-      (if (= ix n) nil
-        (if-let [xtract (pred (nth vals ix))] xtract (recur (inc ix)))))))
-
 (defn cool-head [code n]
   (let [codev (into [] code)]
     (apply list (concat (repeat n "Filler") (subvec codev n)))))
@@ -61,50 +54,11 @@
       (catch Exception e
         (if-let [deeper-error
                   (cond 
-                    (map? code) (_juice #(_on-macroexpand-err-catch (get code %) (conj path %)) (keys code))
-                    (set? code) (_juice #(_on-macroexpand-err-catch % (conj path %)) (keys code))
+                    (map? code) (collections/juice-1 #(_on-macroexpand-err-catch (get code %) (conj path %)) (keys code))
+                    (set? code) (collections/juice-1 #(_on-macroexpand-err-catch % (conj path %)) (keys code))
                     :else (let [codev (into [] code)]
-                            (_juice #(_on-macroexpand-err-catch (nth codev %) (conj path %)) (range (count codev)))))]
+                            (collections/juice-1 #(_on-macroexpand-err-catch (nth codev %) (conj path %)) (range (count codev)))))]
           deeper-error {:msg (_msg-merrxpand code e) :path path :b4expand? true})))))
-
-;;;;;;;;;;;; Spec checks for java interaction special forms ;;;;;;;;;;;;
-
-
-(defn _java-constructor-check [code-list path]    
-  (cond (< (count code-list) 2) {:msg "Java constructer with no class" :path path}
-    (not (sym-to-class (second code-list))) {:msg (str "Can't find java class " (second code-list)) :path (conj path 1)}
-    (try (eval (list 'fn [] (apply list 'new (second code-list) (range (- (count code-list) 2)))))) ; Only arity is checked @compile. They use eval, so can we!
-     {:msg (str "Wrong constructor arity") :path path}))
-
-(defn _java-call-check [code-list path locals]
-  (let [x1 (second code-list)]
-    (cond (<= (count code-list) 2)
-      {:msg "Too few arguments to java fn call." :path path}
-      (sym-to-class x1)
-      (try (do (eval (list 'fn [] (apply list '. x1 (second (rest code-list))
-                                    (range (- (count code-list) 3))))) false) ; Only arity checked. Again they use eval, so can we.
-        (catch Exception e 
-          {:msg (str (sym-to-class (second code-list)) " has no method " (second (rest code-list)) " with arity " (- (count code-list) 3)) :path path}))
-      (and (symbol? x1) (resolve x1) (not (get locals x1)))
-      {:msg (str "Cant resolve or java find class of: " x1)}
-      :else false)))
-
-(defn _javasym-err-msg [sym arity]
-  "At runtime it reflect checks everything, at compile it only checks the arity for static fields."
-  (let [txt (str sym)
-        pieces (string/split txt #"/")
-        dot-start? (= (str (first (str sym))) ".")
-        dot-end? (= (str (last (str sym))) ".")
-        cl-sym (symbol (string/replace (first pieces) "." ""))
-        class-found? (sym-to-class cl-sym)]
-    (cond 
-      (and dot-end? (= arity -1)) (str sym " must be at the beginning like a function call.")
-      dot-end?
-      (if class-found? false (str "Can't find this java class: " cl-sym))
-      dot-start?
-      (if (= arity -1) (str sym " must be at the beginning like a function call.") false)
-      class-found? false
-      :else (str sym " is a java class but it isn't found")))) ; this last conditon is probably not reachable.
 
 
 ;;;;;;;;;;;; Spec checks for specific clojure special forms ;;;;;;;;;;;;
@@ -168,20 +122,60 @@
       (map? code) 
       (if-let [err0 (_loop-recur-check1 (keys code))] 
         {:path path :msg (assoc err0 :msg (str (:msg err0) " (error in a KEY to this map)."))}
-        (_juice #(_loop-recur-check1 (get code %) (add-path [%]) n-binding false) (keys code)))
-      (set? code) (_juice #(_loop-recur-check1 % (add-path [%] false) n-binding false) code)
-      (vector? code) (_juice #(_loop-recur-check1 (nth code %) (add-path [%]) n-binding false) (range (count code)))
+        (collections/juice-1 #(_loop-recur-check1 (get code %) (add-path [%]) n-binding false) (keys code)))
+      (set? code) (collections/juice-1 #(_loop-recur-check1 % (add-path [%] false) n-binding false) code)
+      (vector? code) (collections/juice-1 #(_loop-recur-check1 (nth code %) (add-path [%]) n-binding false) (range (count code)))
       (= code 'recur) {:msg "recur not called as function." :path path}
       (not (coll? code)) false
       (and (= (first code) 'recur) (not tail?)) {:msg "recur not in tail position" :path path}
       (and (= (first code) 'recur) (< (dec (count code)) n-binding)) {:msg "Too few args to recur" :path path}
       (and (= (first code) 'recur) (> (dec (count code)) n-binding)) {:msg "Too many args to recur" :path path}
       :else (let [codev (into [] (cool-head code 1)) if? (= (first code) 'if) n (count codev)]
-              (_juice #(_loop-recur-check1 (nth codev %) (add-path [%]) n-binding (or if? (= % (dec n)))) 
+              (collections/juice-1 #(_loop-recur-check1 (nth codev %) (add-path [%]) n-binding (or if? (= % (dec n)))) 
                 (range (count code)))))))
 (defn _loop-recur-check [code-list state] 
   (let [n-binding (/ (count (second code-list)) 2)]
     (_loop-recur-check1 (cool-head code-list 2) (:path state) n-binding true)))
+
+;;;;;;;;;;;; Spec checks for java interaction special forms ;;;;;;;;;;;;
+
+
+(defn _java-constructor-check [code-list path]    
+  (cond (< (count code-list) 2) {:msg "Java constructer with no class" :path path}
+    (not (symbol? (second code-list))) {:msg "Java constructor arg not a symbol" :path (conj path 1)}
+    (not (sym-to-class (second code-list))) {:msg (str "Can't find java class " (second code-list)) :path (conj path 1)}
+    (try (eval (list 'fn [] (apply list 'new (second code-list) (range (- (count code-list) 2)))))) ; Only arity is checked @compile. They use eval, so can we!
+     {:msg (str "Wrong constructor arity") :path path}))
+
+(defn _java-call-check [code-list path locals]
+  (let [x1 (second code-list)]
+    (cond (<= (count code-list) 2)
+      {:msg "Too few arguments to java fn call." :path path}
+      (not (symbol? (second (rest code-list)))) {:msg "The member-call is not a symbol" :path (conj path 2)}
+      (sym-to-class x1)
+      (try (do (eval (list 'fn [] (apply list '. x1 (second (rest code-list))
+                                    (range (- (count code-list) 3))))) false) ; Only arity checked. Again they use eval, so can we.
+        (catch Exception e 
+          {:msg (str (sym-to-class (second code-list)) " has no method " (second (rest code-list)) " with arity " (- (count code-list) 3)) :path path}))
+      :else false)))
+
+(defn _javasym-err-msg [sym arity]
+  "At runtime it reflect checks everything, at compile it only checks the arity for static fields."
+  ; TODO: is this used at all as a fn?
+  (let [txt (str sym)
+        pieces (string/split txt #"/")
+        dot-start? (= (str (first (str sym))) ".")
+        dot-end? (= (str (last (str sym))) ".")
+        cl-sym (symbol (string/replace (first pieces) "." ""))
+        class-found? (sym-to-class cl-sym)]
+    (cond 
+      (and dot-end? (= arity -1)) (str sym " must be at the beginning like a function call.")
+      dot-end?
+      (if class-found? false (str "Can't find this java class: " cl-sym))
+      dot-start?
+      (if (= arity -1) (str sym " must be at the beginning like a function call.") false)
+      class-found? false
+      :else (str sym " is a java class but it isn't found")))) ; this last conditon is probably not reachable.
 
 
 ;;;;;;;;;;;; Generic spec check ;;;;;;;;;;;;
@@ -259,20 +253,22 @@
                    :loop? (or (= c0 'loop) (= c0 'loop*))) state)
         add-path (fn [added] (assoc state1 :path (apply conj path added)))]
     ;(println "Locals:" locals "code:" code "lookup:" (get locals code))
+    ;(if (symbol? code) (println "unerrorLeaf:" code))
     (cond
       (map? code) ; Errors in map keys just path to the map itself.
-      (if-let [key-err (_juice #(_compile-err-catch % (assoc state1 :path [%])) (keys code))]
+      (if-let [key-err (collections/juice-1 #(_compile-err-catch % (assoc state1 :path [%])) (keys code))]
         (_abridged-error key-err path "somewhere in this map KEY: ")
-        (_juice #(_compile-err-catch (get code %) (add-path [%])) (keys code)))
-      (set? code) (_juice #(_compile-err-catch % (add-path [%])) code)
-      (vector? code) (_juice #(_compile-err-catch (nth code %) (add-path [%])) (range (count code)))
+        (collections/juice-1 #(_compile-err-catch (get code %) (add-path [%])) (keys code)))
+      (set? code) (collections/juice-1 #(_compile-err-catch % (add-path [%])) code)
+      (vector? code) (collections/juice-1 #(_compile-err-catch (nth code %) (add-path [%])) (range (count code)))
       (symbol? code) (_symbol-not-found-check code path locals state)
       (not (coll? code)) false ; We aren't checking at the string level where badnumber formats, etc can mess us up.
       (= (first code) 'quote) false ; Quotes mean inside stuff isn't evaled.
       :else ; Listy collections, act recursivly in most cases.
       (if-let [spec-err (_spec-assert code state)] spec-err
         (cond
-          (= c0 '.) (_compile-err-catch (cool-head code 3) state1) ; Java call = first 3 can break rules
+          (= c0 '.) (_compile-err-catch ; Java call = first 3 can break rules
+                      (collections/cassoc (cool-head code 3) 1 (second code)) state1) 
           (and (= c0 'new) (not (get (:locals state) 'new))) (_compile-err-catch (cool-head code 2) state1) ; Constructor, first 2 can break rules.
           (= c0 'catch) ; Adds a single local variable.
           (let [locals1 (conj locals (nth codev 2))]
@@ -290,7 +286,7 @@
             ;(println "the err report:" err-report)
             (if err-report err-report
               (_compile-err-catch (cool-head code 2) (assoc state2 :path path))))
-          :else (_juice #(_compile-err-catch (nth codev %) (add-path [%])) (range (count code))))))))
+          :else (collections/juice-1 #(_compile-err-catch (nth codev %) (add-path [%])) (range (count code))))))))
 
 
 (defn compile-err-catch [code ns]

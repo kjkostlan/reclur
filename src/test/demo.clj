@@ -8,6 +8,14 @@
     [coder.unerror :as unerror]
     [coder.logger :as logger]))
 
+
+(defn future-print-loop []
+  "Can we see future printouts? Not much of a demo..."
+  (future (loop [ix 0]
+            (println "Counter:" ix) (flush)
+            (Thread/sleep 1000)
+            (if (= ix 10) ix (recur (inc ix))))))
+
 (defn very-pretty []
   "Very pretty print: uses simulated annealing to decide when to indent.
    This feature is around BETA level as Jan 8 2020."
@@ -41,4 +49,11 @@
   "Log the code that kicks in when we move components.
    THIS DOES NOT WORK YET, the logger has bugs need to fix."
   (let [target 'app.selectmovesize/draw-box-handle]
-    (logger/add-logger! target false false)))
+    (logger/add-logger! target false true)
+    (future
+      (loop [ix 0]
+        (Thread/sleep 1000)
+        (let [logs (logger/get-logs)]
+          (println "# logs:" (count logs) 
+            (last logs)))
+        (recur (inc ix))))))

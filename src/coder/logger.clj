@@ -101,7 +101,12 @@
                   (symbol? code) (list log!-sym code (iddent path))
                   (not (coll? code)) code 
                   (= (first code) 'new) ; Java interop!
-                  (apply list (first code) (second code) (mapv logify (range 2 1e100) (rest (rest code))))
+                  (apply list 'new (second code) (mapv logify (range 2 1e100) (rest (rest code))))
+                  (= (first code) '.) ; Java interop!
+                  (let [codev (into [] code)] 
+                    (apply list '. (if (symbol? (second code)) (second code)
+                                     (logify 1 (second code)))
+                      (nth codev 2) (mapv logify (range 3 1e100) (subvec codev 3))))
                   (= (first code) 'recur) code ; Loop-recur format.
                   (not in-fn1?) (list log!-sym
                                   (apply list (first code) (mapv logify (range 1 1e100) (rest code)))                  
@@ -128,7 +133,7 @@
         the-def (first s-code1) ; 'def
         the-name (second s-code1) ; my-fn
         fn-code (nth s-code1 2) ; (fn* ([x] ...) ([x y] ...))
-        logged-fn (logify-code [sym-qual (dec (count s-code1))] fn-code false false shallow-only)]
+        logged-fn (logify-code [(list 'quote sym-qual) (dec (count s-code1))] fn-code false false shallow-only)]
     (list the-def the-name logged-fn)))
 
 (defn log-error-report [bad-code]

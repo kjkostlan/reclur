@@ -25,6 +25,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Cleaning up clojure's messy gensym code ;;;;;;;;;;;;;;;;;;;;
 
 (def ^:dynamic *allow-structural-unmacro* false) ; you need to change the paths in error reporting if you do this!
+(def ^:dynamic *print-score?* false)
 
 (defn leaf-unmacro [code]
   "Only partial, more examples to be added soon."
@@ -237,8 +238,9 @@
         ] 
     (loop [duds (int 0) current-cost (double 1e100) best-cost (double 1e100) total (int 0)]
       (if (or (= n 0) (>= duds dudsteps)) 
-        (do (println "Best score found:"
-              best-cost) best-addnl?s)
+        (do (if *print-score?*
+              (println "Best score found:"
+              best-cost)) best-addnl?s)
         (let [rx (int (Math/floor (* (Math/random) k)))
               old-vals ((nth jumper!s (* (Math/random) j)) rx) ; change it.
               

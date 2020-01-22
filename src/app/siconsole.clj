@@ -21,20 +21,8 @@
   (assoc rtext/empty-text :interact-fns (interact-fns) :pieces [{:text "\n"}]
   :outline-color [0 0.75 0 1] :path "console" :type :siconsole :show-line-nums? false :colorize-fn colorize))
 
-(defn get-text [box]
-  (:text (first (:pieces box))))
-
-(defn set-text [box txt]
-  (assoc box :pieces [{:text txt}]))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Interactions beyond the usual rtext interactions.
-
-(defn key-press [key-evt box]
-  "Read-only"
-  (if (kb/emacs-hit? "C-k" key-evt) (assoc box :pieces [] :cursor-ix 0)
-    (let [ed (rtext/key-to-edit box key-evt)]
-      (if (or (= (:type ed) :arrow) (= (:type ed) :copy)) (rtext/key-press key-evt box) box))))
 
 (defn log1 [console msg]
   (let [pieces0 (:pieces console)
@@ -73,7 +61,7 @@
     {:mousePressed rtext/mouse-press
      :mouseDragged rtext/mouse-drag
      :mouseWheelMoved rtext/mouse-wheel
-     :keyPressed key-press
+     :keyPressed rtext/key-press
      :keyReleased rtext/key-release}
      (fn [e-clj comp] comp)
      (fn [e-clj comp] (:type e-clj))))
