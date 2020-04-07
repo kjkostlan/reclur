@@ -6,20 +6,25 @@
     [coder.refactor :as refactor]
     [coder.clojure :as cljparse]
     [coder.cbase :as cbase]
+    [coder.unerror :as unerror]
+    [coder.macnav :as macnav]
     [clojure.walk :as walk]
     [clojure.test :as test]
     [clojure.set :as set]
     [clojure.string :as string]
-    [coder.unerror :as unerror]
     [javac.exception :as jexc]
     [layout.layoutcore :as layoutcore]
     [layout.blit :as blit]
     [globals]))
 
-(defn error [] "Debug"
-  (/ 0))
+;;;;; MISC ;;;;
 
-(def ^:dynamic *debug-shorten-code?* false)
+(defn error [& args] "Debug"
+  (throw (Exception. (apply str args))))
+  
+(def _junk-ns (create-ns 'logger-ns))
+
+#_(def ^:dynamic *debug-shorten-code?* false)
 
 (defonce eval-lasterr (atom ""))
 
@@ -52,6 +57,78 @@
             (merge {:ns (cbase/ns-ob2sym *ns*) :code code} 
               (clean-error-stack (jexc/clje e) "none"))) (throw e)))))
 
+;;;;; Core function, data processing ;;;;
+
+(defn nest-status [code path-in-code]
+  "Special considerations for logging purposes."
+  (let [leaf (collections/cget-in code path-in-code)
+        twig (collections/cget-in code (butlast path-in-code))
+        stik (collections/cget-in code (butlast (butlast path-in-code)))
+        fn-call? (and (coll? code) (not (vector? code)) (contains? #{'fn 'fn*} (first twig))) ; (fn* |([x y z] ...)|)
+        fn-call1? (and (vector? code) (contains? #{'fn 'fn*} (first twig)) (= (last path-in-code) 1)) ; Unusual (fn* |[x y z]| ...)
+        fn-call2? (and (vector? code) (contains? #{'fn 'fn*} (first stik)) (= (last path-in-code) 1)) ; (fn* (|[x y z]| ...))
+        binding-vec? (contains? #{'let 'let* 'binding 'loop 'loop*} (first stik))]
+    {:fn-call? fn-call? :fn-call1? fn-call1? :fn-call2? fn-call2?
+     :binding-vec? binding-vec?}))
+
+(defn logify-code1 [code log-path path-in-code]
+  "log-path = ['mynamespace/foo 1 2 3].
+   path-in-code = [1 2 3] for code containing the def. It's fully macroexpanded first!
+   Returns the logged code if successful, false for not successful."
+   ; TODO: java, specials, etc not allowing.
+   ; TODO: fns remove & args.
+  (let [stik (collections/cget-in code (butlast (butlast path-in-code)))
+        twig (collections/cget-in code (butlast path-in-code))
+        leaf (collections/cget-in code path-in-code)
+        
+        log-pathq (update log-path 0 #(list 'quote %))
+        lgcore #(list `log! % log-pathq)
+        sts (nest-status code path-in-code)
+        binding-sym? (and (even? (last path-in-code)) (contains? #{'let 'let* 'binding 'loop 'loop*} (first stik)))
+        no-and (fn [v] (filterv #(not= % '&) v))
+        ch-path (subvec path-in-code 0 ; ch-path = change path.
+                  (- (count path-in-code)
+                    (cond (:fn-call? sts) 1 (:fn-call1? sts) 1
+                     :else 0)))
+        ch-path (if (and (:binding-vec? sts) (even? (last path-in-code))) ; binding vectors.
+                  (update ch-path (dec (count ch-path)) inc) ch-path)
+        target (collections/cget-in code ch-path)
+        target-twig (collections/cget-in code (butlast ch-path))
+        piece1 (cond (:fn-call? sts)
+                 (apply list (conj (into [] (butlast target)) (lgcore (last target))))
+                 (:fn-call1? sts)
+                 (apply list (first target-twig) leaf (lgcore target) (rest (rest target-twig)))
+                 :else
+                 (lgcore target))]
+    ;(println "THIS LOG:")
+    ;(layout.blit/vp (collections/cassoc-in code ch-path piece1))
+    ;(layout.blit/vp piece1)
+    (collections/cassoc-in code ch-path piece1)))
+
+
+(defn symqual2code [sym-qual mexpand?]
+  "Fully macroexpanded, in the local namespace.
+   Maybe this code should go in cbase instead?"
+  (let [v-info (cbase/var-info sym-qual true)
+        _ (if (not v-info) (throw (Exception. (str "This (assumbed to be fully qualified symbol) can't be found: " sym-qual))))
+        s-code (:source v-info)
+        ns-obj (find-ns (cbase/ns-of sym-qual))
+        _ (if (and  mexpand? (not ns-obj)) (throw "Strange where did the ns go?"))
+        s-code1 (if mexpand?
+                  (into [] (binding [*ns* ns-obj] (clojure.walk/macroexpand-all s-code))))]
+    (if mexpand? s-code1 s-code)))
+
+(defn log-error-report [bad-code]
+  "Should be in the target namespace."
+  (println "Logging failed:")
+  (unerror/errprint? bad-code))
+ 
+;;; Core functions, manipulation ;;;;
+
+(defn get-logs [] (:logs @globals/one-atom))
+(defn get-loggers [] (:loggers @globals/one-atom))
+(defn clear-logs! [] (update @globals/one-atom #(swap! % (assoc % :logs []))))
+
 (defn log! [x path]
   "Called when the logged code runs." 
   (swap! globals/one-atom
@@ -59,126 +136,88 @@
            logs (if (:logs %) (:logs %) [])]
       (assoc % :logs (conj logs log)))) x)
 
-(defn get-logs [] (:logs @globals/one-atom))
-
-(defn get-logger [sym-qual] "nil = no logger."
-  (get-in @globals/one-atom [:loggers sym-qual]))
-
-(defn logify-code [path code in-let? in-fn? shallow-only?]
-  "Logs every path within the code recursively.
-   Path should start with a fully qualified symbol."
-  ;(println "CODE TO LOGIFY:") (pprint/pprint code) ; For debugging
-  (if (or (not shallow-only?)
-        (<= (count path) 4)) ; [symbol fn-body arity location-within-subbody]
-    (let [log!-sym (if *debug-shorten-code?* '! `log!)
-          iddent (if *debug-shorten-code?* #(apply str (rest %)) identity)
-          ;_ (println path code)
-          ;_ (println "Path:" path "code head: " (first code))
-          pathq (mapv #(if (symbol? %) (list 'quote %) %) path)
-          listy? (and (sequential? code) (not (vector? code)))
-          in-let1? (and listy? (get #{'let* 'let 'loop 'loop* 'binding 'binding*} (first code)))
-          in-fn1? (and listy? (contains? #{'fn 'fn*} (first code)))
-          logify (fn [add-path sub-code] (logify-code (conj path add-path) sub-code in-let1? in-fn1? shallow-only?))
-          code1 (cond (map? code)
-                  (zipmap (keys code) (mapv logify (keys code) (vals code)))
-                  (and (vector? code) in-let?)
-                  (mapv #(if (even? %1) %2 (logify %1 %2)) (range) code)
-                  (vector? code)
-                  (mapv logify (range) code)
-                  (set? code) code ; can't logify the keys!
-                  (and in-fn? (vector? (first code))) ; (fn ***([x y] (+ x y))***) -> (fn ([x y] (log! [x y]) (log! (+ x y))))
-                  (let [argv (filterv #(not= % '&) (first code))
-                        argvl (list log!-sym argv (iddent path))
-                        codel (mapv logify (range) code)]
-                    (apply list (first code) argvl (rest codel)))
-                  in-fn1? (let [unboxed? (not= (count code) 2)] ; ***(fn ([x y] (+ x y)))***
-                            (if unboxed? 
-                              (apply list (first code)
-                                (second code) (list log!-sym (second code) (iddent (conj path 1)))
-                                (mapv logify (range 1 1e100) (rest (rest code))))
-                              (apply list (first code)
-                                (mapv logify (range 1 1e100) (rest code)))))
-                  (symbol? code) (list log!-sym code (iddent path))
-                  (not (coll? code)) code 
-                  (= (first code) 'new) ; Java interop!
-                  (apply list 'new (second code) (mapv logify (range 2 1e100) (rest (rest code))))
-                  (= (first code) '.) ; Java interop!
-                  (let [codev (into [] code)] 
-                    (apply list '. (if (symbol? (second code)) (second code)
-                                     (logify 1 (second code)))
-                      (nth codev 2) (mapv logify (range 3 1e100) (subvec codev 3))))
-                  (= (first code) 'recur) code ; Loop-recur format.
-                  (not in-fn1?) (list log!-sym
-                                  (apply list (first code) (mapv logify (range 1 1e100) (rest code)))                  
-                                  (iddent path))
-                  :else (apply list (first code) (mapv logify (range 1 1e100) (rest code))))]
-      ;(println "Stuff:" in-fn? in-fn1? (type code) (type code1))
-      (if (meta code) (with-meta code1 (meta code)) code1))
-    code))
-
-(defn sym2log [sym-qual shallow-only]
-  "Symbol -> logged code. Throws errors."
-  (if *debug-shorten-code?* (println "WARNING: *debug-shorten-code?* enabled, loggers won't work."))
-  (let [v-info (cbase/var-info sym-qual true)
-        _ (if (not v-info) (throw (Exception. (str "This (assumbed to be fully qualified symbol) can't be found: " sym-qual))))
-        s-code (:source v-info)
-        _ (if (nil? s-code) (throw (Exception. (str "Found variable, but no source code for:" sym-qual))))
+(defn set-logpaths! [sym-qual paths mexpand?]
+  "Set the log paths of a given code."
+  (let [paths (set paths) ; remove dupes.
         ns-obj (find-ns (cbase/ns-of sym-qual))
-        _ (if (not ns-obj) (throw "Strange where did the ns go?"))
-        s-code1 (into [] (binding [*ns* ns-obj] 
-                               (clojure.walk/macroexpand-all s-code)))
-        _ (if (not= (count s-code1) 3) (throw (Exception. "Loggers on vars can only be added to functions.")))
-        _ (if (not (contains? #{'fn 'fn*} (first (last s-code1)))) (throw (Exception. "Loggers can only be added on def'ed functions.")))
-
-        the-def (first s-code1) ; 'def
-        the-name (second s-code1) ; my-fn
-        fn-code (nth s-code1 2) ; (fn* ([x] ...) ([x y] ...))
-        logged-fn (logify-code [(list 'quote sym-qual) (dec (count s-code1))] fn-code false false shallow-only)]
-    (list the-def the-name logged-fn)))
-
-(defn log-error-report [bad-code]
-  "Should be in the target namespace."
-  (println "Logging failed:")
-  (unerror/errprint? bad-code))
-
-(defn add-logger! [sym-qual shallow-only & use-reload-message]
-  "Adds a logger at the qualified sym by modifying it's code."
-  ;(println "Logging:" sym-qual) ; Debug (extra print).
-  (let [use-reload-message (first use-reload-message)
-        logged-code (sym2log sym-qual shallow-only)
-        logged-fn-code (second (rest logged-code))
-        ns-obj (find-ns (cbase/ns-of sym-qual))
-        old-logger (get-in @globals/one-atom [:loggers sym-qual]) ; only used for a printout hint
-        new-logger {:shallow-only? shallow-only}]
+        code (symqual2code sym-qual mexpand?)
+        s-fn #(+ (* (double (count %)) 1.0e8)
+                (if (number? (last %)) (last %) 0.0))
+        paths-sort (reverse (sort-by s-fn paths)) ; must be added long to short, later to earlier (for things like logging fn args).
+        _ (if (and (last paths-sort) (< (count (last paths-sort)) (if mexpand? 3 1)))
+            (throw (Exception. "The logpaths must be inside the function part of a defn."))) 
+        logged-code (reduce #(logify-code1 %1 (collections/vcat [sym-qual] %2) %2) code paths-sort)
+        ;_ (do (require 'layout.blit) (layout.blit/vp logged-code))
+        logged-fn-code (if mexpand? (last logged-code)
+                         (apply list 'fn (collections/cget logged-code 2) (subvec (into [] logged-code) 3)))
+        loggers (zipmap paths (repeat (count paths) {:mexpand? mexpand? :source code}))]
+    ;(layout.blit/vp logged-fn-code)
+    ;(println "Finding var:" sym-qual (find-var sym-qual))
     (binding [*ns* ns-obj]
-      ;(clojure.pprint/pprint s-code1)
-      ;(clojure.pprint/pprint logged-body) ; debugging in case the logger misbehaves.
-      (alter-var-root (find-var sym-qual)
-        (fn [old-val] 
-          ;(println "target-of eval:" logged-fn)
-          ;(try (eval+ logged-body) (catch Exception e (do (println *ns*) (println e))))
-          (collections/keep-meta old-val (fn [_] (eval+ logged-fn-code)))))
-      (swap! globals/one-atom
-         #(assoc-in % [:loggers sym-qual] new-logger))
-      (if use-reload-message
-        (if (= old-logger new-logger) 
-          (println sym-qual " seems to be already logged, but re-added just in case.")
-          (println "Added logger for:" sym-qual (if shallow-only "only shallow." "")))))))
- 
-(defn add-most-loggers! []
-  "Attempts to be a comprehensive logger, which will generate a large number of logs that 
-   can be analyzed."
-  (let [all-vars (keys (cbase/varaverse))
-        vars-no-log (filterv #(not (get-logger %)) all-vars) ; No prior logger.
-        vars-fn (filterv #(clojure.test/function? %) vars-no-log)
-        vars-not-us (filterv #(not (string/starts-with? (str %) "coder.logger")) vars-fn) ; dont log the loggers or else infinite loop!
-        vars-not-inner-loop (filterv identity vars-not-us)] ; TODO: performance-based exclude.
-    (mapv #(add-logger! % true false) vars-not-inner-loop)))
+      (let [var-f (eval+ logged-fn-code)]
+        (alter-var-root (find-var sym-qual)
+          (fn [old-val]
+            (collections/keep-meta old-val (fn [_] var-f))))
+        (swap! globals/one-atom
+          (fn [world]
+            (let [loggers-old (get-in world [:loggers sym-qual])
+                  loggers1 (zipmap (keys loggers)
+                             (mapv #(merge (get loggers-old % {}) (get loggers %))
+                               (keys loggers)))]
+              (assoc-in world [:loggers sym-qual] loggers1))))))))
 
-(def _junk-ns (create-ns 'logger-ns))
+(defn add-logger! [sym-qual path mexpand? & messages]
+  "mexpand? should be false for individual logging requests, but true for deep mass-logging"
+  (let [mexpand? (boolean mexpand?)
+        ns-obj (find-ns (cbase/ns-of sym-qual))
+        current-loggers (get-in @globals/one-atom [:loggers sym-qual] {}) ; path -> logger
+        mexpand?-old (:mexpand? (first (vals current-loggers)))
+        untouched-loggers (dissoc current-loggers path)
+        _ (cond 
+            (and (> (count untouched-loggers) 0) mexpand?-old (not mexpand?))
+            (throw (Exception. "Other loggers have macro-expansion, but we don't. We can't mix and max (TODO?)."))
+            (and (> (count untouched-loggers) 0) (not mexpand?-old) mexpand?)
+            (throw (Exception. "Other loggers don't have macro-expansion, but we do. We can't mix and max (TODO?).")))
+        
+        new-msg (get messages 0 "")
+        already-msg (get messages 1 "")
+        new? (not (get current-loggers path))]
+    (if (not= (first messages) :quiet)
+      (if new?
+        (println new-msg "Adding logger for:" sym-qual path " expand? " mexpand?)
+        (println already-msg "Re-Adding logger for:" sym-qual path " expand? " mexpand?)))
+    (set-logpaths! sym-qual (set (conj (keys current-loggers) path)) mexpand?)))
 
-(defn reload-but-keep-loggers! [ns-sym]
-  "Reloads the namespace, keeping all loggers we need."
+(defn user-data-logger! [sym-qual path udata]
+  "Put user data for the logger here."
+  (swap! globals/one-atom
+    (fn [world] (update-in world [:loggers sym-qual path]
+                  #(merge % udata)))))
+
+(defn remove-logger! [sym-qual path]
+  (let [old-loggers (get-in @globals/one-atom [:loggers sym-qual])
+        old-paths (set (keys old-loggers))
+        new-paths (disj old-paths path)
+        hit? (< (count new-paths) (count old-paths))]
+    (if hit? (println "Removing logger for" sym-qual path) (println "No logger to remove for" sym-qual path))
+    (if hit? (set-logpaths! sym-qual new-paths (:mexpand? (first (vals old-loggers)))))))
+
+(defn remove-loggers! [sym-qual]
+  (if (> (count (get-in @globals/one-atom [:loggers sym-qual])) 0)
+    (do (println "Removing all loggers for:" sym-qual)
+      (set-logpaths! sym-qual [] false))
+    (println "No loggers to remove for:" sym-qual)))
+
+(defn remove-all-loggers! []
+  (let [syms (keys (get @globals/one-atom :loggers {}))]
+    (if (> (count keys) 0)
+       (do (println "Removing all loggers, " (count syms) "symbols will be cleaned") 
+         (mapv remove-loggers! syms))
+       (println "No loggers anywhere, no need to remove"))))
+
+(defn reload-tryto-keep-loggers! [ns-sym & quiet?]
+  "Reloads the namespace, attempts keeping all loggers we need.
+   Even if no code changes it will wipe the loggers so we need to re-add them."
   (let [_ (binding [*ns* _junk-ns]
             (require ns-sym :reload))
         syms (keys (ns-interns ns-sym))
@@ -186,23 +225,25 @@
         loggers (:loggers @globals/one-atom)
         sym-logged (set (keys loggers))
         need-logged (set/intersection sym-quals sym-logged)]
-    (mapv #(add-logger! % (:shallow-only? (get loggers %)) true) need-logged) nil))
+    (mapv
+      (fn [sym-qual]
+        (let [loggers-for-sym (get loggers sym-qual)
+              paths (keys loggers-for-sym)
+              mexpand? (:mexpand? (first (vals loggers-for-sym)))
+              old-code (:code (get loggers-for-sym (first (keys loggers-for-sym))))
+              code (symqual2code sym-qual mexpand?)
+              paths1 (set (filterv identity 
+                            (mapv #(macnav/drag-path old-code code %) paths)))
+              _ (if (not (first quiet?)) 
+                  (println "Reloading logged symbol:" ns-sym (count paths1) "of" (count (keys loggers-for-sym)) "kept."))] ; this may get annoying.
+           (set-logpaths! sym-qual paths1 mexpand?))) need-logged)))
 
-(defn remove-logger! [sym-qual]
-  (let [logged? (boolean (get-in @globals/one-atom [:loggers sym-qual])) ; only used for a printout hint
-        _ (if logged? (println "Removing the logger of:" sym-qual)
-            (println "No logger found for " sym-qual " but removing just in case."))
-        ns-sym (cbase/ns-of sym-qual)]
-    (swap! globals/one-atom #(assoc % :loggers (dissoc (:loggers %) sym-qual)))
-    (reload-but-keep-loggers! ns-sym)))
-
-(defn remove-all-loggers! []
-  (let [loggers (:loggers @globals/one-atom)]
-    (mapv remove-logger! (keys loggers))))
+; User interface functions.
 
 (defn log-toggle-at-cursor [s fname cursor-ix cache-txt blanck-repl] 
   "Toggles logging code in the form enclosing the cursor, 
-   doesn't change the code, instead uses alter-var-root."    
+   doesn't change the code, instead uses alter-var-root." 
+   (throw (Exception. "TODO: update this function under the new logging paradigm."))   
   (let [x (cljparse/forwards cache-txt)
         char-ix (let [ch (get cache-txt (dec cursor-ix))]
                   (if (or (= ch \)) (= ch \]) (= ch \}))
@@ -214,6 +255,7 @@
         ns-sym (cbase/file2ns fname)
         qual-sym (cbase/qual ns-sym func-name)
         logged? (get-in @globals/one-atom [:loggers qual-sym])]
+    
     (if logged? (do (remove-logger! qual-sym) s)
       (let [_ (add-logger! qual-sym)
         
@@ -249,4 +291,76 @@
     (if on? (println "Added global UI logger") (println "Removed global UI logger"))
     ; Adding a loger twice is OK, so the multi-use of atom is OK.
     (if on? (mapv add-logger! changes) (mapv remove-logger! changes))))
- 
+
+(defn w2ps [sym-qual search-key mexpand?]
+   (let [code (symqual2code sym-qual mexpand?)
+        _ (if (not code) (throw (Exception. (str "Cant find code for:" sym-qual))))
+        phs (macnav/paths-of code search-key)] 
+     phs))
+
+(defn add-watchpoint! [sym-qual search-key & adjacents]
+  "A debug watch, which is easier to clear. Adjacents is an optional next-to key that helps with disambugation."
+  (let [phs (w2ps sym-qual search-key false)
+        code (symqual2code sym-qual false)
+        _ (if (= (count phs) 0) (throw (Exception. (str "Not found: " search-key))))
+        just-before (fn [ph] (if (number? (last ph)) (update ph (dec (count ph)) dec)))
+        just-after (fn [ph] (if (number? (last ph)) (update ph (dec (count ph)) inc)))
+        ; 1 adj = before or after. 2 = [before, after].
+        adj (fn [ph]
+              (cond (= (count adjacents) 0) true
+                (= (count adjacents) 1)
+                (or (= (first adjacents) (collections/cget-in code (just-before ph)))
+                  (= (first adjacents) (collections/cget-in code (just-after ph))))
+                (>= (count adjacents) 2)
+                (and (= (first adjacents) (collections/cget-in code (just-before ph)))
+                  (= (second adjacents) (collections/cget-in code (just-after ph))))))
+        phs1 (filterv adj phs)]
+    (mapv #(add-logger! sym-qual % false "[not-so-Breakpoint]") phs1)
+    (mapv #(user-data-logger! sym-qual % {:watchpoint? true}) phs1)))
+
+(defn clear-watchpoints! []
+  (let [world @globals/one-atom
+        loggers (:loggers world)
+        watchers (zipmap (keys loggers)
+                   (mapv (fn [pack] (filterv #(:watchpoint? (get pack %))
+                           (keys pack))) (vals loggers)))
+        watchersu (mapv (fn [k] (mapv #(vector k %) (get watchers k)))
+                    (keys watchers))
+        watchersu (apply collections/vcat watchersu)]
+    (mapv #(apply remove-logger! %) watchersu)
+    (println "Cleared:" (count watchersu) "Debug watchers.")))
+(def cw! clear-watchpoints!)
+
+(defn get-last-watch-logs [sym-qual search-key]
+  "Gets the logs that matches the watch, actually returns a vector of logs
+   b/c watches can cover multible paths."
+  (let [logs (:logs @globals/one-atom)
+        phs (w2ps sym-qual search-key false)
+        phs (mapv #(collections/vcat [sym-qual] %) phs)]
+    (mapv (fn [ph] (first (filter #(= ph (:path %)) (reverse logs))))
+      phs)))
+
+(defn watch! [sym-qual search-key & adjacents]
+  "Unifies the add and the observe watching functions.
+   Call, run, call again pattern."
+  (if (not (get-in @globals/one-atom [:loggers sym-qual search-key]))
+    (apply add-watchpoint! sym-qual search-key adjacents))
+  (get-last-watch-logs sym-qual search-key))
+(def w! watch!)
+
+(defn grab! [sym-qual args search-key & adjacents]
+  "Runs the function, returns the debug results."
+  (clear-watchpoints!)
+  (apply watch! sym-qual search-key adjacents)
+  (let [als (:arglists (meta (find-var sym-qual)))
+        valid-counts-lo (set (mapv #(if (contains? (set %) '&)
+                                     (dec (count %)) (count %)) als))
+        valid-counts-hi (set (mapv #(if (contains? (set %) '&)
+                                     1e100 (count %)) als))
+        n (count args)]
+    (if (not (first (filterv #(and (>= n (first %)) (<= n (second %))) 
+                      (mapv vector valid-counts-lo valid-counts-hi))))
+      (throw (Exception. (str "Wrong number of args " n " passed to " sym-qual)))))
+  (try (apply (find-var sym-qual) args) 
+    (catch Exception e nil))
+  (mapv :value (get-last-watch-logs sym-qual search-key)))

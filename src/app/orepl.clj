@@ -222,7 +222,7 @@
   (let [tmp-sym (gensym 'tmp) ns-tmp (create-ns tmp-sym)]
     (_mark-vars! ns-symbol)
     (let [maybe-e (if removing? false ; the actual reloading part.
-                    (try (do (logger/reload-but-keep-loggers! ns-symbol) false)
+                    (try (do (logger/reload-tryto-keep-loggers! ns-symbol) false)
                             (catch Exception e e)))
           rm-vars (_get-marked-vars ns-symbol)]
       (if (not maybe-e) (mapv #(_clear-var! ns-symbol %1 %2) (keys rm-vars) (vals rm-vars)))

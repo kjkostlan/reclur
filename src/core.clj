@@ -97,9 +97,13 @@
                                (iteration/copy-child-to-us!! s1) s1) s))
    "C-S-h" (fn [s] ; show the hint box
                               (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
-                                (if (= (:type fc) :codebox)
+                                (if (or (= (:type fc) :codebox) (= (:type fc) :orepl))
                                   (if-let [hb (hintbox/codebox-hint s fc)] 
-                                    (assoc-in s [:components ::hintbox] hb) s) s) s))
+                                    (if (let [hb0 (get-in s [:components ::hintbox])]
+                                          (and hb0 (= (mapv int (:position hb0)) (mapv int (:position hb)))))
+                                      (update s :components 
+                                        #(dissoc % ::hintbox))
+                                      (assoc-in s [:components ::hintbox] hb)) s) s) s))
    "C-S c" store-state!
    "C-S z" (fn [_] (retrieve-state!))
    "C-^^" (fn [s]

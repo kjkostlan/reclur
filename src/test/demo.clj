@@ -6,8 +6,13 @@
     [clojure.pprint :as pprint]
     [layout.blit :as blit]
     [coder.unerror :as unerror]
-    [coder.logger :as logger]))
+    [coder.logger :as logger]
+    [coder.macnav :as macnav]))
 
+(defonce futures (atom []))
+
+(defn cancel-all-futures! []
+ (swap! futures #(do (mapv future-cancel %) [])))
 
 (defn future-print-loop []
   "Can we see future printouts? Not much of a demo..."
@@ -46,14 +51,23 @@
     (unerror/errprint? bad-code)))
 
 (defn logging []
-  "Log the code that kicks in when we move components.
-   THIS DOES NOT WORK YET, the logger has bugs need to fix."
-  (let [target 'app.selectmovesize/draw-box-handle]
-    (logger/add-logger! target false true)
-    (future
-      (loop [ix 0]
-        (Thread/sleep 1000)
-        (let [logs (logger/get-logs)]
-          (println "# logs:" (count logs) 
-            (last logs)))
-        (recur (inc ix))))))
+  "Log the code that kicks in when we move components."
+  (cancel-all-futures!)
+  (let [target 'app.selectmovesize/draw-box-handle
+        mexpand? false
+        search-key 'xxyy ; this appears in a let statement.
+        code (logger/symqual2code target mexpand?)
+        _ (if (not code) (println ""))
+        path-of-key (macnav/path-of code search-key)
+        _ (if (not path-of-key) (throw (Exception. "Demo misconfigured: cant find key")))
+        path (update path-of-key (dec (count path-of-key)) inc) ; the thing after the "box".
+        ]
+    (logger/add-logger! target path mexpand?)
+    (let [f (future
+          (loop [ix 0]
+            (Thread/sleep 1000)
+            (let [logs (logger/get-logs)]
+              (println "# logs:" (count logs) "Last log:"
+                (last logs)))
+            (recur (inc ix))))]
+     (swap! futures #(conj % f)))))

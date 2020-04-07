@@ -25,11 +25,61 @@
 (defn wtf [x] (if (coll? x) (throw (Exception. (str "Unrecognized collection type:" (type x))))
                   (throw (Exception. "Not a collection."))))
 
-;;;;;;;;;;;;;;;; Generalized functions ;;;;;;;;;;;;;;
+(defn vs2m [v] "vector or set to map."
+  (if (map? v) v (zipmap (if (set? v) v (range)) v)))
+
+(defn bool2num [x]
+  (cond (not x) 0 (= x true) 1 :else x))
+
+;;;;;;;;;;;;;;;; Modified functions (an accent on functions we know) ;;;;;;;;;;;;;;
+
+(defn vcat [& cs] ; TODO: would catv be a better name consistency?
+  "Returns a vector not a lazy thingy."
+  (into [] (apply concat cs)))
+
+(def vconcat vcat)
+
+(defn argmax 
+  "Different from max-key in that it returns the key not the value."
+  ([x]
+    (argmax identity x))
+  ([f x]
+    (let [x (vs2m x) kys (into [] (keys x)) n (count kys)]
+      (loop [ix 0 record -1e234 best-k nil]
+        (if (= ix n) best-k
+          (let [ki (nth kys ix)
+                fv (bool2num (f (get x ki)))
+                gold-medal? (>= fv record)]
+            (recur (inc ix) (if gold-medal? fv record)
+              (if gold-medal? ki best-k))))))))
+
+(defn argmin 
+  "Different from max-key in that it returns the key not the value."
+  ([x] (argmax #(- %) x))
+  ([f x] (argmax #(- (bool2num (f %))) x)))
+
+(defn get- 
+  "Python would be x[k] for k < 0. Plenty of (dec (count x)) code could be easier."
+  ([x k] (get- x k nil))
+  ([x k not-found]
+    (if (and (sequential? x) (< k 0))
+      (get (if (vector? x) x (into [] x))
+        (+ (count x) k) not-found) not-found)))
+
+(defn update- [x k f & args]
+  "Python would be x[k]=f(x[k]) for k < 0. Plenty of (dec (count x)) code could be easier."
+  (let [k (+ (count x) k)
+        v? (vector? x) x1 (if v? x (into [] x))
+        v (apply f (get x k) args)
+        x2 (assoc x k v)]
+    (if v? x2 (apply list x2))))
+
+;;;;;;;;;;;;;;;; Generalized functions (wider valid argument set) ;;;;;;;;;;;;;;
 
 (defn cget [x k]
-  (if (or (map? x) (set? x) (vector? x)) (get x k)
-      (get (into [] x) k)))
+  (cond (or (map? x) (set? x) (vector? x)) (get x k)
+    (not (coll? x)) nil
+   :else (get (into [] x) k)))
 
 (defn cget-in [x ks]
   (if (empty? ks) x

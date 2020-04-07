@@ -20,9 +20,9 @@
   (clojure.walk/prewalk #(if (= (_lty %) 1) (apply list %) %) t))
 
 (defn tree-diff [x y]
-  "Finds a difference between x and y.
+  "Finds a shortest path that differences x and y, false if x=y.
    Did this get written b4?
-   Should this go in collections?"
+   Should this (and other fns?) go in collections?"
   (let [x (list-is-list x) y (list-is-list y) ; May not be necessary.
         diff
             (cond (not= (_lty x) (_lty y)) []
@@ -54,6 +54,39 @@
           (if-let [p (path-of (nth vals ix) search-key)]
             (vcons (nth kys ix) p) (recur (inc ix))))))))
 
+(defn paths-of [code search-key]
+  "Paths that lead to search-key in code."
+  (let [stop (if search-key false true)]
+    (loop [x code out []]
+      (let [ph1 (path-of x search-key)]
+        (if ph1 
+          (recur (collections/cassoc-in x ph1 stop) (conj out ph1))
+          out)))))
+
+(defn drag-path [code-old code-new path-old]
+  "Tries to find a corresponding path, nil if failure.
+   No obvious algorithim here, more of a heuristic. Room for much improvement."
+  (let [np (count path-old)
+        nesting-keys (mapv #(collections/cget-in code-old
+                              (subvec path-old %))
+                       (range np)) ; shallow -> deep.
+        pathss-old (mapv #(paths-of code-old %) nesting-keys)
+        pathss-new (mapv #(paths-of code-new %) nesting-keys)
+        shallowest (first (filter #(> (count %) 0) pathss-new))
+        deepest (last (filter #(> (count %) 0) pathss-new))]
+    (if deepest ; Which is most similar? How deep can we go?
+      (let [pathdif (fn [a b] (reduce + (mapv #(if (= %1 %2) 0.0 1.0) a b)))
+            diffs (mapv #(pathdif path-old %) shallowest)]
+        (nth deepest (collections/argmax diffs)))
+      (if (and (> np 0) ; very simple subsitution
+            (let [v0 (collections/cget-in code-old (subvec path-old 0 (dec np)))
+                  v1 (collections/cget-in code-new (subvec path-old 0 (dec np)))]
+              (and (vector? v0) (vector? v1) (= (count v0) (count v1))))
+            (collections/cget-in code-new path-old))
+       path-old false))))
+
+;;;;;;;; Text reducing functions ;;;;;;;;;
+ 
 (defn lucky-branch [code path]
   "Takes a sample, this fn is intended as a debugger."
   (let [p0 (first path) pr (if (> (count path) 0) (into [] (rest path)))

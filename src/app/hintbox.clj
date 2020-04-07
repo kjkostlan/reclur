@@ -49,7 +49,7 @@
         lines (reduce #(let [l (last %1) s (str %2)]
                          (if (< (+ (count l) (* (count s) 0.5) 1) w)
                            (assoc %1 (dec (count %1)) (str l s " "))
-                           (conj %1 s))) [""] syms)]
+                           (conj %1 (str s " ")))) [""] syms)]
     (apply str (interpose "\n" lines))))
 
 (defn _whats-at-cursor [cbox]
@@ -57,7 +57,7 @@
    Metadata has :special? and :resolved? keywords."
   (let [cix (:cursor-ix cbox)
         ph (:path cbox) vis (rtext/rendered-string cbox)
-        cbox1 (codebox/select-twofour-click cbox false)
+        cbox1 (codebox/select-twofour-click (codebox/set-precompute cbox) false)
         piece (subs vis (:selection-start cbox1) (:selection-end cbox1))        
         sym (first (filter identity ; foo/ isn't a valid symbol, but it should be an autocompletable.
                      (map #(try (read-string %) (catch Exception e false))
@@ -68,8 +68,11 @@
       no? false
       (and (symbol? sym) (get specials sym))
       (with-meta sym {:special? true})
+      (and (symbol? sym) (= (last piece) \/))
+      (symbol (str piece))
       (symbol? sym)
-      (let [ns-sym (cbase/file2ns (first (:path cbox)))
+      (let [ns-sym (if (= (:type cbox) :orepl) 'app.orepl
+                     (cbase/file2ns (first (:path cbox))))
             sym-resolved (cbase/resolved ns-sym sym)]
         (if sym-resolved (with-meta sym-resolved {:resolved? true}) sym))
       :else sym)))
