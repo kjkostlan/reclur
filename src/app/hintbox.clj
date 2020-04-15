@@ -63,7 +63,7 @@
                      (map #(try (read-string %) (catch Exception e false))
                        [piece (subs piece 0 (dec (count piece)))])))
         no? (= piece "false")
-        specials #{'def 'let* 'if 'quote 'var 'recur 'throw 'catch 'monitor-enter 'monitor-exit 'set!}]
+        specials #{'def 'let* 'var 'quote 'if 'loop* 'recur '. 'new 'throw 'catch 'monitor-enter 'monitor-exit 'set!}]
     (cond (= piece "nil") nil
       no? false
       (and (symbol? sym) (get specials sym))

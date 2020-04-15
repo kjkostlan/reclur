@@ -140,13 +140,8 @@
           s1-mid (subs s1 e0 (- n1 e1))
           mid-edits (corr-to-edits s0-mid s1-mid (chunk-corr s0-mid s1-mid))]
       (if (not= (apply-edits s0-mid mid-edits) ; DEBUG TODO remove when trusted.
-            (subs s1 e0 (- (count s1) e1))) (throw (Exception. "Edits-between fn failed"))) ; DEBUG TODO: remove when I can trust it.
+            (subs s1 e0 (- (count s1) e1))) (throw (Exception. "Edits-between fn failed"))) ; safety check.
       (mapv (fn [ed] (-> ed (update :ix0 #(+ % e0)) (update :ix1 #(+ % e0)))) mid-edits))))
-
-
-
-
-
 
 #_(let [s0 "foobarbaz"
       s1 "zoozarzaaz"

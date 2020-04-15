@@ -1,6 +1,6 @@
 ; View and edit code. Includes code folding as well as code expansion to children.
 (ns app.codebox
- (:require [clojure.string :as string]
+ (:require [clojure.string :as string] [clojure.walk :as walk]
    [app.rtext :as rtext]
    [app.fbrowser :as fbrowser]
    [app.stringdiff :as stringdiff]
@@ -21,7 +21,7 @@
 
 (defn _merge-leaf-pieces [pieces] ; keeps the total piece count down.
   (let [pieces (into [] pieces) n (count pieces)
-        squishy?s (mapv #(and (not (:children %)) (not (:exported? %))) pieces)]
+        squishy?s (mapv #(not (:children %)) pieces)]
     (filterv #(not= % {:text ""})
       (loop [acc [] ix 0 piece {:text []}]
         (if (= ix n) (conj acc (update piece :text #(apply str %)))
@@ -59,49 +59,37 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;; Piece-handling and paths ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(def ... (let [ndots 3] (apply str (repeat ndots spacer))))
+
 (defn folded? [piece]
   "true for folded and not exported to a child."
  (boolean (:children piece)))
-
-(defn exported? [piece]
-  "Whether the children are exported."
-  (:exported? piece))
 
 (defn _splay-out [cljpath0 pieces] 
   (into [] (apply concat (mapv #(concat [(conj cljpath0 %2)] (if (:children %1) (_splay-out (conj cljpath0 %2 :children) (:children %1)) [])) pieces (range)))))
 (defn splay-out [box]
   "All paths to various pieces, including nested pieces, in reading order."
   (_splay-out [:pieces] (:pieces box)))
+(defn splay-out+ [box]
+  "The splayed-out pieces themselves, with a :tmp-path key."
+  (let [uspaths (splay-out box)]
+    (into [] (concat [{:text (get box :head "") :tmp-path [:head]}] 
+               (mapv #(assoc (get-in box %) :tmp-path %) uspaths) 
+               [{:text (get box :foot "") :tmp-path [:tail]}]))))
 
-(defn uspaths-with-export [box]
-  "all paths with an :exported?."
-  (filterv #(:exported? (get-in box %)) (splay-out box)))
+(defn piece-real-string [piece]
+  "For folded pieces, digs down into children."
+  (if (folded? piece) (apply str (mapv piece-real-string (:children piece))) (:text piece)))
 
-(defn child-paths [box]
-  (zipmap (mapv #(:exported? (get-in box %)) (uspaths-with-export box))
-     (map #(conj (:path box) %) (range))))
+(defn real-string [box]
+  "What would be saved to a file."
+  (if (not box) (throw (Exception. "Nil box")))
+  (if (not (:pieces box)) (throw (Exception. "Nil pieces")))
+  (str (get box :head "") (apply str (mapv piece-real-string (:pieces box))) (get box :foot "")))
 
-(defn real-str-ixs [box all-uspaths]
-  "Array of [ix0 ix1] ranges on all-uspaths.
-   (subvec all-uspaths (get-in this [i 0]) (get-in this [i 1])) returns all us-paths, excluding the exported one, 
-   that belong to the i'th real string."
-  (let [n (count all-uspaths)]
-    (loop [acc [] ix 0 lastix 0]
-      (if (= ix n)
-        (conj acc [lastix ix])
-        (if (exported? (get-in box (nth all-uspaths ix)))
-          (recur (conj acc [lastix ix]) (inc ix) (inc ix))
-          (recur acc (inc ix) lastix))))))
-
-(defn real-strings [box]
-  "Real-string but split into groups that aren't spacers. Children of folded pieces contribute.
-   If nothing is exported this array will have one element, the string as would be saved to the disk.
-   With exported pieces the component manager, etc will have to use the children components to fill the holes."
-  (let [uspaths (splay-out box)
-        real-str-contrib (mapv #(let [p (get-in box %)] (if (or (folded? p) (exported? p)) "" (:text p))) uspaths)
-        rs-ixs (real-str-ixs box uspaths)]
-    (if (not (:pieces box)) (throw (Exception. "Nil pieces")))
-    (mapv #(apply str (subvec real-str-contrib (first %) (second %))) rs-ixs)))
+(defn num-newlines [piece]
+  "Uses precomputed values here for folded or exported pieces, otherwise uses the string."
+  (dec (count (string/split (piece-real-string piece) #"\n"))))
 
 (defn contain-ixs [box cur-ix] 
  "Indexes on the rendered str that contain the index
@@ -117,63 +105,52 @@
         hi (loop [ix cur-ix]
              (if (or (= ix n) (< (nth levels ix) lev)) ix
                (recur (inc ix))))]
-    [lo hi]))
-
-(defn num-newlines [piece]
-  "Uses precomputed values here for folded or exported pieces, otherwise uses the string."
-  (if (or (folded? piece) (exported? piece)) (:hidden-nlines piece)
-    (dec (count (string/split (:text piece) #"\n")))))    
+    [lo hi]))    
 
 (defn colorize [box s piece-ix char-ix0 char-ix1]
   "Level based colorization, with exported pieces counting differently."
   (let [levels (subvec (:levels (:precompute box)) char-ix0 char-ix1)
-        exported?s (mapv exported? (:pieces box))
         mx (apply max 0 levels) cols (mapv #(conj (colorful/level2rgb %) 1) (range (inc mx)))]
-    (mapv #(if (nth exported?s %2) [1 1 1 0.3] (nth cols (if (>= %1 0) %1 0))) levels piece-ix)))
+    (mapv #(nth cols (if (>= % 0) % 0)) levels)))
 
 (defn new-codebox []
-  (assoc rtext/empty-text :interact-fns (interact-fns) :outline-color [0.8 0 0 1] :path []
+  (assoc rtext/empty-text :interact-fns (interact-fns) :outline-color [0.8 0 0 1] :path [] :head "" :foot ""
     :type :codebox :lang :clojure :precompute {:levels [] :inter-levels [0]} :colorize-fn (fn [& args] (apply colorize args))))
 
-(defn code-fold-toggle [cur-pieceix folding? ixs exporting? box]
-  "Both (un)exporting and code (un)folding. exporting? nil or false for not exporting"
-  (let [ndots 3 pieces (_rml (:pieces box))
+(defn code-fold-toggle [cur-pieceix folding? ixs complement? box]
+  "Folds or unfolds. complement? true to hilight instead of fold, i.e. in stead of hiding the
+   part to be folded we hide the part to not fold."
+  (let [pieces (_rml (:pieces box))
 
         ; Equivalent edit (needed for updating the tokens incrementally instead of recomputing everything):
-        insert (if folding? (apply str (repeat ndots spacer)) (apply str (mapv :text (:children (nth pieces cur-pieceix)))))
-        edit {:type :misc :ix0 (first ixs) :ix1 (second ixs) :value insert}
+        ;insert (if folding? ... 
+        ;         (apply str (mapv :text (:children (nth pieces cur-pieceix)))))
+        ;edit {:type :misc :ix0 (first ixs) :ix1 (second ixs) :value insert}
+        ;box1 (edits-update box [edit])
+        ;add-edit #(edits-update box %1 [edit])
 
         stats (rtext/index-stats (:pieces box) (first ixs) (second ixs) rtext/default-partial-grab)
        
-        boxy1 #(assoc box :pieces (_rml (into [] %)))
-        num-nlines (if folding? (apply + (mapv num-newlines (:in stats))))
-        folded-piece (if folding? {:text insert :children (:in stats) :hidden-nlines num-nlines})
-        cud #(edits-update box %1 [edit])]
-   (cond (and exporting? folding?) ; fold it up, but put it it into the exported child.
-     (let [box1 (boxy1 (concat (:b4 stats) [(dissoc (assoc folded-piece :exported? exporting?) :children)] (:afr stats)))
-           expand-ix (count (filterv #(exported? %) (subvec (:pieces box) 0 cur-pieceix))) ;expand-ix (int (/ cur-pieceix 2))    
-           child (set-precompute (assoc (new-codebox) :pieces (:children folded-piece) 
-                                    :path (conj (:path box) expand-ix)))
-           ; Calculate total line nums before:
-           box1p (splay-out box1)
-           n-linesb4 (loop [acc 0 ix 0 n-ex 0] 
-                       (let [piece (get-in box1 (nth box1p ix)) ex? (exported? piece)]
-                         (cond (and ex? (= n-ex expand-ix)) acc ; we hit the path reaching the child, or the end.
-                           (not (folded? piece)) ; only count leaves, as we are looping through the splayed-out paths.
-                           (recur (+ acc (num-newlines piece)) (inc ix) (+ n-ex (if ex? 1 0)))
-                           :else (recur acc (inc ix) (+ n-ex (if ex? 1 0))))))
-           child (assoc child :line-num-start (inc n-linesb4))]
-       [(cud box1) child])
+        ;set-pieces #(assoc box :pieces (_rml (into [] %)))
+        folded-piece (if folding? {:text ... :children (:in stats)})
+        pieces-b4 (:b4 stats) pieces-afr (:afr stats)]
+   (cond (and complement? folding?) ; fold it up, but put it it into the exported child.
+     (let [new-head (str (get box :head "") (apply str (mapv piece-real-string pieces-b4)))
+           new-foot (str (apply str (mapv piece-real-string pieces-afr)) (get box :foot ""))
+           ch-pieces (:in stats)]
+       (set-precompute (assoc box :head new-head :foot new-foot :pieces ch-pieces :cursor-ix 0)))
      folding?
-     (cud (boxy1 (concat (:b4 stats) [folded-piece] (:afr stats))))
-     exporting?
-     (throw (Exception. "Bad case, can't unfold with the release of a child"))
-     :else (cud (boxy1 (concat (subvec pieces 0 cur-pieceix) (:children (nth pieces cur-pieceix)) (subvec pieces (inc cur-pieceix))))))))
+     (let [new-pieces (_rml (into [] (concat pieces-b4 [folded-piece] pieces-afr)))]
+       (set-precompute (assoc box :pieces new-pieces :cursor-ix (first ixs))))
+     complement?
+     (throw (Exception. "Unfolding + complement is harder to make sense of."))
+     :else (let [new-pieces (_rml (into [] (concat pieces-b4 (:children (first (:in stats))) pieces-afr)))] ; remove the dots.
+             (set-precompute (assoc box :pieces new-pieces :cursor-ix (first ixs)))))))
 
-(defn code-fold-toggle-at-cursor [cur-ix folding? exported? box]
+(defn code-fold-toggle-at-cursor [cur-ix folding? complement? box]
   "Fold up the outer-level paren level of the code, or unfold folded code.
    Folded code splits the :pieces, unfolded code merges the :pieces.
-   exported? true: give an output of [parent child] for folding true."
+   complement? true: folds everything else that is not the target."
   (let [pieces (_rml (:pieces box))
         ; The cursor may be between two pieces:
         cur-pieceix0 (first (rtext/cursor-ix-to-piece (assoc box :cursor-ix cur-ix :pieces pieces)))
@@ -189,7 +166,7 @@
                            (if (> (second ix0s) (+ (first ix0s) 2)) [(inc (first ix0s)) (dec (second ix0s))] ix0s))
               (let [cur-ix-piece-begin (rtext/cursor-piece-to-ix box cur-pieceix)]
                 [cur-ix-piece-begin (+ cur-ix-piece-begin (count (:text (nth pieces cur-pieceix))))]))]
-    (code-fold-toggle cur-pieceix folding? ixs exported? box)))
+    (code-fold-toggle cur-pieceix folding? ixs complement? box)))
 
 (defn code-unfold [piece-ix box]
    "Unfolds the piece at piece-ix where the code is folded."
@@ -211,14 +188,13 @@
     {:type :misc :ix0 ix0 :ix1 ix1 :value insert}))
 
 (defn keep-fe-length [box] "Always 3 spacers"
-  (let [ndots 3 pieces0 (:pieces box) txt (apply str (repeat ndots spacer))
-        ooo? #(or (folded? %) (exported? %))
-        pieces1 (mapv #(if (ooo? %) (assoc % :text txt) %) pieces0)]
+  (let [ndots 3 pieces0 (:pieces box) 
+        pieces1 (mapv #(if (folded? %) (assoc % :text ...) %) pieces0)]
     (if (= pieces0 pieces1) box
       (let [ccf (fn [p0 p1 jx0] jx0) cix (:cursor-ix box)]
         ; the spacers count as an e either way, so don't factor into the edit we use:
         (set-precompute
-          (assoc box :pieces (mapv (fn [p] (if (ooo? p) p (update p :text #(string/replace % (str spacer) "e")))) pieces1)
+          (assoc box :pieces (mapv (fn [p] (if (folded? p) p (update p :text #(string/replace % (str spacer) "e")))) pieces1)
             :cursor-ix (rtext/carry-cursor pieces0 pieces1 cix ccf)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -273,35 +249,6 @@
         jx0 (first jx01) jx1 (second jx01)]
     (if four? (assoc box :cursor-ix c-ix1 :selection-start c-ix0 :selection-end c-ix1) ; selects the whole enclosing form.
       (assoc box :cursor-ix (+ c-ix0 jx1) :selection-start (+ c-ix0 jx0) :selection-end (+ c-ix0 jx1)))))
-
-;;;;;;;;;;;;;;;;;;;;;;; Line number updating ;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn update-lineno-info [box num-lines-b4-each-realstring] "Updates the info that is used rendertime to calc line-nos."
-  ; TODO: refactor where we get num-lines-in-each-export rather than num-lines-b4-each-realstring, easier to understand code.
-  (let [piecesu-paths (splay-out box) nu (count piecesu-paths)
-        n-b4su (loop [acc [] ix 0 n-b4 (first num-lines-b4-each-realstring) pix 0]
-                 (if (= ix nu) acc
-                   (let [piece (get-in box (nth piecesu-paths ix))
-                         export? (exported? piece) leaf? (and (not export?) (not (folded? piece)))
-                         next-nb4 (cond export? (nth num-lines-b4-each-realstring (inc pix))
-                                   leaf? (+ n-b4 (num-newlines piece)) :else n-b4)
-                         next-pix (if export? (inc pix) pix)]
-                     (recur (conj acc n-b4) (inc ix) next-nb4 next-pix))))
-        
-        pieces (:pieces box)  n (count pieces)
-        line0 (first num-lines-b4-each-realstring) path2nb4 (zipmap piecesu-paths n-b4su)
-        n-total (let [last-piece (get-in box (last piecesu-paths))] ; # before a hypothetical empty piece added to the end.
-                  (if (exported? last-piece) (last num-lines-b4-each-realstring)
-                    (+ (last n-b4su) (num-newlines (get-in box (last piecesu-paths))))))
-        pieces1 (loop [acc [] ix 0]
-                  (if (= ix n) acc
-                    (let [piece (nth pieces ix)]
-                      (if (and (not (folded? piece)) (not (exported? piece)))
-                        (recur (conj acc piece) (inc ix))
-                        (let [n-b4 (get path2nb4 [:pieces ix])
-                              n-b41 (if-let [nb (get path2nb4 [:pieces (inc ix)])] nb n-total)] 
-                          (recur (conj acc (assoc piece :hidden-nlines (- n-b41 n-b4))) (inc ix)))))))]
-    (assoc box :pieces pieces1 :line-num-start (inc line0))))
 
 ;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Interactions beyond the uasual rtext interactions.
@@ -383,79 +330,38 @@
                 (recur acc1 ; code-unfold keeps things updated.
                        (+ ex-ix (if compact? -1 0)) (inc ix))))))))
 
-(defn u-ixjx [box pix jx]
-  "The [index of unwrapped path, location within unwrapped path], for the pix'th real string's
-   and jx within the real string. Rounds right."
-  (let [uspaths (splay-out box)
-        rsix (real-str-ixs box uspaths)
-        strs (real-strings box)
-        rs-ranges (real-str-ixs box uspaths)
-        real-str-contrib (mapv #(let [p (get-in box %)] (if (or (folded? p) (exported? p)) "" (:text p))) uspaths)
-        
-        ix-0 (get-in rs-ranges [pix 0]) ix-1 (get-in rs-ranges [pix 1]) ; all indexes on uspaths that go to the pix'th real string.
-        n-b4s (into []
-                (reductions + 0 (mapv count (subvec real-str-contrib ix-0 ix-1)))) ; one more element than the subvec
-        index-in-path (+ ix-0 (dec (if-let [x (first (filterv #(>= (nth n-b4s %) jx)
-                                                              (range 1 (count n-b4s))))]
-                                     x (dec (count n-b4s)))))
-        loc-within (- jx (nth n-b4s (- index-in-path ix-0)))]
-    [index-in-path loc-within]))
+(defn cursor-to-real-string [box]
+  "Returns where the cursor is on the real string."
+  (let [box-chop (assoc (rtext/edit box 0 (:cursor-ix box) "" []) :head "")]
+    (- (count (real-string box)) (count (real-string box-chop)))))
 
-(defn select-our-who-has [box who-has-loc n-chars-in-selection]
+(defn real-string-to-cursor [box real-ix]
+  "Returns where the cursor-ix should go to match the real index.
+   Clamps at the ends of the rendered string."
+  (let [uspaths (splay-out box) counts (mapv #(count (piece-real-string %)) (:pieces box))
+        n (count counts)]
+    (loop [ix 0 cx 0 rx (count (get box :head ""))]
+      (if (= ix n) cx
+        (let [piece (nth (:pieces box) ix) ch? (:children piece)
+              +real (nth counts ix) +vis (count (:text piece))]
+          (cond (> real-ix (+ rx +real)) (recur (inc ix) (+ cx +vis) (+ rx +real))
+            ch? cx (<= real-ix rx) cx
+            :else (+ cx (- real-ix rx))))))))
+
+(defn select-on-real-string [box real-ix0 real-ix1]
   "Selects the text on the as-real-as-we-know string, scrolling to the selection and expanding if necessary.
    pix is the ix of the real string, jx0 and jx1 are the ixs within the real string.
    If the jxs go off the end it just maps them to the end."
-  (let [pix (first who-has-loc) jx0 (second who-has-loc) jx1 (+ jx0 n-chars-in-selection)
-  
-        ij0 (u-ixjx box pix jx0)
-        ij1 (u-ixjx box pix jx1)
-       
-        uspaths (splay-out box)
-        have-these-open (subvec uspaths (first ij0) (min (count uspaths) (inc (first ij1))))
-
-        ; Sort long to short to open long paths first:
-        have-these-open (into [] (sort-by #(- (count %)) have-these-open))
-           
-        ; Make sure each path exists and is openable, as opening components can open multiple paths:
-        box1 (reduce (fn [acc p]
-                       (if (and (> (count p) 2) (get-in acc p))
-                          (ensure-visible acc p) acc)) box have-these-open)
-        ij0-1 (u-ixjx box1 pix jx0)
-        ij1-1 (u-ixjx box1 pix jx1)
-        
-        uspaths1 (splay-out box)        
-        n-vis1 (mapv #(if (> (count %) 2) 0 (count (:text (get-in box %)))) uspaths1)
-        
-        ; Selection indexes on rendered string:
-        vis-sel0 (reduce + (second ij0-1) (subvec n-vis1 0 (max 0 (first ij0-1))))
-        vis-sel1 (reduce + (second ij1-1) (subvec n-vis1 0 (max 0 (first ij1-1))))]
-    (rtext/scroll-to-see-cursor
-     (assoc (rtext/scroll-to-see-cursor (assoc box1 :cursor-ix vis-sel1))
-            :cursor-ix vis-sel0 :selection-start vis-sel0 :selection-end vis-sel1))))
-
-(defn cursor-to-real-string [box]
-  "Returns [ix jx] on the real string. Rounds right."
-  (let [uspaths (splay-out box)
-        rsix (real-str-ixs box uspaths) nr (count rsix)
-        
-        n-contrib (mapv #(let [p (get-in box %)] (count (if (or (folded? p) (exported? p)) "" (:text p)))) uspaths)
-        
-        ; (subvec uspaths (get-in rsix [i 0]) (get-in rsix [i 1]))
-        
-        n-vis-contrib (mapv #(if (> (count %) 2) 0 (count (:text (get-in box %)))) uspaths)
-        n-visb4 (into [] (reductions + 0 n-vis-contrib))
-        n-visafr (mapv + n-visb4 n-vis-contrib) n (count n-vis-contrib)
+  (let [selection0 (real-string-to-cursor box real-ix0) 
+        selection1 (real-string-to-cursor box real-ix1)
         cur-ix (:cursor-ix box)
-        pathix-contains-cursor (first (filter #(and (<= (nth n-visb4 %) cur-ix) (> (nth n-visafr %) cur-ix)) (range n)))
-        pathix-contains-cursor (if pathix-contains-cursor pathix-contains-cursor (dec n))
-        
-        
-        ix (first (filter #(< pathix-contains-cursor (get-in rsix [% 1])) (range nr)))
-        ix (if ix ix (dec nr))
-        vis-jx (- cur-ix (n-visb4 pathix-contains-cursor))
-
-        jx (apply + vis-jx (subvec n-contrib (get-in rsix [ix 0]) pathix-contains-cursor))]  
-[ix jx]))
+        hi-ix? (> cur-ix (+ (* 0.5 selection0) (* 0.5 selection1)))
+        scrolled-box (-> box (assoc :cursor-ix (if hi-ix? selection0 selection1))
+                       rtext/scroll-to-see-cursor 
+                       (assoc :cursor-ix (if hi-ix? selection1 selection0))
+                       rtext/scroll-to-see-cursor)]
+    (assoc box :selection-start selection0 :selection-end selection1
+      :cursor-ix (if hi-ix? selection1 selection0))))
 
 ;;;;;;;;;;;;;;;;;;;;; other child UI functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -466,98 +372,45 @@
     (or (> (first ixs) 0) (< (second ixs) n))))
 
 (defn expand-child [mouse-evt box]
-  "Expands a child, when the user clicks on x,y. Works a lot like folding code.
-   Returns [modified-parent new-child].
-   the modified-parent must store the unique-id in order to retrieve it when we use contract-child.
-   Not to be confused with code-unfolding"
-  (let [cur-ix (rtext/cursor-pixel-to-ix box (:X mouse-evt) (:Y mouse-evt))]
-    (code-fold-toggle-at-cursor cur-ix true true box)))
+  "Hilights a section of code. Since we don't really have children we return the unmodified parent.
+   Not to be confused with code-unfolding."
+  (let [cur-ix (rtext/cursor-pixel-to-ix box (:X mouse-evt) (:Y mouse-evt))
+        windowed-box (code-fold-toggle-at-cursor cur-ix true true box)]
+    (if (not= (real-string windowed-box) (real-string box)) (throw (Exception. "Bug in code-fold-toggle-at-cursor"))) ; check.
+    [box windowed-box]))
 
 (defn contract-child [box child]
-  "Contracts a child that has unique-id, returns the modified box.
-   Not to be confused with code-folding."
-   (let [uspath (nth (uspaths-with-export box) (last (:path child)))
-         box1 (update-in box uspath #(assoc (dissoc % :exported?) :children (:pieces child))) ; no visual changes yet.
-         vis-change? (= (count uspath) 2)] ; not bound up in some :children folded up somewhere.
-     (if vis-change? (let [cix-land (inc (rtext/cursor-piece-to-ix box1 (second uspath)))]
-                       (code-fold-toggle-at-cursor cix-land false false box1))
-       box1)))
+  "Since expanding children doesn't really create a child, we don't need to modify the parent."
+  (if (not= (real-string box) (real-string child))
+    (throw (Exception. "Disagreement detected between larger and narrower code views of the same file. Coding bug somewhere..."))))
 
-(defn apply-edits-to-real-string [box edits pix]
-  "Applies the edits to the pix'th real-string, dragging the cursor along. 
-   There are one more real strings than exported children.
-   An edit with :ix0 = 0 will edit the beginning of the pix'th string, etc."
+(defn apply-edits-to-real-string [box edits]
+  "Applies the edits to the real-string, dragging the cursor along.
+   Order of edits matters."
   (if (= (count edits) 0) box
-  (let [uspaths (splay-out box)
-        rsix (real-str-ixs box uspaths)
-        uspath-ix0 (first (nth rsix pix)) uspath-ix1 (second (nth rsix pix)) ; inclusive exclusive for pix. Doesn't include the exported cases.
-        
-        ; Window edits for each piece:
-        editss (loop [acc {} uix uspath-ix0 char-ix 0] ; char-ix is the index on the real string, NOT the visible index.
-                 (if (= uix uspath-ix1) acc
-                   (let [piece (get-in box (nth uspaths uix))]
-                     (if (and (not (folded? piece)) (not (exported? piece))) ; folded pieces are ignored, but any unfolded children aren't.
-                       (let [char-ix1 (+ char-ix (count (:text piece)))
-                             last-piece-to-crunch? (= uix (dec uspath-ix1))
-                             edits1 (stringdiff/window-edits edits char-ix char-ix1 last-piece-to-crunch?)]
-                         (recur (assoc acc uix edits1) (inc uix) char-ix1))
-                       (recur acc (inc uix) char-ix)))))
-        box1 (reduce (fn [bx uix]
-                       (let [eds (get editss uix)]
-                         (update-in bx (conj (nth uspaths uix) :text)
-                           #(stringdiff/apply-edits % eds))))
-               box (keys editss))]
-    (generic-update box box1)))) ;lazy way out.
-
-(defn split-real-string [box pix jx0 jx1]
-  "Splits the real string at pix into two pieces, adding a true :exported?.
-   The stuff between jx0 and jx1 is discarded (it should represent the exported stuff)."
-  (let [box (update box :pieces _rml)
-        uspaths-all (splay-out box)
-        ndots 3
-        all-rstixs (real-str-ixs box uspaths-all)
-        
-        uix0 (first (nth all-rstixs pix)) uix1 (second (nth all-rstixs pix))
-        
-        uspathsw (subvec uspaths-all uix0 uix1) ; uspaths windowed, windowed = all uspaths that map to pix.
-        nu (count uspathsw)
-
-        leaf?s (mapv #(let [p (get-in box %)] (not (or (folded? p) (exported? p)))) uspathsw)
-        nreal-charsw (mapv #(let [p (get-in box %1)] (if %2 (count (:text p)) 0)) uspathsw leaf?s)
-        
-        nreal-chars-b4-eachw (into [] (reductions + 0 nreal-charsw))
-
-        ; for not splitting, we will create a zero-length piece somewhere:
-        ix-split0 (first (filter #(and (> (nth nreal-charsw %) 0) (>= (+ (nth nreal-chars-b4-eachw %) (nth nreal-charsw %)) jx0)) (range nu))) 
-        ix-split1 (first (filter #(and (> (nth nreal-charsw %) 0) (>= (+ (nth nreal-chars-b4-eachw %) (nth nreal-charsw %)) jx1)) (range nu)))
-        
-        piecesw0 (mapv #(get-in box %) uspathsw)
-        piecesw1 (concat (subvec piecesw0 0 ix-split0)
-                   [(update (nth piecesw0 ix-split0) :text
-                     #(subs % 0 (- jx0 (nth nreal-chars-b4-eachw ix-split0))))
-                    {:exported? true :text (apply str (repeat ndots spacer))}
-                   (update (nth piecesw0 ix-split1) :text
-                     #(subs % (- jx1 (nth nreal-chars-b4-eachw ix-split1))))]
-                     (subvec piecesw0 (inc ix-split1)))
-        
-        nstub (dec (if-let [x (first (filterv (fn [ix] (> (count (apply hash-set (mapv #(get % ix) uspathsw))) 1))
-                                       (range (count (first uspathsw)))))] x (count (first uspathsw))))
-
-        p-new (let [p (nth uspathsw ix-split0)] (update p (dec (count p)) inc)) ; same as ix-split0 but with the last indexed upped by 1.
-        bump? (fn [p] (let [nu (count p-new)] ; use this bump fn when p is after p-new
-                        (and (>= (count p) nu) (= (subvec p 0 (dec nu)) (subvec p-new 0 (dec nu))))))
-        bump (let [p1 (nth uspathsw ix-split1)]
-               (if (bump? p1) (- (last p-new) (dec (last p1))))) ;only defined if we bump the first after piece, if we don't no pieces are bumped.
-
-        pathsw+ (mapv (fn [p] (if (bump? p) (update p (dec (count p-new)) #(+ % bump)) p)) (subvec uspathsw ix-split1))
-        uspathsw1 (concat (subvec uspathsw 0 (inc ix-split0)) [p-new] pathsw+)
-
-        ; Remove the old paths:
-        box1 (reduce #(assoc-in %1 %2 {:text ""}) box (subvec uspathsw ix-split1))
-        ; Add in the new paths:
-        box2 (reduce #(assoc-in %1 (first %2) (second %2)) box1 (mapv vector uspathsw1 piecesw1))]
-    ; lazy way out:
-    (generic-update box (update box2 :pieces _rml))))
+    (let [map2vec (fn [m] (mapv #(get m % {:text ""}) (range (inc (apply max (keys m))))))
+          piecesu (splay-out+ box)
+          piecesu (mapv #(if (:children %) (assoc % :text "") %) piecesu) ; real string 1:1 with rendered string.
+          piecesu (mapv #(dissoc % :children) piecesu) ; children will be re-added.
+          piecesu (mapv #(assoc % :tmp-path1 (:tmp-path %)) piecesu)
+          shadow-box (reduce #(rtext/dispatch-edit-event %1 %2) (assoc box :pieces piecesu :head "" :foot "") edits)
+          piecesu1 (splay-out+ shadow-box)
+          piecesu1 (mapv #(dissoc (assoc % :tmp-path (:tmp-path1 %)) :tmp-path1) piecesu1)
+          
+          box1 (reduce #(assoc-in %1 (:tmp-path %2) (dissoc %2 :tmp-path)) (dissoc box :pieces) 
+                  (subvec piecesu1 1 (dec (count piecesu1))))
+          box1 (update box1 :pieces map2vec)
+          box1 (walk/postwalk #(if (:children %) (update (assoc % :text ...) :children map2vec) %) box1)
+          box1 (assoc box1 :head (:text (first piecesu1)) :foot (:text (last piecesu1)))
+          pr #(vector (:tmp-path %) (count (:text %)))]
+    #_(println "paths:" (mapv pr piecesu) "|" (mapv pr piecesu1) "|"
+      (mapv pr (splay-out+ box1)))
+    #_(println "Real-str edit test:" 
+        "Edits needed:" (pr-str edits)
+        "Should = needed (shadow test):" (pr-str (stringdiff/edits-between (real-string box) (real-string shadow-box)))
+        "Should = needed (piecesu1 test):" (pr-str (stringdiff/edits-between (real-string box) (apply str (mapv :text piecesu1))))
+        "Should = needed (box1 test):" (pr-str (stringdiff/edits-between (real-string box) (real-string box1))))
+      (generic-update box box1)))) ;lazy way out.
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -576,7 +429,12 @@
     (zipmap (keys code) (mapv #(list `fn ['& a1] (list `apply % a1)) (vals code)))))
 (defn interact-fns [] (updaty-fns
   {:dispatch dispatch
-   :render rtext/render
+   :render (fn [box & show-cursor?] 
+             (let [head (get box :head "") foot (get box :foot "")
+                   title (str (:path box)
+                           (if (> (count (str head foot)) 0)
+                             (str " (" (count head) ":-" (count foot) ")") ""))]
+               (apply rtext/render (assoc box :path title) show-cursor?)))
    :expandable? expandable?
    :expand-child expand-child :contract-child contract-child
-   :is-child? (fn [box] (> (count (:path box)) 1))})) 
+   :is-child? (fn [box] false)})) 

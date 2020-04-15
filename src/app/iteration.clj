@@ -97,7 +97,7 @@
         
         child-process (let [cp (:child-process s)] 
                         (if (or cp (not (globals/can-child?))) cp (throw (Exception. "No child process, should be set up by code"))))
-        ;_ (throw (Exception. "Save disabled for safety reasons.")) ; DEBUG safety.
+        ;_ (throw (Exception. "Save disabled for safety reasons.")) ; DEBUG safety that can be enabled in rare cases.
         _  (mapv #(do (jfile/rename!! %1 %2)) (keys renamed-map) (vals renamed-map))
         rename-msgs1 (mapv #(if (jfile/clj? %) (update-ns1! "Renamed from: " % child-process) (str "Renamed from:" %)) (keys renamed-map))
         rename-msgs2 (mapv #(if (jfile/clj? %) (update-ns1! "Renamed to: " % child-process) (str "Renamed from:" %)) (vals renamed-map))
@@ -131,7 +131,7 @@
         disk (get-disk (globals/get-working-folder) false)
 
         comps (:components s) codeboxks (filterv #(= (:type (get comps %)) :codebox) (keys comps))
-        open (apply hash-set (mapv #(first (:path (get comps %))) codeboxks))
+        open (apply hash-set (mapv #(:path (get comps %)) codeboxks))
         new2?old (multicomp/new2?old-files s)
         open2text (zipmap (into [] open)
                     (mapv #(multicomp/open-cache s %) (into [] open)))

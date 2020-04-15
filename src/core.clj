@@ -179,8 +179,8 @@
     (if (and fname non-folder?) 
       (let [lix (fbrowser/pixel-to-line comp (:X evt) (:Y evt))
             pos (:position comp) sz (:size comp)
-            cbox (assoc (if (jfile/exists? fname) (assoc (multicomp/load-from-file (:components s) fname) :path [fname]) 
-                          (assoc (codebox/new-codebox) :path [fname])) 
+            cbox (assoc (if (jfile/exists? fname) (assoc (multicomp/load-from-file (:components s) fname) :path fname) 
+                          (assoc (codebox/new-codebox) :path fname)) 
                    :position (mapv + pos (mapv * sz [0.25 0.75])))
             s1 (assoc-in s [:components compk] comp)]
         (add-component s1 cbox (gensym 'codebox))) s)))

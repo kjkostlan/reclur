@@ -640,6 +640,7 @@
     (scroll-bound (scroll box (if horiz? delta 0) (if horiz? 0 delta)))))
 
 (defn dispatch-edit-event [box ed]
+  "Doesn't clear empty pieces."
   (let [box (v box) ty (:type ed)
         copy! (fn [] ; maybe make this customizable?
                  (let [x0 (:ix0 ed) x1 (:ix1 ed)] ; selection indexes.
@@ -659,7 +660,7 @@
                         x (if agree? (:ixs (meta x)) [])))
       (= ty :save) box; We don't handle saves here, just do nothing.
       (= ty :arrow) (arrow-cursor box (:value ed) (:ShiftDown ed))
-      (= ty :type) (edit box (:ix0 ed) (:ix1 ed) (:value ed) [])
+      (and (:ix0 ed) (:ix1 ed) (:value ed)) (edit box (:ix0 ed) (:ix1 ed) (:value ed) []) ; Usually :type edits.
       :else box)))
 
 (defn key-press [key-evt box]
