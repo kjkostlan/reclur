@@ -7,6 +7,7 @@
             [app.multicomp :as multicomp]
             [app.fbrowser :as fbrowser]
             [app.orepl :as orepl]
+            [app.codebox :as codebox]
             [app.siconsole :as siconsole])
   (:import [java.util.regex Pattern]))
 
@@ -36,10 +37,11 @@
             (recur (conj acc [(+ nb4 ni) (+ nb4 ni nl)])
                    (+ nb4 ni nl) (inc ix)))))))
 
-(defn find1 [txt ky case? ix dir wrap?]
+(defn find1 [txt opts ix wrap?]
   "Finds the previous or next instance from ix (depending on the sign of dir).
    ky can be a string or regexp. Returns [start ix, end ix] or nil."
-  (let [all-pairs (boring-find txt ky case?)] ; don't know of a better way than just running the whole string.
+  (let [ky (:key opts) case? (:case opts) dir (if (:reverse? opts) -1 1)
+        all-pairs (boring-find txt ky case?)] ; don't know of a better way than just running the whole string.
     (if (< dir 0)
       (let [last-b4 (last (filterv #(<= (last %) ix) all-pairs))]
         (if last-b4 last-b4 (if wrap? (last all-pairs))))
@@ -48,51 +50,66 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Working with the app state ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defn search-step1-naive [component opts wrap?]
+  "Just uses the text itself."
+  (let [txt (rtext/rendered-string component)
+        cur-ix (:cursor-ix component)
+        ixs1? (find1 txt opts cur-ix wrap?)]
+    (if ixs1? (rtext/scroll-to-see-cursor
+               (assoc component :cursor-ix (first ixs1?)
+                 :selection-start (first ixs1?)
+                 :selection-end (second ixs1?))))))
+
+(defn search-step1-codebox [component opts wrap?]
+  "Nil if failed."
+  (let [txt (codebox/real-string component)
+        cix (if (< (:selection-start component) (:selection-end component)) 
+              (if (:reverse? opts) (min (:cursor-ix component) (:selection-start component))
+                (max (:cursor-ix component) (:selection-end component)))
+              (:cursor-ix component))
+        real-ix (codebox/cursor-to-real-string (assoc component :cursor-ix cix))
+        ixs1? (find1 txt opts real-ix wrap?)
+        comp1 (if ixs1? (rtext/scroll-to-see-cursor
+                          (apply codebox/select-on-real-string component ixs1?)))]
+    comp1))
+
 (defn search-step [s opts] 
-  "Runs a single step."
+  "Every time search is called."
   (let [boxk (:boxk opts) comps (:components s)
         compk (:target opts) comp (get comps compk)
-        go-fn0 (:goto (:layout s)) ;[s k key-is-file? char-ix0 char-ix1]
-        go-fn (fn [s k key-is-file? char-ix0 char-ix1] 
-                (let [s1 ((:goto (:layout s)) s k key-is-file? char-ix0 char-ix1)
-                      cam0 (:camera s) cam1 (:camera s1)
-                      max-z (layoutcore/max-z {:components (dissoc (:components s1) boxk)})]
-                  (update-in s1 [:components boxk] #(assoc (layoutcore/dont-move % cam0 cam1) :z (inc max-z)))))
-        fail (fn [] (siconsole/log s (str "not found: " (pr-str (:key opts)))))
-        file2k (fn [filename]
-                 (first (filterv #(let [c (get comps %)] 
-                                    (and (= (:type c) :codebox) (= (count (:path c)) 1) (= (first (:path c)) filename)))
-                   (keys comps))))] 
+        fail (fn [] (siconsole/log s (str "not found: " (pr-str (:key opts)))))] 
     (cond (or (:dumb-text? opts) (and (not= (:type comp) :codebox) (not= (:type comp) :fbrowser)))
-      (let [txt (rtext/rendered-string comp)
-            cur-ix (:cursor-ix comp)
-            ix1? (find1 txt (:key opts) (:case? opts) cur-ix (if (:reverse? opts) -1 1) true)]
-        (if ix1? (go-fn s compk false (first ix1?) (second ix1?)) (fail)))
+      (if-let [comp1 (search-step1-naive comp opts true)] (assoc-in s [:components compk] comp1) (fail))
       (= (:type comp) :codebox)
-      (let [fname (first (:path comp))
-            txt (multicomp/open-cache s fname)
-            k0 (file2k fname)
-            cur-ix (second (multicomp/cursor-locate s k0))
-            ix1? (find1 txt (:key opts) (:case? opts) cur-ix (if (:reverse? opts) -1 1) true)]
-        (if ix1? (go-fn s fname true (first ix1?) (second ix1?)) (fail)))
+      (if-let [comp1 (search-step1-codebox comp opts true)] (assoc-in s [:components compk] comp1) (fail))
       :else ;fbrowser
-      (let [files (filterv jfile/texty? (fbrowser/recursive-unwrap (fbrowser/devec-file (:path comp)))) nf (count files)
-            comps (:components s)]
-        (if (= nf 0)
-          (fail)
-          (let [file-ix (if (:index opts) (:index opts) 0) 
-                fix?1 (loop [ix file-ix nloop 0]
-                        (if (<= nloop nf) 
-                          (let [fname (nth files ix)
-                                txt (jfile/open fname)
-                                k0? (file2k fname)
-                                cur-ix (if k0? (second (multicomp/cursor-locate s k0?))
-                                         (if (:reverse? opts) (count txt) -1))
-                                sel-ix? (find1 txt (:key opts) (:case? opts) cur-ix (if (:reverse? opts) -1 1) false)]
-                            (if sel-ix? [fname (first sel-ix?) (second sel-ix?)] 
-                              (recur ((if (:reverse? opts) wix- wix+) files ix) (inc nloop))))))]
-            (if fix?1 (go-fn s (first fix?1) true (second fix?1) (nth fix?1 2)) 
-              (fail))))))))
+      (let [files (into [](sort (filterv jfile/texty? (fbrowser/recursive-unwrap (fbrowser/devec-file (:path comp))))))
+            file-order (zipmap files (range))
+            comps (:components s) nf (count files)
+            codeboxks (filterv #(= (:type (get comps %) :codebox)) (keys comps))
+            cur-box (apply max-key #(get-in comps [% :z]) codeboxks)
+            first-match? (fn [fname] (find1 (jfile/open fname) opts (if (:reverse? opts) 1e100 0) false))
+            next-file (fn [fname] 
+                        (let [fiix (get file-order fname 0)
+                              flist ((if (:reverse? opts) reverse identity)
+                                     (concat (subvec files 0 fiix) (subvec files (inc fiix))))]
+                          (first (filter first-match? flist))))
+            go-fn0 (:goto (:layout s)) ;[s k key-is-file? char-ix0 char-ix1]
+            afloat (fn [s1 fname]
+                     (let [max-z (apply max (mapv :z (vals comps)))]
+                       (assoc s1 :components
+                         (zipmap (keys (:components s1))
+                           (mapv #(if (and (= (:type %) :codebox)
+                                        (= (:path %) fname))
+                                    (assoc % :z (inc max-z)) %) 
+                             (vals (:components s1)))))))
+            go-fn (fn [fname ix0 ix1] (afloat (go-fn0 s fname ix0 ix1) fname))
+            local-attempt (if cur-box (search-step1-codebox (get comps cur-box) opts false))]
+        (cond (= nf 0) (fail)
+          (not local-attempt)
+          (let [file1 (next-file (:path (get comps cur-box)))]
+            (if file1 (apply go-fn file1 (first-match? file1)) (fail)))
+          :else (assoc-in s [:components cur-box] local-attempt))))))
 
 (defn pretty [code]
   (with-out-str (clojure.pprint/pprint code)))

@@ -41,20 +41,14 @@
 (defn unqual [qual-sym]
   "Unqualified symbol."
   (symbol (subs (str qual-sym) (inc (count (str (ns-of qual-sym)))))))
-
+ 
 (defn resolved [ns-sym code-sym]
   "Resolves code-sym in ns-sym, which depends on the :requires, :imports, etc.
    Returns a fully qualified symbol."
   (let [ns-ob (find-ns ns-sym)
         _ (if (not ns-ob) (throw (Exception. (str "Namespace: " (pr-str ns-sym) " not found."))))
-        var-ob (ns-resolve ns-ob code-sym)
-        native-ns-ob (:ns (meta var-ob))]
-    (if native-ns-ob
-      (let [native-ns-sym (ns-name native-ns-ob)
-            sym2var (ns-map native-ns-sym) 
-            var2sym (zipmap (vals sym2var) (keys sym2var))
-            unqualed (get var2sym var-ob)] 
-        (if unqualed (qual native-ns-sym unqualed))))))
+        var-ob (ns-resolve ns-ob code-sym)]
+    (if var-ob (symbol (subs (str var-ob) 2)))))
 
 (defn file2ns [file]
   "Converts a local filepath to a namespace symbol."
@@ -84,7 +78,7 @@
   (into [] (keys (ns-interns ns-sym))))
 
 (defn valid-symbols [ns-sym]
-  "All recognized symbols of the namespace, with qualifications, etc.
+  "All recognized symbols of the namespace, with :as qualifications, etc.
    TODO: java imports."
  (let [x (ns-aliases ns-sym)
        as2ns (zipmap (keys x) (mapv ns-name (vals x)))
@@ -99,8 +93,10 @@
 (defn auto-complete [ns-sym code-partial-sym]
   "Provides a list of symbols which contain code-partial-sym."
   (let [valids (valid-symbols ns-sym)
+        valid-quals (mapv #(resolved ns-sym %) valids)
         ^String s (str code-partial-sym)
-        matches (filterv #(.contains ^String (str %) s) valids)]
+        matches (filterv #(.contains ^String (str %) s) 
+                  (concat valids valid-quals))]
     (into [] (sort matches))))
 
 (defn get-code [file line col assert?]

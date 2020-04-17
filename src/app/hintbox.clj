@@ -3,6 +3,7 @@
   (:require [app.rtext :as rtext]
     [coder.plurality :as plurality]
     [coder.cbase :as cbase]
+    [app.orepl :as orepl]
     [app.codebox :as codebox]
     [app.selectmovesize :as selectmovesize]))
 
@@ -72,7 +73,7 @@
       (symbol (str piece))
       (symbol? sym)
       (let [ns-sym (if (= (:type cbox) :orepl) 'app.orepl
-                     (cbase/file2ns (first (:path cbox))))
+                     (cbase/file2ns (:path cbox)))
             sym-resolved (cbase/resolved ns-sym sym)]
         (if sym-resolved (with-meta sym-resolved {:resolved? true}) sym))
       :else sym)))
@@ -84,7 +85,7 @@
 (defn codebox-hint [s cbox]
   "Generates a component based on the cursor's position in the codebox.
    nil = no hint could be found, so no box generated."
-  (let [x (whats-at-cursor cbox) mx (meta x)]
+  (let [x (whats-at-cursor cbox) mx (meta x) ty (:type cbox)]
     (cond (nil? x) (add-hint-box s cbox ["Nothing here"] :doc)
       (and (symbol? x) (:special? mx))
       (add-hint-box s cbox [(str x) " (special form)" ] :doc)
@@ -96,7 +97,9 @@
                   (str "\n" doc)]]
         (add-hint-box s cbox txts :doc))
       (symbol? x)
-      (let [ns-sym (cbase/file2ns (first (:path cbox)))
+      (let [ns-sym (cond (= ty :orepl) (symbol (str orepl/r-ns))
+                     (= ty :codebox) (cbase/file2ns (:path cbox))
+                     :else (symbol (str *ns*)))
             hints (cbase/auto-complete ns-sym x)]
         (if (> (count hints) 0)
           (add-hint-box s cbox [(_lineanate hints)] :autocomplete)

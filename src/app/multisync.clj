@@ -12,7 +12,7 @@
     [app.fbrowser :as fbrowser]))
 
 ;;;;;;;;;;;;;;;;; Simple collection stuff ;;;;;;;;;;;;;;;;;
-
+ 
 (defn comp-eq? [c0 c1]
   (= (:pieces c0) (:pieces c1)))
 
@@ -50,10 +50,11 @@
     (map-filter (zipmap (keys u2c) (mapv #(::childtag (get-in comp %)) (keys u2c))) 
       #(and % (> (count %) 0)))))
 
-(defn chk2chpath [comp multi?]
+(defn chk2chpath [comp multi? codebox-are-children?]
   "Mapping from child keys to child paths, used to update child paths.
    Multi false: If a child key is mapped to multible paths this fn will only return one of them.
-   Multi true: Always returns a vector of paths."
+   Multi true: Always returns a vector of paths.
+   codebox-children?: Makes each path a string rather than a vector."
   (let [us2ch (uspath2chpath comp) 
         us2ch-kvecs (uspath2chtag comp)
         
@@ -64,20 +65,24 @@
                        {} (keys us2ch-kvecs))        
         chk2ch (if multi? (zipmap (keys chk2us) (mapv (fn [k] (mapv #(get us2ch %) (get chk2us k))) (keys chk2us)))
                  (zipmap (keys chk2us) (mapv #(get us2ch (get chk2us %)) (keys chk2us))))
-        chk2ch (map-filter chk2ch #(and % (> (count %) 0)))] chk2ch))
+        chk2ch (map-filter chk2ch #(and % (> (count %) 0)))
+        devec #(if (vector? %) (apply str (interpose "/" %)) %)]
+    (if codebox-are-children? 
+      (zipmap (keys chk2ch)
+        (mapv (if multi? #(mapv devec %) devec) (vals chk2ch)))
+      chk2ch)))
 
-(defn update-paths [comps ck2ch-last ck2ch]
+(defn update-paths [comps key2path-last key2path]
   "Also deletes components if they are found in the old and not the new.
-   ck2ch-last and ck2ch are the old and new child -> paths maps."
+   Note: ::childtag is used to store what children are linked to said location within the parent."
   (reduce (fn [acc k]
-            (let [ch-path (get ck2ch k)] ; if the link is still there make sure the path is up-to-date.
-              (cond (and (not ch-path) (not (get ck2ch-last k))) ; our path is not in a changed component.
+            (let [new-path (get key2path k)] ; if the link is still there make sure the path is up-to-date.
+              (cond (and (not new-path) (not (get key2path-last k))) ; delete!
                 acc
-                (not ch-path) ; our path is no more.
+                (not new-path) ; our path is no more.
                 (dissoc acc k)
-                (not= (get-in acc [k :path]) ch-path) ; changed path.
-                (assoc-in acc [k :path] (if (= (:type (get acc k)) :codebox) 
-                                          (apply str (interpose "/" ch-path)) ch-path)) 
+                (not= (get-in acc [k :path]) new-path) ; changed path.
+                (assoc-in acc [k :path] new-path) 
                 :else acc)))
     comps (keys comps)))
 
@@ -140,11 +145,12 @@
   (reduce
    (fn [acc kdiff]
      (let [comp (get acc kdiff)
-           chk2chpaths (chk2chpath comp true) ; will keys map to multible paths?
+           chk2chpaths (chk2chpath comp true false) ; will keys map to multible paths?
            ; Only unique paths:
            chk2chpaths (zipmap (keys chk2chpaths) (mapv #(into [] (apply hash-set %)) (vals chk2chpaths)))
            ch2us (chpath2uspath comp)
-           n (count chk2chpaths) kys (into [] (keys chk2chpaths))]
+           n (count chk2chpaths) kys (into [] (keys chk2chpaths))
+           devec #(if (coll? %) (apply str (interpose "/" %)) %)]
        (loop [acci acc compi comp ix 0] ; modify both the comp's ::childtag and add stuff to comps.
          (if (= ix n) (assoc acci kdiff comp)
              (let [k (nth kys ix) phs (get chk2chpaths k)
@@ -156,7 +162,7 @@
                                           (range (dec ni))) k)
                        ch-comp (get acci k)                       
                        compi1 (reduce #(assoc-in %1 (conj (get ch2us (nth phs %2)) ::childtag) (nth new-ks %2)) compi (range ni))
-                       ;acci1 (reduce #(assoc %1 (nth new-ks %2) (assoc ch-comp :path (nth phs %2))) acci (range ni))
+                       ;acci1 (reduce #(assoc %1 (nth new-ks %2) (assoc ch-comp :path (devec (nth phs %2)))) acci (range ni))
                        acci1 (copy-with-descendents acci k new-ks phs)] ; copy us and all descendents.
                    (recur acci1 compi1 (inc ix)))))))))
    components kys-diff))
@@ -183,8 +189,8 @@
         kys-diff (apply hash-set (filterv #(not (comp-eq? (get fbrowsers-last %) (get fbrowsers %))) (set/intersection kys0 kys1)))
         
         ; Changed parents causing update paths of children or deleting children:
-        ck2ch-last (apply merge (mapv #(chk2chpath (get fbrowsers-last %) false) kys-diff))  
-        ck2ch (apply merge (mapv #(chk2chpath (get fbrowsers %) false) kys-diff))          
+        ck2ch-last (apply merge (mapv #(chk2chpath (get fbrowsers-last %) false false) kys-diff))
+        ck2ch (apply merge (mapv #(chk2chpath (get fbrowsers %) false false) kys-diff))
         fbrowsers1 (update-paths fbrowsers ck2ch-last ck2ch)
         
         ; Deleted parents causing deleted children (must check to ensure the filepath is not in some other component).
@@ -245,28 +251,8 @@
         kys-new (set/difference kys1 kys0) kys-del (set/difference kys0 kys1)
         kys-diff (apply hash-set (filterv #(not (comp-eq? (get fbrowsers0 %) (get fbrowsers %))) (set/intersection kys0 kys1)))
         
-        ck2ch0 (apply merge (mapv #(chk2chpath (get fbrowsers0 %) false) (set/union kys-del kys-diff)))  
-        ck2ch (apply merge (mapv #(chk2chpath (get fbrowsers %) false) kys-diff))
-        
-        ;_ (if (= (count kys-diff) 1) (println "ck2ch stuff:" kys-del kys-diff ck2ch0 ck2ch "guess stuff:" (chk2chpath (get fbrowsers0 (first kys-diff)) false)))
-        
-        ; Change these to deveced paths to drag codebox paths along:
-        dv (fn [m] (zipmap (keys m) (mapv #(vector (fbrowser/devec-file %)) (vals m))))
-        ck2ch0 (dv ck2ch0) ck2ch (dv ck2ch)
-
-        ; Also change children:
-        kys0-codebox (keys codeboxes0) kys1-codebox (keys codeboxes)
-        ;topk2kys0 (codebox-topk2kys codeboxes0 (keys ck2ch0))
-        topk2kys (codebox-topk2kys codeboxes (keys ck2ch))
-
-        ck2ch0 (reduce (fn [acc k] (let [kys (if-let [x (get topk2kys k)] x [])
-                                         p0 (get ck2ch0 k)]
-                                     (merge acc (zipmap kys (mapv #(into [] (concat p0 (rest (:path (get codeboxes %))))) kys)))))
-                       ck2ch0 (keys ck2ch0))
-        ck2ch (reduce (fn [acc k] (let [kys (if-let [x (get topk2kys k)] x [])
-                                        p0 (get ck2ch k)]
-                                     (merge acc (zipmap kys (mapv #(into [] (concat p0 (rest (:path (get codeboxes %))))) kys)))))
-                       ck2ch (keys ck2ch))
+        ck2ch0 (apply merge (mapv #(chk2chpath (get fbrowsers0 %) false true) (set/union kys-del kys-diff)))  
+        ck2ch (apply merge (mapv #(chk2chpath (get fbrowsers %) false true) kys-diff))
         
         codeboxes1 (update-paths codeboxes ck2ch0 ck2ch)]
     codeboxes1))

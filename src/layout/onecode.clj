@@ -44,61 +44,52 @@
   (let [s1 (add-component s comp kwd false)]
     (update-in s1 [:components kwd] f)))
 
-(defn _goto-code [s k key-is-file? char-ix0 char-ix1 force-new?]
-  (if key-is-file? ; the more complex one that may make a new component if need be and must go to the char-ix on the real string.
-    (let [kys-curix (multicomp/who-has s k char-ix0)
-          kys (mapv first kys-curix)
-          curixs (mapv second kys-curix)
-          comps (:components s)
+(defn _goto-code [s k char-ix0 char-ix1 force-new?]
+  (let [kys-curix (multicomp/who-has s k char-ix0)
+        kys (mapv first kys-curix)
+        curixs (mapv second kys-curix)
+        comps (:components s)
+        vis-xxyy (layoutcore/visible-xxyy (:camera s))
+        comp-uxxyys (mapv #(layoutcore/unitscreen-xxyy vis-xxyy (layoutcore/xxyy (get comps %))) kys)
+        threshold-on-screen 0.75 ; below this = new component.
+        comp-ucenterxs (mapv #(+ (* 0.5 (% 0)) (* 0.5 (% 1))) comp-uxxyys)
+        comp-ucenterys (mapv #(+ (* 0.5 (% 2)) (* 0.5 (% 3))) comp-uxxyys)
+        kyix (first
+              (filter
+               #(let [uxxyy (nth comp-uxxyys %) dx (max 0.001 (- (uxxyy 1) (uxxyy 0)))
+                      dy (max 0.001 (- (uxxyy 3) (uxxyy 2)))
+                      fracx (/ (max 0.0 (max (- (uxxyy 1) 1) (- (uxxyy 0)))) dx)
+                      fracy (/ (max 0.0 (max (- (uxxyy 3) 1) (- (uxxyy 2)))) dy)]
+                  (< (max fracx fracy) threshold-on-screen))
+               (range (count comp-uxxyys))))
+        ky (if kyix (nth kys kyix))
+        who-has? (> (count kys) 0)
+        z-1 (+ (layoutcore/max-z (update s :components (fn [cs] (select-keys cs (filterv #(= (:type (get cs %)) :codebox) (keys cs)))))) 1.0)
+        hilite #(assoc (rtext/scroll-to-see-cursor (codebox/select-on-real-string % char-ix0 char-ix1)) :z z-1)] ; fresh codebox.
+    (cond (and (not force-new?) ky) ; The comp is close enough, move to the key and adjust the key to select us.
+      (update-in s [:components ky] hilite)
+      who-has? ; no comps close enough, but can copy one of them (must make a copy since all exported stuff must be in agreement).
+      (let [comp (get comps (first kys)) ; copy and move this comp.
+            ky1 (keyword (gensym 'goto-target))]
+        (add-then s comp ky1 hilite))
+      :else ; no comps at all, must make them.
+      (let [comp (multicomp/load-from-file comps k)
+            ky1 (keyword (gensym 'goto-target))]
+        (add-then s comp ky1 hilite)))))
 
-          vis-xxyy (layoutcore/visible-xxyy (:camera s))
-          comp-uxxyys (mapv #(layoutcore/unitscreen-xxyy vis-xxyy (layoutcore/xxyy (get comps %))) kys)
-          
-          threshold-on-screen 0.75 ; below this = new component.
-          comp-ucenterxs (mapv #(+ (* 0.5 (% 0)) (* 0.5 (% 1))) comp-uxxyys)
-          comp-ucenterys (mapv #(+ (* 0.5 (% 2)) (* 0.5 (% 3))) comp-uxxyys)
-          kyix (first
-                (filter
-                 #(let [uxxyy (nth comp-uxxyys %) dx (max 0.001 (- (uxxyy 1) (uxxyy 0)))
-                        dy (max 0.001 (- (uxxyy 3) (uxxyy 2)))
-                        fracx (/ (max 0.0 (max (- (uxxyy 1) 1) (- (uxxyy 0)))) dx)
-                        fracy (/ (max 0.0 (max (- (uxxyy 3) 1) (- (uxxyy 2)))) dy)]
-                    (< (max fracx fracy) threshold-on-screen))
-                 (range (count comp-uxxyys))))
-          ky (if kyix (nth kys kyix))
-          who-has? (> (count kys) 0)
-          z-1 (+ (layoutcore/max-z (update s :components (fn [cs] (select-keys cs (filterv #(= (:type (get cs %)) :codebox) (keys cs)))))) 1.0)
-          hilite #(assoc (codebox/select-on-real-string % char-ix0 char-ix1) :z z-1)] ; fresh codebox.
-      (cond (and (not force-new?) ky) ; The comp is close enough, move to the key and adjust the key to select us.
-        (update-in s [:components ky] hilite)
-        who-has? ; no comps close enough, but can copy one of them (must make a copy since all exported stuff must be in agreement).
-        (let [comp (get comps (first kys)) ; copy and move this comp.
-              ky1 (keyword (gensym 'goto-target))]
-          (add-then s comp ky1 hilite))
-        :else ; no comps at all, must make them.
-        (let [comp (multicomp/load-from-file comps k)
-              ky1 (keyword (gensym 'goto-target))]
-          (add-then s comp ky1 hilite))))
-    (let [comp (get-in s [:components k])
-          z-1 (+ (layoutcore/max-z s) 1.0)
-          _ (if (not comp) (throw (Exception. "Nil component for dumb search.")))
-          ; Dumb text-as-is search:
-          comp1 (assoc comp :cursor-ix char-ix0 :selection-start char-ix0 :selection-end char-ix1 :z z-1)]
-      (assoc-in s [:components k] (rtext/scroll-to-see-cursor comp1)))))
-
-(defn goto-code [s k key-is-file? char-ix0 char-ix1]
+(defn goto-code [s filename char-ix0 char-ix1]
   "Manipulates s by going to the filename or component between char-ix0 and char-ix1.
    If there is something already open within view we can simply use it, otherwise open a new component.
    for key-is-file? we go to the real text in char-ix0 and char-ix1, which may involve opening a component.
    Otherwise we go to the component specified."
-  (_goto-code s k key-is-file? char-ix0 char-ix1 false))
+  (_goto-code s filename char-ix0 char-ix1 false))
 
 (defn goto-codes [s filenames char-ix0s char-ix1s]
   "Like multible goto-codes."
   (let [n (count filenames)
         sc (loop [ix 0 s-acc s new-comps []]
              (if (= ix n) [s-acc new-comps]
-               (let [s1 (_goto-code s-acc (nth filenames ix) true (nth char-ix0s ix) (nth char-ix1s ix) true)
+               (let [s1 (_goto-code s-acc (nth filenames ix) (nth char-ix0s ix) (nth char-ix1s ix) true)
                      z (layoutcore/max-z s1) comps (:components s1)
                      comp-k (first (filterv #(= (:z (get comps %)) z) (keys comps)))]
                  (recur (inc ix) s1 (conj new-comps comp-k)))))

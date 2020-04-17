@@ -335,25 +335,27 @@
   (let [box-chop (assoc (rtext/edit box 0 (:cursor-ix box) "" []) :head "")]
     (- (count (real-string box)) (count (real-string box-chop)))))
 
-(defn real-string-to-cursor [box real-ix]
+(defn real-string-to-cursor [box real-ix folded-rule]
   "Returns where the cursor-ix should go to match the real index.
-   Clamps at the ends of the rendered string."
-  (let [uspaths (splay-out box) counts (mapv #(count (piece-real-string %)) (:pieces box))
-        n (count counts)]
+   Clamps at the ends of the rendered string.
+   use -1 or 1 for folded-rule."
+  (let [counts (mapv #(count (piece-real-string %)) (:pieces box))
+        n (count (:pieces box))]
     (loop [ix 0 cx 0 rx (count (get box :head ""))]
       (if (= ix n) cx
         (let [piece (nth (:pieces box) ix) ch? (:children piece)
               +real (nth counts ix) +vis (count (:text piece))]
           (cond (> real-ix (+ rx +real)) (recur (inc ix) (+ cx +vis) (+ rx +real))
-            ch? cx (<= real-ix rx) cx
+            ch? (if (<= folded-rule 0) cx (+ cx +vis)) (<= real-ix rx) cx
             :else (+ cx (- real-ix rx))))))))
 
 (defn select-on-real-string [box real-ix0 real-ix1]
   "Selects the text on the as-real-as-we-know string, scrolling to the selection and expanding if necessary.
    pix is the ix of the real string, jx0 and jx1 are the ixs within the real string.
-   If the jxs go off the end it just maps them to the end."
-  (let [selection0 (real-string-to-cursor box real-ix0) 
-        selection1 (real-string-to-cursor box real-ix1)
+   If the jxs go off the end it just maps them to the end.
+   The selection includes folded pieces it is in."
+  (let [selection0 (real-string-to-cursor box real-ix0 -1) 
+        selection1 (real-string-to-cursor box real-ix1 1)
         cur-ix (:cursor-ix box)
         hi-ix? (> cur-ix (+ (* 0.5 selection0) (* 0.5 selection1)))
         scrolled-box (-> box (assoc :cursor-ix (if hi-ix? selection0 selection1))

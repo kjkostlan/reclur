@@ -22,7 +22,7 @@
   "Returns pairs of [key, cursor-ix], empty vector if it can't find anything."
   (let [comps (:components s) box-ks (filterv #(= (:type (get comps %)) :codebox) (keys comps))
         box-ks1 (filterv #(= (:path (get comps %)) filename) box-ks)]
-    (mapv #(vector % (codebox/real-string-to-cursor (get comps %) real-char-ix)) box-ks1)))
+    (mapv #(vector % (codebox/real-string-to-cursor (get comps %) real-char-ix -1)) box-ks1)))
 
 (defn codebox-keys [comps fname] (filterv #(and (= (:path (get comps %)) fname) (= (:type (get comps %)) :codebox)) (keys comps)))
 
@@ -33,7 +33,8 @@
         _ (if (nil? comp) (throw (Exception. (str k " doesn't exist within the :components"))))
         _ (if (not= (:type comp) :codebox) (throw (Exception. "Not a codebox")))
         filename (:path comp)
-        real-char-ix (codebox/cursor-to-real-string comp)]))
+        real-char-ix (codebox/cursor-to-real-string comp)]
+    [filename real-char-ix]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Modifying the cached tree within s ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -116,7 +117,7 @@
       (let [txt (jfile/open filename)]
         (if (not txt) (throw (Exception. (str  "Attempted to load non-existant file: " filename))))
         ; The entire fname goes into one path:
-        (assoc (codebox/from-text txt :clojure) :path [filename]))
+        (assoc (codebox/from-text txt :clojure) :path filename))
       (let [; TODO: better picking of which one.
             ky (first kys)]
         (if ky (assoc (get comps ky) :position [0 0] :size [512 512]))))))
