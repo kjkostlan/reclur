@@ -83,7 +83,7 @@
       (= (:type comp) :codebox)
       (if-let [comp1 (search-step1-codebox comp opts true)] (assoc-in s [:components compk] comp1) (fail))
       :else ;fbrowser
-      (let [files (into [](sort (filterv jfile/texty? (fbrowser/recursive-unwrap (fbrowser/devec-file (:path comp))))))
+      (let [files (into [] (sort (filterv jfile/texty? (fbrowser/recursive-unwrap (fbrowser/devec-file (:path comp))))))
             file-order (zipmap files (range))
             comps (:components s) nf (count files)
             codeboxks (filterv #(= (:type (get comps %) :codebox)) (keys comps))
@@ -100,14 +100,14 @@
                        (assoc s1 :components
                          (zipmap (keys (:components s1))
                            (mapv #(if (and (= (:type %) :codebox)
-                                        (= (:path %) fname))
+                                        (= (fbrowser/devec-file (:path %)) fname))
                                     (assoc % :z (inc max-z)) %) 
                              (vals (:components s1)))))))
             go-fn (fn [fname ix0 ix1] (afloat (go-fn0 s fname ix0 ix1) fname))
             local-attempt (if cur-box (search-step1-codebox (get comps cur-box) opts false))]
         (cond (= nf 0) (fail)
           (not local-attempt)
-          (let [file1 (next-file (:path (get comps cur-box)))]
+          (let [file1 (next-file (fbrowser/devec-file (:path (get comps cur-box))))]
             (if file1 (apply go-fn file1 (first-match? file1)) (fail)))
           :else (assoc-in s [:components cur-box] local-attempt))))))
 

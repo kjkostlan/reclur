@@ -433,7 +433,7 @@
   {:dispatch dispatch
    :render (fn [box & show-cursor?] 
              (let [head (get box :head "") foot (get box :foot "")
-                   title (str (:path box)
+                   title (str (fbrowser/devec-file (:path box))
                            (if (> (count (str head foot)) 0)
                              (str " (" (count head) ":-" (count foot) ")") ""))]
                (apply rtext/render (assoc box :path title) show-cursor?)))

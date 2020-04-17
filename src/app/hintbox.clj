@@ -5,6 +5,7 @@
     [coder.cbase :as cbase]
     [app.orepl :as orepl]
     [app.codebox :as codebox]
+    [app.fbrowser :as fbrowser]
     [app.selectmovesize :as selectmovesize]))
 
 
@@ -57,7 +58,7 @@
   "Returns the symbol or literal at the cursor, resolved as a fully qualified symbol if possible.
    Metadata has :special? and :resolved? keywords."
   (let [cix (:cursor-ix cbox)
-        ph (:path cbox) vis (rtext/rendered-string cbox)
+        vis (rtext/rendered-string cbox)
         cbox1 (codebox/select-twofour-click (codebox/set-precompute cbox) false)
         piece (subs vis (:selection-start cbox1) (:selection-end cbox1))        
         sym (first (filter identity ; foo/ isn't a valid symbol, but it should be an autocompletable.
@@ -73,7 +74,7 @@
       (symbol (str piece))
       (symbol? sym)
       (let [ns-sym (if (= (:type cbox) :orepl) 'app.orepl
-                     (cbase/file2ns (:path cbox)))
+                     (cbase/file2ns (fbrowser/devec-file (:path cbox))))
             sym-resolved (cbase/resolved ns-sym sym)]
         (if sym-resolved (with-meta sym-resolved {:resolved? true}) sym))
       :else sym)))
@@ -98,7 +99,7 @@
         (add-hint-box s cbox txts :doc))
       (symbol? x)
       (let [ns-sym (cond (= ty :orepl) (symbol (str orepl/r-ns))
-                     (= ty :codebox) (cbase/file2ns (:path cbox))
+                     (= ty :codebox) (cbase/file2ns (fbrowser/devec-file (:path cbox)))
                      :else (symbol (str *ns*)))
             hints (cbase/auto-complete ns-sym x)]
         (if (> (count hints) 0)

@@ -176,11 +176,12 @@
         fname (if (and (= (:type evt-c) :mousePressed) (= (:type comp) :fbrowser)) 
                  (fbrowser/fullfile-click evt comp))
         non-folder? (if fname (fbrowser/non-folder-file-click? evt comp))]
-    (if (and fname non-folder?) 
+    (if (and fname non-folder?)
       (let [lix (fbrowser/pixel-to-line comp (:X evt) (:Y evt))
             pos (:position comp) sz (:size comp)
-            cbox (assoc (if (jfile/exists? fname) (assoc (multicomp/load-from-file (:components s) fname) :path fname) 
-                          (assoc (codebox/new-codebox) :path fname)) 
+            cbox (assoc (if (jfile/exists? fname) (multicomp/load-from-file (:components s) fname)
+                          (codebox/new-codebox))
+                   :path (fbrowser/vec-file fname)
                    :position (mapv + pos (mapv * sz [0.25 0.75])))
             s1 (assoc-in s [:components compk] comp)]
         (add-component s1 cbox (gensym 'codebox))) s)))

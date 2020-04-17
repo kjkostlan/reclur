@@ -177,7 +177,7 @@
         names (mapv #(rm-decor (:text %)) lines) 
         open?s (mapv #(< %1 %2) levels (conj (into [] (rest levels)) -1))
         va #(if (= %2 (count %1)) (conj %1 %3) (assoc %1 %2 %3))]
-    (mapv #(into [] (concat (vec-file (:path box)) %))
+    (mapv #(into [] (concat (vec-file (:path box)) %)) ; these vec-files are only for extra security, it should already be vectorized.
       (loop [acc [] ix 0 last-opens []]
         (if (= ix n) acc
           (recur (conj acc (conj (subvec last-opens 0 (min (max 0 (nth levels ix)) (count last-opens))) (nth names ix))) (inc ix)

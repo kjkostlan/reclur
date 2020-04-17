@@ -131,7 +131,7 @@
         disk (get-disk (globals/get-working-folder) false)
 
         comps (:components s) codeboxks (filterv #(= (:type (get comps %)) :codebox) (keys comps))
-        open (apply hash-set (mapv #(:path (get comps %)) codeboxks))
+        open (apply hash-set (mapv #(fbrowser/devec-file (:path (get comps %))) codeboxks))
         new2?old (multicomp/new2?old-files s)
         open2text (zipmap (into [] open)
                     (mapv #(multicomp/open-cache s %) (into [] open)))

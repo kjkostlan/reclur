@@ -21,10 +21,10 @@
 (defn who-has [s filename real-char-ix]
   "Returns pairs of [key, cursor-ix], empty vector if it can't find anything."
   (let [comps (:components s) box-ks (filterv #(= (:type (get comps %)) :codebox) (keys comps))
-        box-ks1 (filterv #(= (:path (get comps %)) filename) box-ks)]
+        box-ks1 (filterv #(= (:path (get comps %)) (fbrowser/vec-file filename)) box-ks)]
     (mapv #(vector % (codebox/real-string-to-cursor (get comps %) real-char-ix -1)) box-ks1)))
 
-(defn codebox-keys [comps fname] (filterv #(and (= (:path (get comps %)) fname) (= (:type (get comps %)) :codebox)) (keys comps)))
+(defn codebox-keys [comps fname] (filterv #(and (= (:path (get comps %)) (fbrowser/vec-file fname)) (= (:type (get comps %)) :codebox)) (keys comps)))
 
 (defn cursor-locate [s k]
   "Returns the [filename, char-ix within file] of the cursor given a k."
@@ -32,7 +32,7 @@
         _ (if (nil? comps) (throw (Exception. "Bad state")))
         _ (if (nil? comp) (throw (Exception. (str k " doesn't exist within the :components"))))
         _ (if (not= (:type comp) :codebox) (throw (Exception. "Not a codebox")))
-        filename (:path comp)
+        filename (fbrowser/devec-file (:path comp))
         real-char-ix (codebox/cursor-to-real-string comp)]
     [filename real-char-ix]))
 
@@ -104,7 +104,7 @@
 
 (defn who-is-open [s]
   "Which files are open in our codeboxes."
-  (set (mapv #(:path %) (filterv #(= (:type %) :codebox) (vals (:components s))))))
+  (set (mapv #(fbrowser/devec-file (:path %)) (filterv #(= (:type %) :codebox) (vals (:components s))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; DISK based file handling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -112,12 +112,11 @@
   "Returns a component. It will copy a component if one is already open, to ensure agreement in exported stuff.
    This means be careful with external modifications to the disk."
   (let [kys (filterv #(let [c (get comps %)]
-                        (and (= (:type c) :codebox) (= (:path c) filename))) (keys comps))]
+                        (and (= (:type c) :codebox) (= (fbrowser/devec-file (:path c)) filename))) (keys comps))]
     (if (= (count kys) 0) ; first component.
       (let [txt (jfile/open filename)]
         (if (not txt) (throw (Exception. (str  "Attempted to load non-existant file: " filename))))
-        ; The entire fname goes into one path:
-        (assoc (codebox/from-text txt :clojure) :path filename))
+        (assoc (codebox/from-text txt :clojure) :path (fbrowser/vec-file filename)))
       (let [; TODO: better picking of which one.
             ky (first kys)]
         (if ky (assoc (get comps ky) :position [0 0] :size [512 512]))))))
@@ -189,10 +188,10 @@
 (defn close-component [s kwd]
   "Prompts the user if there are modified files open and the last codebox of a given type is open.
    Closes will fail if the user clicks cancel."
-  (let [comp (get (:components s) kwd) ph (:path comp)]
+  (let [comp (get (:components s) kwd)]
     (cond (and (= (:type comp) :codebox) ; Closing the last open codebox.
             (= (count (multisync/twins (:components s) kwd)) 0))
-      (let [fname (:path comp)
+      (let [fname (fbrowser/devec-file (:path comp))
             txt0 (if (jfile/exists? fname) (jfile/open fname))
             txt1 (open-cache s fname)]
         (if (not= txt0 txt1)
