@@ -16,21 +16,23 @@
     [javac.clojurize :as clojurize]
     [layout.onecode :as onecode]
     [layout.undo :as undo]
-    [app.multicomp :as multicomp] 
-    [app.multisync :as multisync] 
     [app.orepl :as orepl]
     [app.fbrowser :as fbrowser] 
     [app.codebox :as codebox]
     [app.hintbox :as hintbox]
+    [app.siconsole :as siconsole]
+    [app.graphbox :as graphbox]
+    [app.multicomp :as multicomp] 
+    [app.multisync :as multisync] 
     [app.singlecomp :as singlecomp]
     [app.selectmovesize :as selectmovesize]
     [app.xform :as xform]
-    [app.siconsole :as siconsole]
     [app.iteration :as iteration]
-    [app.funcjump :as funcjump]
     [search.strfind :as strfind]
     [layout.keybind :as kb]
-    [coder.logger :as logger]))
+    [coder.logger :as logger]
+    [coder.cnav :as cnav]
+    [coder.cbase :as cbase]))
 
 (declare launch-main-app!) ; avoids a circular dependency with launch main app depending on earlier fns.
 
@@ -104,24 +106,35 @@
                                       (update s :components 
                                         #(dissoc % ::hintbox))
                                       (assoc-in s [:components ::hintbox] hb)) s) s) s))
+   "C-S-g" (fn [s] ; show the graph box
+                              (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
+                                (if (or (= (:type fc) :codebox) (= (:type fc) :orepl))
+                                  (if-let [gb (graphbox/add-graph-box s fc)] 
+                                    (if (get-in s [:components ::graphbox])
+                                      (update s :components 
+                                        #(dissoc % ::graphbox))
+                                      (assoc-in s [:components ::graphbox] gb)) s) s) s))
    "C-S c" store-state!
    "C-S z" (fn [_] (retrieve-state!))
    "C-^^" (fn [s]
                              (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
-                                (if (= (:type fc) :codebox)
-                                  (if-let [file-ix01s (funcjump/find-users s fc)]
-                                    (let [fnames (first file-ix01s)
-                                          ix0s (second file-ix01s) ix1s (nth file-ix01s 2)
-                                          lys (:gotos (:layout s))] 
-                                      (lys s fnames ix0s ix1s)) s) s) s))
+                                (if (contains? #{:codebox :orepl :graphbox} (:type fc))
+                                  (let [x (codebox/x-qual-at-cursor fc)]
+                                    (if (and (symbol? x) (string/includes? (str x) "/")) 
+                                      (let [lys (:gotos (:layout s))
+                                            syms-qual (cbase/uses-of x)
+                                            f01s (mapv cnav/symqual-to-fstr-ixs syms-qual)
+                                            fnames (mapv first f01s) ix0s (mapv second f01s) ix1s (mapv last f01s)]
+                                        (if (> (count fnames) 0) (lys s fnames ix0s ix1s)
+                                          (do (println "No uses of this symbol found.") s))) s)) s) s))
    "C-vv" (fn [s]
                              (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
-                                (if (= (:type fc) :codebox)
-                                  (if-let [file-ix01 (funcjump/find-def s fc)]
-                                    (let [fname (first file-ix01)
-                                          ix0 (second file-ix01) ix1 (nth file-ix01 2)
-                                          ly (:goto (:layout s))] 
-                                      (ly s fname true ix0 ix1)) s) s) s))
+                                (if (contains? #{:codebox :orepl :graphbox} (:type fc))
+                                  (let [x (codebox/x-qual-at-cursor fc)]
+                                    (if (and (symbol? x) (string/includes? (str x) "/")) 
+                                      (let [f01 (cnav/symqual-to-fstr-ixs x) ly (:goto (:layout s))
+                                            fname (first f01) ix0 (second f01) ix1 (last f01)]
+                                        (ly s fname ix0 ix1)) s)) s) s))
    "C-S-M-n ^^ ^^ vv vv << >> << >> b a" (fn [s] (println "We hope you enjoy this sandbox-genre game!") 
                                        s)})
 

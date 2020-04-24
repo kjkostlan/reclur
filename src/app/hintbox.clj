@@ -4,6 +4,7 @@
     [coder.plurality :as plurality]
     [coder.cbase :as cbase]
     [app.orepl :as orepl]
+    [clojure.string :as string]
     [app.codebox :as codebox]
     [app.fbrowser :as fbrowser]
     [app.selectmovesize :as selectmovesize]))
@@ -44,7 +45,7 @@
         box (selectmovesize/fit-to-screen s box)] 
     (assoc box :subtype subtype)))
 
-(defn _lineanate [syms]
+(defn lineanate [syms]
   (let [target-x_y 15
         nc (count (apply str syms))
         w (Math/sqrt (* target-x_y nc))
@@ -57,10 +58,9 @@
 (defn _whats-at-cursor [cbox]
   "Returns the symbol or literal at the cursor, resolved as a fully qualified symbol if possible.
    Metadata has :special? and :resolved? keywords."
-  (let [cix (:cursor-ix cbox)
-        vis (rtext/rendered-string cbox)
-        cbox1 (codebox/select-twofour-click (codebox/set-precompute cbox) false)
-        piece (subs vis (:selection-start cbox1) (:selection-end cbox1))        
+  (let [real (codebox/real-string cbox)
+        real-ixs (codebox/real-string-ixs-for-thing-at-cursor cbox)
+        piece (apply subs real real-ixs)        
         sym (first (filter identity ; foo/ isn't a valid symbol, but it should be an autocompletable.
                      (map #(try (read-string %) (catch Exception e false))
                        [piece (subs piece 0 (dec (count piece)))])))
@@ -75,7 +75,12 @@
       (symbol? sym)
       (let [ns-sym (if (= (:type cbox) :orepl) 'app.orepl
                      (cbase/file2ns (fbrowser/devec-file (:path cbox))))
-            sym-resolved (cbase/resolved ns-sym sym)]
+            sym-resolved (if ns-sym (try (cbase/resolved ns-sym sym)
+                                      (catch Exception e (resolve sym)))
+                            (resolve sym))
+            sym-resolved (cond (symbol? sym-resolved) sym-resolved
+                           (not sym-resolved) nil
+                           :else (symbol (subs (str sym-resolved) 2)))]
         (if sym-resolved (with-meta sym-resolved {:resolved? true}) sym))
       :else sym)))
 
@@ -86,11 +91,15 @@
 (defn codebox-hint [s cbox]
   "Generates a component based on the cursor's position in the codebox.
    nil = no hint could be found, so no box generated."
-  (let [x (whats-at-cursor cbox) mx (meta x) ty (:type cbox)]
+  (let [x (codebox/x-qual-at-cursor cbox)
+        special? (fn [sym] 
+                   (contains? #{'def 'let* 'var 'quote 'if 'loop* 'recur '. 'new 'throw 'catch 'monitor-enter 'monitor-exit 'set!}
+                     sym))] ; TODO: this is language dependent and also doesn't belong here.
     (cond (nil? x) (add-hint-box s cbox ["Nothing here"] :doc)
-      (and (symbol? x) (:special? mx))
+      (and (symbol? x) (special? x))
       (add-hint-box s cbox [(str x) " (special form)" ] :doc)
-      (and (symbol? x) (:resolved? mx))
+      (and (symbol? x) (string/includes? (str x) "/") 
+        (find-ns (cbase/ns-of x)))
       (let [info (cbase/var-info x true)
             doc (if (coll? (:source info)) (second (rest (rest (:source info)))))
             doc (if (:doc info) (str (:doc info)) (str doc))
@@ -98,12 +107,15 @@
                   (str "\n" doc)]]
         (add-hint-box s cbox txts :doc))
       (symbol? x)
-      (let [ns-sym (cond (= ty :orepl) (symbol (str orepl/r-ns))
+      (let [ty (:type cbox)
+            ns-sym (cond (= ty :orepl) (symbol (str orepl/r-ns))
                      (= ty :codebox) (cbase/file2ns (fbrowser/devec-file (:path cbox)))
                      :else (symbol (str *ns*)))
-            hints (cbase/auto-complete ns-sym x)]
+            hints (try (cbase/auto-complete ns-sym x)
+                    (catch Exception e
+                      (cbase/auto-complete 'clojure.core x)))]
         (if (> (count hints) 0)
-          (add-hint-box s cbox [(_lineanate hints)] :autocomplete)
+          (add-hint-box s cbox [(lineanate hints)] :autocomplete)
           (add-hint-box s cbox [(str x " (java method, local variable or can't be resolved).")] :doc)))
       :else (add-hint-box s cbox ["Literal " (.replace ^String (str (type x)) "class " "")] :doc))))
 

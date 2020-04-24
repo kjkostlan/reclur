@@ -59,8 +59,8 @@
 (defn num-cmd-cycle [] 5)
 (defn cmdix2rgb [cmd-ix]
   (let [brt (mod (/ cmd-ix (double (num-cmd-cycle))) 1.0)]
-    [(Math/pow brt 1.0) (+ 0.4 (* (Math/pow brt 0.5) 0.6)) (+ 0.75 (* (Math/pow brt 0.333) 0.24999))]))
+    [(Math/pow brt 1.0) (+ 0.5 (* (Math/pow brt 0.5) 0.5)) (+ 0.75 (* (Math/pow brt 0.333) 0.24999))]))
 
 (defn printix2rgb [cmd-ix]
   (let [brt (mod (/ cmd-ix (double (num-cmd-cycle))) 1.0)]
-    [(Math/pow brt 1.0) (+ 0.4 (* (Math/pow brt 0.333) 0.4999)) (Math/pow brt 0.5)]))
+    [(Math/pow brt 1.0) (+ 0.5 (* (Math/pow brt 0.333) 0.4999)) (Math/pow brt 0.5)]))

@@ -7,7 +7,7 @@
     [coder.clojure :as cljparse]
     [coder.cbase :as cbase]
     [coder.unerror :as unerror]
-    [coder.macnav :as macnav]
+    [coder.cnav :as cnav]
     [clojure.walk :as walk]
     [clojure.test :as test]
     [clojure.set :as set]
@@ -233,7 +233,7 @@
               old-code (:code (get loggers-for-sym (first (keys loggers-for-sym))))
               code (symqual2code sym-qual mexpand?)
               paths1 (set (filterv identity 
-                            (mapv #(macnav/drag-path old-code code %) paths)))
+                            (mapv #(cnav/drag-path old-code code %) paths)))
               _ (if (not (first quiet?)) 
                   (println "Reloading logged symbol:" ns-sym (count paths1) "of" (count (keys loggers-for-sym)) "kept."))] ; this may get annoying.
            (set-logpaths! sym-qual paths1 mexpand?))) need-logged)))
@@ -295,7 +295,7 @@
 (defn w2ps [sym-qual search-key mexpand?]
    (let [code (symqual2code sym-qual mexpand?)
         _ (if (not code) (throw (Exception. (str "Cant find code for:" sym-qual))))
-        phs (macnav/paths-of code search-key)] 
+        phs (cnav/paths-of code search-key)] 
      phs))
 
 (defn add-watchpoint! [sym-qual search-key & adjacents]

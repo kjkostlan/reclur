@@ -7,8 +7,10 @@
    [javac.file :as jfile]
    [clojure.string :as string]
    [coder.langs :as langs]
+   [coder.cnav :as cnav]
    [coder.plurality :as plurality]
-   [layout.colorful :as colorful]))
+   [layout.colorful :as colorful]
+   [coder.cbase :as cbase] [coder.sunshine :as sunshine]))
 
 ; The global rtext contains a language protocol in :lang that is used for text coloring and 
 ; contraction/expansion, etc.
@@ -34,12 +36,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;; Updating the precomputation ;;;;;;;;;;;;;;;;;;;
 
 (defn tokenize [lang s] ; this function is written in a yucky way.
-  (cond (= lang :clojure) ((:tokenize (:clojure langs/supported-langs)) s)
+  (cond (or (= lang :clojure) (not lang)) ((:tokenize (:clojure langs/supported-langs)) s)
     (= lang :human) (langs/human-leaf-tokenize s)
     :else (throw (Exception. (str "Language not supported:" lang)))))
 
 (defn set-precompute [box]
-  (let [inter-levels (cond (= (:lang box) :clojure)
+  (let [inter-levels (cond (= (get box :lang :clojure) :clojure)
                        ((:depth (:clojure langs/supported-langs)) (rtext/rendered-string box))
                         :else (throw (Exception. (str "Language not supported:" (:lang box)))))
         ; Inclusive indents.
@@ -313,7 +315,7 @@
     (select-twofour-click box true)
     :else (rtext/mouse-press m-evt box)))
 
-;;;;;;;;;;;;;;;;;;;;;;;; Finding code locations ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;; Codebox code navigation ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn ensure-visible [box path]
   "Unfolds code to make the path visible, drags the cursor along if possible. Does not scroll to said piece."
@@ -364,6 +366,96 @@
                        rtext/scroll-to-see-cursor)]
     (assoc box :selection-start selection0 :selection-end selection1
       :cursor-ix (if hi-ix? selection1 selection0))))
+
+(defn real-string-ixs-for-thing-at-cursor [box]
+  "Whatever symbol, etc is at cursor, string indexes for this."
+  (let [real-s (real-string box)
+        rcur-ix (cursor-to-real-string box)
+        cs0 (first (if (<= rcur-ix 0) " " 
+                     (subs real-s (dec rcur-ix) rcur-ix)))
+        cs1 (first (if (< rcur-ix (count real-s)) 
+                     (subs real-s rcur-ix (inc rcur-ix)) " "))
+        sp? (fn [c] (contains? #{\ \newline \tab} c)) 
+        open? (fn [c] (contains? #{\{ \( \[} c))
+        closed? (fn [c] (contains? #{\} \) \]} c))
+        land? (or (and (not (open? cs0)) (not (closed? cs0)) (not (sp? cs0)))
+                (and (not (open? cs1)) (not (closed? cs1)) (not (sp? cs1))))
+        box1 (assoc box :cursor-ix rcur-ix :pieces [{:text real-s}])]
+    (cond 
+      (and (not land?) (open? cs0))
+      (contain-ixs box1 (:cursor-ix box1))
+      (and (not land?) (open? cs1))
+      (contain-ixs box1 (inc (:cursor-ix box1)))
+      (and (not land?) (closed? cs0))
+      (contain-ixs box1 (dec (:cursor-ix box1)))
+      (and (not land?) (closed? cs1))
+      (contain-ixs box1 (:cursor-ix box1))
+      :else
+      (let [box1 (if (or (sp? cs1) (open? cs1) (closed? cs1)) (update box1 :cursor-ix dec) box1)
+            box1 (select-twofour-click (set-precompute box1) false)
+            cix-real0 (cursor-to-real-string (assoc box1 :cursor-ix (:selection-start box1)))
+            cix-real1 (cursor-to-real-string (assoc box1 :cursor-ix (:selection-end box1)))]
+        [cix-real0 cix-real1]))))
+
+(defn generic-ns-sym [box]
+  "Not just codeboxes"
+  (let [ty (:type box)]
+    (cond (= ty :codebox) (cbase/file2ns (fbrowser/devec-file (:path box)))
+      (= ty :orepl) 'app.orepl :else 'clojure.core)))
+
+(defn _cursor2x-cpath [box]
+  "Tuple of thing at cursor and cpath to it.
+   cpath isn't meaningful unless box's cursor is in a def."
+  (let [_ (if (and (= (:type box) :codebox) (not= (:lang box) :clojure))
+            (throw (Exception. "This function currently only works for clojure")))
+        ns-sym (generic-ns-sym box)
+        real (real-string box)
+        ix01 (real-string-ixs-for-thing-at-cursor box)
+        mark (gensym "hereIam")
+        real1 (str (subs real 0 (first ix01)) " " mark " " (subs real (second ix01)))
+        codes (read-string (str "[\n" real "\n]"))
+        codesm (read-string (str "[\n" real1 "\n]"))
+        vpath (cnav/path-of codesm mark)
+        code (nth codes (first vpath))
+        path (into [] (rest vpath))
+        def? (contains? #{'def 'defn 'defmacro `defn `defmacro 
+                          'defprotocol `defprotocol 'defmulti `defmulti
+                          'definline `definline `def*} 
+               (if (collections/listy? code) (first code)))
+        qual-sym (if def? (symbol (str ns-sym "/" (second code)))
+                   (cbase/resolved ns-sym (collections/cget-in code path)))]
+    [(collections/cget-in codes vpath) (collections/vcat [qual-sym] (if def? path []))]))
+
+(defn cursor2x-cpath [box]
+  (try (_cursor2x-cpath box)
+    (catch Exception e ; special
+      (let [^String msg (.getMessage ^Exception e)]
+        (cond (.contains msg "Invalid token:")
+          (let [s (string/replace msg "Invalid token:" "")
+                s (string/trim s)]
+            [(symbol s) []])
+          :else (let [real-str (real-string box) ; taking emergency measures here.
+                       buffer 64
+                       cur-ix (cursor-to-real-string box)
+                       ix0 (max (- cur-ix buffer) 0) ix1 (min (+ cur-ix buffer) (count real-str))
+                       piece (subs real-str ix0 ix1) cur-ix1 (- cur-ix ix0)
+                       rp #(string/replace %1 %2 (apply str (repeat (count %2) " ")))
+                       piece1 (-> piece (rp ";") (rp "#") (rp "'") (rp "\"") (rp "\\") (rp ":")
+                                (rp "(") (rp ")") (rp "[") (rp "]") (rp "{") (rp "}"))
+                       box1 (assoc box :pieces [{:text piece1}] :cursor-ix cur-ix1)]
+                   ((if (< (count piece1) (count real-str)) cursor2x-cpath _cursor2x-cpath) box1)))))))
+
+(defn cursor2cpath [box]
+    "Returns a complete path where the cursor in a codebox is.
+  Example path: [my.ns/my-sym 4 2 5 1]"
+  (second (cursor2x-cpath box)))
+
+(defn x-qual-at-cursor [box]
+    "The object at the box's cursor, always qualified if a nonlocal-symbol. Not just codeboxes."
+  (let [ns-sym (generic-ns-sym box)
+        rs #(if (symbol? %) (if-let [xq (cbase/resolved ns-sym %)] xq %) %)
+        xp (cursor2x-cpath box)]
+    (rs (first xp))))
 
 ;;;;;;;;;;;;;;;;;;;;; other child UI functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

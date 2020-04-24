@@ -5,7 +5,7 @@
     [clojure.string :as string]
     [javac.file :as jfile]
     [clojure.set :as set]
-    [coder.clojure :as cljparse]))
+    [coder.clojure :as cljparse] [coder.sunshine :as sunshine]))
 
 ;; Entering and exiting clojure land
 
@@ -34,14 +34,14 @@
   (if (.contains ^String (str qual-sym) "/")
     (symbol (re-find #"[A-Za-z\.*+!\-'?=:\_]+" (str qual-sym)))))
 
+(defn unqual [qual-sym] 
+  "Unqualified symbol."
+  (symbol (subs (str qual-sym) (inc (count (str (ns-of qual-sym)))))))
+ 
 (defn qual [ns-sym code-sym]
   "Similar but different to resolved."
   (symbol (str ns-sym "/" code-sym)))
 
-(defn unqual [qual-sym]
-  "Unqualified symbol."
-  (symbol (subs (str qual-sym) (inc (count (str (ns-of qual-sym)))))))
- 
 (defn resolved [ns-sym code-sym]
   "Resolves code-sym in ns-sym, which depends on the :requires, :imports, etc.
    Returns a fully qualified symbol."
@@ -67,6 +67,12 @@
   (let [st (str v)]
     (symbol (subs st 2))))
 
+(defn strip-name [code]
+  "Remove named def or functions."
+  (if (and (sunshine/listy? code)
+        (symbol? (second code)))
+    (apply list (first code) [] (nthrest code 2)) code))
+
 ;; Extraction fns.
 
 (defn resolve+ [sym-qual]
@@ -91,13 +97,15 @@
     (into [] (concat native foreign standard))))
 
 (defn auto-complete [ns-sym code-partial-sym]
-  "Provides a list of symbols which contain code-partial-sym."
-  (let [valids (valid-symbols ns-sym)
+  "Provides a list of qualified symbols which contain code-partial-sym."
+  (let [ns-sym (if (find-ns ns-sym) ns-sym 'clojure.core)
+        valids (valid-symbols ns-sym)
         valid-quals (mapv #(resolved ns-sym %) valids)
         ^String s (str code-partial-sym)
         matches (filterv #(.contains ^String (str %) s) 
-                  (concat valids valid-quals))]
-    (into [] (sort matches))))
+                  (concat valids valid-quals))
+        matches-qual (mapv #(resolved ns-sym %) matches)]
+    (into [] (sort (set matches-qual)))))
 
 (defn get-code [file line col assert?]
   "Returns the code using the disk, if the file exists, nil otherwise.
@@ -122,7 +130,7 @@
 (defn var-info [qual-sym source?]
   "Gets information about a var in the form of clojure datastructures."
   (let [ns-sym (ns-of qual-sym) ns-obj (find-ns ns-sym)
-        _ (if (nil? ns-obj) (throw (Exception. (str "Namespace not found:" qual-sym))))
+        _ (if (nil? ns-obj) (throw (Exception. (str "Namespace not found:" ns-sym))))
         sym2var (ns-map ns-obj)
         var-obj (get sym2var (unqual qual-sym))
         out (meta var-obj) out (assoc out :ns ns-sym)
@@ -132,85 +140,43 @@
 
 ;; Navigating the code graph, TODO: performance (not yet a problem, but when we scale up...)
 
-(defn nonlocal-syms [code locals]
-  "Set of external symbols, i.e. symbols that point outside of the code.
-   Doesn't qualify anything.
-  POLYGLOT: either shoehorn i.e java/python code into a format that works with this fn, or
-            have unique symbols that we can add to this fn (if the behavior is different)."
-  (let [locals (if (set? locals) locals (set locals))
-        l? (and (sequential? code) (not (vector? code)))
-        c0 (if (coll? code) (first code)) c1 (if (coll? code) (second code))
-        c2 (if (coll? code) (get code 2))
-        macros #{'definline 'definterface 'defmacro 'defmethod 'defn 'defn- 'defmulti 'let 'letfn}]
-    ; Limited macro expansion vs full macro expansion (which needs the qualifications)?
-    (cond (symbol? code) (if (get locals code) #{} #{code})
-      (not (coll? code)) #{}
-      (and l? (get macros c0)) (nonlocal-syms (macroexpand code) locals)
-      (and l? (= c0 'quote)) #{} ; dig into nested quote unquotes?
-      (and l? (not (get locals c0)) (or (= c0 'fn) (= c0 `fn)))
-      (let [name? (symbol? (second code)) v-ix (if name? 2 1)
-            packed? (list? (get (into [] code) v-ix))
-            code-packed (if packed? code 
-                          (if name? (list (first code) (second code) (rest (rest code)))
-                            (list (first code) (rest code))))
-            pieces (if name? (rest (rest code-packed)) (rest code-packed))
-            locals1 (if name? (conj locals (second code)) locals)
-            piece-globals (mapv #(let [s-args (set (first %)) body (rest %)]
-                                   (nonlocal-syms body (set/union locals1 s-args))) pieces)]
-        (apply set/union piece-globals))
-      (and l? (= c0 'let*)) ; The stuff in the binding as well as the stuff after.
-      (let [var-syms (into [] (take-nth 2 c1))
-            targets (into [] (take-nth 2 (rest c1)))
-            n (count targets)
-            lg (loop [l locals g #{} ix 0]
-                 (if (= ix n) [l g]
-                   (recur (conj l (nth var-syms ix))
-                     (set/union g (nonlocal-syms (nth targets ix) l)) (inc ix))))
-            locals1 (first lg) globals1 (second lg)]
-         (set/union #{'let*} globals1 (nonlocal-syms (rest (rest code)) locals1)))
-       (and l? (= c0 'def) (not (get locals 'def)))
-       (conj (nonlocal-syms (rest (rest code)) (conj locals (second code))) 'def)
-       (or (sequential? code) (set? code)) (apply set/union (mapv #(nonlocal-syms % locals) code))
-       (map? code) (set/union (nonlocal-syms (keys code) locals) (nonlocal-syms (vals code) locals)) 
-      :else #{})))
-
+(defn nonlocal-syms [code ns-sym]
+  "Set of external symbols, i.e. symbols that point outside of the code, all qualified."
+  (binding [*ns* (find-ns ns-sym)] 
+    (let [syms (sunshine/all-syms (sunshine/pipeline code false))]
+      (filterv sunshine/qual? syms))))
 
 (defn varaverse []
-  "Maps qualified variables to source code, but only those where it can find the source."
+  "Maps qualified symbols to source code, but only those where it can find the source."
   (let [nms (mapv ns-name (all-ns))]
     (apply merge (mapv #(get-codes (ns2file %)) nms))))
 
-
 (defn uses-of [qual-sym]
   "Expensive function that scans through all namespaces looking for qualified syms that use our sym."
-  (let [vv (varaverse)
+  (let [qual-sym (if (sunshine/qual? qual-sym) qual-sym (qual 'clojure.core qual-sym))
+        vv (varaverse)
         leaf-sym (unqual qual-sym)
         
         ; First pass optimization: must contain the unqualed version (except in esoteric cases).
         leaf-syms (str leaf-sym)
         keep-k (filterv #(.contains ^String (str (get vv %)) leaf-syms) (keys vv))
         vv1 (zipmap keep-k (mapv #(get vv %) keep-k))
-       
-        non-locals (mapv #(nonlocal-syms % (hash-set)) (vals vv1))
-        non-locals-qual (mapv (fn [k nl] 
-                                (let [nm (ns-of k)] (set (mapv #(resolved nm %) nl)))) 
-                          (keys vv1) non-locals)
-        ixs (filterv #(get (nth non-locals-qual %) qual-sym) (range (count non-locals-qual)))
-        ks (keys vv1)]
-    (mapv #(nth ks %) ixs)))
+        non-locals-quals (mapv #(set (nonlocal-syms (strip-name %2) (ns-of %1))) (keys vv1) (vals vv1))
+        ixs (filterv #(get (nth non-locals-quals %) qual-sym) (range (count non-locals-quals)))
+        ks (keys vv1)
+        usesof (set (mapv #(nth ks %) ixs))]
+    (into [] usesof)))
 
 (defn used-by [qual-sym]
   "What is used by this function."
-  (let [nms (ns-of qual-sym)
+  (let [qual-sym (if (sunshine/qual? qual-sym) qual-sym (qual 'clojure.core qual-sym))
+        nms (ns-of qual-sym)
         code-file (ns2file nms)
         vv-lite (get-codes code-file) ; only need to check a single file.
-        code (get vv-lite qual-sym)
-        _ (if (not code) (throw (Exception. (str qual-sym " not found in file: " code-file))))
-        xtracted-symbols (nonlocal-syms code (hash-set))]
-    (mapv #(qual nms %) xtracted-symbols)))
+        code (get vv-lite qual-sym)]
+    (nonlocal-syms (strip-name code) nms)))
 
 ;;; Startup load everything optional (does this add cost?).
-
 
 (defn ensure-src-ns-loaded! []
   (let [t0 (System/nanoTime)

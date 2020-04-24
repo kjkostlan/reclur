@@ -332,17 +332,21 @@
     (cget-in (meta (cget-in x ph)) mph)))
 
 (defn dual-assoc-in [x ph-mph v]
+  "Simplify your paths.
+   ph-mph is a tuple of paths, the first within x the second path within the meta."
   (let [ph (first ph-mph) mph (second ph-mph)]
     (cupdate-in x ph
       (fn [xi] (vary-meta xi #(cassoc-in % mph v))))))
 
 (defn dual-update-in [x ph-mph f & args]
+  "Simplify your paths.
+   ph-mph is a tuple of paths, the first within x the second path within the meta."
   (let [ph (first ph-mph) mph (second ph-mph)]
     (cupdate-in x ph
       (fn [xi] (vary-meta xi #(apply cupdate-in % mph f args))))))
 
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;; More unique functions ;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;; Tree functions ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
 (defn _find-value-in [x v p]
@@ -356,3 +360,14 @@
    The path can't go through a key in maps.
    Value is determied by cvals. nil for not found."
   (_find-value-in x v []))
+
+(defn paths [x]
+  "All paths in a given tree, non-collections return [[]]
+  Sorted by path-order."
+  (let [vp (fn [head v] (collections/vcat [head] v))
+        ppvs (fn [prepends pathss]
+               (apply collections/vcat (mapv (fn [p vs] (mapv #(vp p %) vs)) prepends pathss)))]
+    (cond (not (coll? x)) [[]]
+      (map? x) (ppvs (keys x) (mapv paths (vals x)))
+      (set? x) (ppvs x (mapv paths x))
+      :else (ppvs (range (count x)) (mapv paths x)))))

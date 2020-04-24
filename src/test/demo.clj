@@ -7,7 +7,7 @@
     [layout.blit :as blit]
     [coder.unerror :as unerror]
     [coder.logger :as logger]
-    [coder.macnav :as macnav]))
+    [coder.cnav :as cnav]))
 
 (defonce futures (atom []))
 
@@ -58,7 +58,7 @@
         search-key 'xxyy ; this appears in a let statement.
         code (logger/symqual2code target mexpand?)
         _ (if (not code) (println ""))
-        path-of-key (macnav/path-of code search-key)
+        path-of-key (cnav/path-of code search-key)
         _ (if (not path-of-key) (throw (Exception. "Demo misconfigured: cant find key")))
         path (update path-of-key (dec (count path-of-key)) inc) ; the thing after the "box".
         ]

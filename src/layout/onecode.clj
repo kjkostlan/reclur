@@ -1,4 +1,5 @@
-; A layout that focuses on having a single coding area, the files to the left, and the console below. 
+; A layout that focuses on having a single coding area, the files to the left, and the console below.
+; This layout function isn't very good, and should be improved. 
 (ns layout.onecode
   (:require [globals]
     [app.xform :as xform]
@@ -45,6 +46,7 @@
     (update-in s1 [:components kwd] f)))
 
 (defn _goto-code [s k char-ix0 char-ix1 force-new?]
+  (if (nil? k) (throw (Exception. "Nil goto filename or other key")))
   (let [kys-curix (multicomp/who-has s k char-ix0)
         kys (mapv first kys-curix)
         curixs (mapv second kys-curix)
@@ -65,17 +67,18 @@
         ky (if kyix (nth kys kyix))
         who-has? (> (count kys) 0)
         z-1 (+ (layoutcore/max-z (update s :components (fn [cs] (select-keys cs (filterv #(= (:type (get cs %)) :codebox) (keys cs)))))) 1.0)
-        hilite #(assoc (rtext/scroll-to-see-cursor (codebox/select-on-real-string % char-ix0 char-ix1)) :z z-1)] ; fresh codebox.
+        hilite #(assoc (rtext/scroll-to-see-cursor (codebox/select-on-real-string % char-ix0 char-ix1)) :z z-1) ; fresh codebox.
+        select #(assoc %1 :selected-comp-keys [%2])]
     (cond (and (not force-new?) ky) ; The comp is close enough, move to the key and adjust the key to select us.
-      (update-in s [:components ky] hilite)
+      (update-in (select s ky) [:components ky] hilite)
       who-has? ; no comps close enough, but can copy one of them (must make a copy since all exported stuff must be in agreement).
       (let [comp (get comps (first kys)) ; copy and move this comp.
             ky1 (keyword (gensym 'goto-target))]
-        (add-then s comp ky1 hilite))
+        (add-then (select s ky1) comp ky1 hilite))
       :else ; no comps at all, must make them.
       (let [comp (multicomp/load-from-file comps k)
             ky1 (keyword (gensym 'goto-target))]
-        (add-then s comp ky1 hilite)))))
+        (add-then (select s ky1) comp ky1 hilite)))))
 
 (defn goto-code [s filename char-ix0 char-ix1]
   "Manipulates s by going to the filename or component between char-ix0 and char-ix1.
@@ -86,6 +89,7 @@
 
 (defn goto-codes [s filenames char-ix0s char-ix1s]
   "Like multible goto-codes."
+  (if (= (count filenames) 0) (throw (Exception. "Going nowhere microsecond-fast.")))
   (let [n (count filenames)
         sc (loop [ix 0 s-acc s new-comps []]
              (if (= ix n) [s-acc new-comps]

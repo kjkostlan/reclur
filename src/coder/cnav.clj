@@ -1,8 +1,12 @@
-; MACro NAVigation
+; Code NAVigation
 
-(ns coder.macnav
+(ns coder.cnav
   (:require [clojure.walk :as walk]
-    [clojure.string :as string]))
+    [clojure.string :as string]
+    [app.fbrowser :as fbrowser]
+    [javac.file :as jfile]
+    [collections]
+    [coder.sunshine :as sunshine] [coder.cbase :as cbase] [coder.clojure :as clojure]))
 
 ;;;;;;;; Support fns ;;;;;;;;;
 
@@ -18,6 +22,8 @@
 
 (defn list-is-list [t]
   (clojure.walk/prewalk #(if (= (_lty %) 1) (apply list %) %) t))
+
+;;;;;;;; Pathing fns ;;;;;;;;;
 
 (defn tree-diff [x y]
   "Finds a shortest path that differences x and y, false if x=y.
@@ -43,7 +49,7 @@
               (into [] (concat diff (tree-diff (nth x diff0) (nth y diff0))))))))
 
 (defn path-of [code search-key]
-  "Finds the path of search-key in code. False when nothing found."
+  "Finds the first path of search-key in code. False when nothing found."
   (cond (= code search-key) []
     (not (coll? code)) false
     :else
@@ -85,6 +91,22 @@
             (collections/cget-in code-new path-old))
        path-old false))))
 
+(defn sym-def? [code path]
+  "Is path in code the location of a defined symbol?
+   I.e. the path to 'x in '(let [x 1])."
+  (let [x (collections/cget-in code path)
+        first? #(if (coll? %) (first %) false)
+        pairbind? (contains? #{`let `let* `loop `loop* 'let 'loop} (first? (collections/cget-in code (drop-last 2 path))))
+        fn-unpacked? (contains? #{`fn `fn* 'fn} (first? (collections/cget-in code (drop-last 2 path))))
+        fn-packed? (contains? #{`fn `fn* 'fn} (first? (collections/cget-in code (drop-last 3 path))))
+        in-vector? (vector? (collections/cget-in code (drop-last 1 path)))
+        second? (= (last (butlast path)) 1)]
+    (cond 
+      (< (count path) 2) false (not (symbol? x)) false (not in-vector?) false (not second?) false
+      (or (and pairbind? (even? (last path)))
+        fn-unpacked? fn-packed?) true
+      :else false)))
+
 ;;;;;;;; Text reducing functions ;;;;;;;;;
  
 (defn lucky-branch [code path]
@@ -110,7 +132,7 @@
    Collections are collapsed to 1 element, but the depth remains."
   (lucky-branch code (path-of code search-key)))
 
-;;;;;;;; Main fns ;;;;;;;;
+;;;;;;;; Macro fns ;;;;;;;;
 
 (defn macro-expand-hilite-track [ns code code-with-hilite]
   "Finds the path on the expanded code of the macro of the 'hilight'."
@@ -122,7 +144,7 @@
     (tree-diff code-ex code-hx)))
 
 (defn macro-expand-path [ns code path]
-  "Where path goest on the macroexpanded code.
+  "Where path goes on the macroexpanded code.
    Not gaurenteed to work in all cases (should return nil when fails)."
   (let [sy (gensym "Mark")
         f #(cond (collections/listy? %) (list sy)
@@ -136,3 +158,57 @@
     (macro-expand-hilite-track 
       ns code code-marked)))
 
+;;;;;;;; Code navigaton fns ;;;;;;;;
+;symqual-to-fstr-ixs
+(defn symqual-to-fstr-ixs [sym-qual]
+  "Filename and. what (cursor) indexes on the string correspond to sym-qual.
+   This function isn't fool-proof though, but should work except in unusual cases.
+   TODO: move this function go into coder.clojure as it is language dependent, or be combined with the massive unwieldy reversible parser.?"
+  (let [filename (cbase/ns2file (cbase/ns-of sym-qual))
+        codes-txt (jfile/open filename)
+        ; TODO: polyglot use a specialized reads-string function.
+        reads #(try (read-string (str "[\n" % "\n]")) (catch Exception e false))
+        N (count codes-txt)
+        lookfor (str (cbase/unqual sym-qual))]
+    (loop [ix 0]
+      (if (>= ix N) (let [ix0 (string/index-of codes-txt lookfor) ix0 (if ix0 ix0 0)] 
+                      [filename ix0 (+ ix0 (count lookfor))]) ; fail
+        (let [ix0 (string/index-of codes-txt lookfor ix)]
+          (if ix0
+            (let [ix1 (+ ix0 (count lookfor)) tsym (symbol (str "TESTSYM" "24"))
+                  codes-txt1 (str (subs codes-txt 0 ix0) " " tsym " " (subs codes-txt ix1))
+                  sym-set (set (sunshine/all-syms (reads codes-txt1)))]
+              (if (contains? sym-set tsym) [filename ix0 ix1]
+               (recur ix1)))
+            (recur 1e100)))))))
+
+(defn local-downhills [cpath]
+  "Returns the where-it-is-used paths of a variable addressed by path in code.
+   [] if it can't find anything or no symbol is defined."
+  (let [sym-qual (first cpath)
+        path (into [] (rest cpath))
+        code (:source (cbase/var-info sym-qual true))
+        codeu (sunshine/pipeline code false identity)]
+    (if (sym-def? code path)
+      (let [paths (collections/paths codeu)
+            target (collections/cget-in codeu path)
+            path-ix (first (filter #(= (nth paths %) path) (range)))]
+        (filterv #(= (collections/cget-in codeu %) target) (subvec paths (inc path-ix))))
+      [])))
+
+(defn local-uphill [cpath]
+  "Returns the path to the local variable that defined us, false if we can't find anything."
+  (let [sym-qual (first cpath)
+        path (into [] (rest cpath))
+        code (:source (cbase/var-info sym-qual true))
+        codeu (sunshine/pipeline code false identity)
+        target (collections/cget-in codeu path)]
+    (if (symbol? target)
+      (let [first-use (first (filter #(= (collections/cget-in codeu %) target) (collections/paths codeu)))]
+        (if (and (sym-def? codeu first-use) (and (not= path first-use))) 
+          (collections/vcat [sym-qual] first-use) false))
+      false)))
+
+;cbase/uses-of
+;cbase/used-by
+;
