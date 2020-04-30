@@ -28,7 +28,8 @@
     [app.selectmovesize :as selectmovesize]
     [app.xform :as xform]
     [app.iteration :as iteration]
-    [search.strfind :as strfind]
+    [navigate.strfind :as strfind]
+    [navigate.funcjump :as funcjump]
     [layout.keybind :as kb]
     [coder.logger :as logger]
     [coder.cnav :as cnav]
@@ -75,19 +76,11 @@
                             (do (future (launch-main-app!)) (throw (Exception. "This iteration is dead, reloading."))) %)
    "C-`" selectmovesize/swap-on-top 
    "C-f" (fn [s] (strfind/add-search-box s)) 
-   "C-p p" (fn [s] ; logger.
-                        (let [k (first (:selected-comp-keys s))]
-                          (if (= (:type (get-in s [:components k])) :codebox)
-                            (let [filename-ix (multicomp/cursor-locate s k)
-                                  fname (first filename-ix) cursor-ix (second filename-ix)
-                                  cache-txt (multicomp/open-cache s fname)]
-                              (logger/log-toggle-at-cursor s fname cursor-ix cache-txt (orepl/new-repl)))
-                            s)))
+   "C-p p" (fn [s] (orepl/log-and-toggle-viewlogbox s))
    "C-p x" (fn [s] (do (logger/remove-all-loggers!) ; clear loggers
-                      (println "Cleared all loggers") s))
+                      #_(println "Cleared all loggers") s))
    "C-p C-x" (fn [s] (do (logger/clear-logs!) ; clear logs
-                       (println "Cleared all logs") s))
-   "C-p u" (fn [s] (do (logger/toggle-ui-loggers!) s)) ; toggle UI log
+                       #_(println "Cleared all logs") s))
    ; The saving system: 
    ; ctrl+s = save onto child generation.
    ; ctrl+shift+s = pull child onto ourselves (TODO: do this when we quit as well).
@@ -97,57 +90,14 @@
                            (if (and (globals/can-child?) (not (globals/are-we-child?)))
                              (let [s1 (iteration/ensure-childapp-folder-init!! s)]
                                (iteration/copy-child-to-us!! s1) s1) s))
-   "C-S-h" (fn [s] ; show the hint box
-                              (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
-                                (if (or (= (:type fc) :codebox) (= (:type fc) :orepl))
-                                  (if-let [hb (hintbox/codebox-hint s fc)] 
-                                    (if (let [hb0 (get-in s [:components ::hintbox])]
-                                          (and hb0 (= (mapv int (:position hb0)) (mapv int (:position hb)))))
-                                      (update s :components 
-                                        #(dissoc % ::hintbox))
-                                      (assoc-in s [:components ::hintbox] hb)) s) s) s))
-   "C-S-g" (fn [s] ; show the graph box
-                              (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
-                                (if (or (= (:type fc) :codebox) (= (:type fc) :orepl))
-                                  (if-let [gb (graphbox/add-graph-box s fc)] 
-                                    (if (get-in s [:components ::graphbox])
-                                      (update s :components 
-                                        #(dissoc % ::graphbox))
-                                      (assoc-in s [:components ::graphbox] gb)) s) s) s))
+   "C-S-h" (fn [s] (hintbox/try-to-toggle-hint-box s))
+   "C-S-g" (fn [s] (graphbox/try-to-toggle-graph-box s))
    "C-S c" store-state!
    "C-S z" (fn [_] (retrieve-state!))
-   "C-^^" (fn [s]
-                             (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
-                                (if (contains? #{:codebox :orepl :graphbox} (:type fc))
-                                  (let [x (codebox/x-qual-at-cursor fc)]
-                                    (if (and (symbol? x) (string/includes? (str x) "/")) 
-                                      (let [lys (:gotos (:layout s))
-                                            syms-qual (cbase/uses-of x)
-                                            f01s (mapv cnav/symqual-to-fstr-ixs syms-qual)
-                                            fnames (mapv first f01s) ix0s (mapv second f01s) ix1s (mapv last f01s)]
-                                        (if (> (count fnames) 0) (lys s fnames ix0s ix1s)
-                                          (do (println "No uses of this symbol found.") s))) s)) s) s))
-   "C-vv" (fn [s]
-                             (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
-                                (if (contains? #{:codebox :orepl :graphbox} (:type fc))
-                                  (let [x (codebox/x-qual-at-cursor fc)]
-                                    (if (and (symbol? x) (string/includes? (str x) "/")) 
-                                      (let [f01 (cnav/symqual-to-fstr-ixs x) ly (:goto (:layout s))
-                                            fname (first f01) ix0 (second f01) ix1 (last f01)]
-                                        (ly s fname ix0 ix1)) s)) s) s))
-   "C-S-M-n ^^ ^^ vv vv << >> << >> b a" (fn [s] (println "We hope you enjoy this sandbox-genre game!") 
-                                       s)})
-
-;;;;;;;;;;;;;;;; Adding a component on the top of the z-stack ;;;;;;;;;;;;;;;;;;;;;
-
-(defn add-component [s box kwd] ((:add-component (:layout s)) s box kwd))
-
-(defn root-fbrowser [s] 
-  "Creates a new fbrowser from our own folder once per startup, otherwise just copies an existing root fbrowser (we never allow closing all root fbrowsers)."
-  (let [comps (:components s)
-        kys (filterv #(multicomp/rootfbrowser? (get comps %)) (keys comps))
-        new-comp (if (> (count kys) 0) (get comps (first kys)) 
-                   (fbrowser/load-from-folder (globals/get-working-folder)))] new-comp))
+   "C-^^" (fn [s] (funcjump/try-to-go-ups s true))
+   "C-S-^^" (fn [s] (funcjump/try-to-go-ups s false))
+   "C-vv" (fn [s] (funcjump/try-to-go-into s))
+   "C-S-M-n ^^ ^^ vv vv << >> << >> b a" (fn [s] (println "We hope you enjoy this sandbox-genre game!") s)})
 
 ;;;;;;;;;;;;;;;; Mid level control flow ;;;;;;;;;;;;;;;;;;;;;
 
@@ -183,25 +133,13 @@
 
 ; The maybe-x fns return the effects of doing x if the task is triggered, else s.
 (defn maybe-open-file [evt-c s compk]
-  (let [comp (get (:components s) compk)
-        s (assoc-in s [:precompute :desync-safe-mod?] true) 
-        evt (xform/xevt (xform/x-1 (singlecomp/pos-xform (:position comp))) evt-c)
-        fname (if (and (= (:type evt-c) :mousePressed) (= (:type comp) :fbrowser)) 
-                 (fbrowser/fullfile-click evt comp))
-        non-folder? (if fname (fbrowser/non-folder-file-click? evt comp))]
-    (if (and fname non-folder?)
-      (let [lix (fbrowser/pixel-to-line comp (:X evt) (:Y evt))
-            pos (:position comp) sz (:size comp)
-            cbox (assoc (if (jfile/exists? fname) (multicomp/load-from-file (:components s) fname)
-                          (codebox/new-codebox))
-                   :path (fbrowser/vec-file fname)
-                   :position (mapv + pos (mapv * sz [0.25 0.75])))
-            s1 (assoc-in s [:components compk] comp)]
-        (add-component s1 cbox (gensym 'codebox))) s)))
+  (let [box (get (:components s) compk)
+        evt (xform/xevt (xform/x-1 (singlecomp/pos-xform (:position box))) evt-c)]
+    (fbrowser/open-file-attempt evt s compk (codebox/new-codebox) codebox/from-text)))
 
 (defn update-mouse [evt-g evt-c s k]
   (if (or (= k :mouseMoved) (= k :mouseDragged)) 
-             (assoc s :mouse-pos-world [(:X evt-c) (:Y evt-c)]) s))
+    (assoc s :mouse-pos-world [(:X evt-c) (:Y evt-c)]) s))
 
 (defn expand-child [mevt-c s]
   (let [x (:X mevt-c) y (:Y mevt-c) comps (:components s)] 
@@ -278,46 +216,16 @@
           (= choice :no) (System/exit 0)
           (= choice :yes) (do (iteration/save-state-to-disk!! s) (System/exit 0)))))))
 
-(defn dispatch-hot-repls [s evt-c selected+-]
-  "Mouse move evts and everyFrame evts are ignored, as they cost CPU battery life.
-   But what if you are using the repl as a video game? They should let you do anything. We store the hot repl list."
-  (let [hots (:hot-repls s)
-        sel (set (:selected-comp-keys s))
-        target (cond (= selected+- 0) hots (> selected+- 0) (set/intersection hots sel)
-                 (< selected+- 0) (set/difference hots sel))]
-    (reduce (fn [s k] (single-comp-dispatch evt-c s k)) 
-        s target)))
-
-(defn dispatch-warm-repls [s evt-c selected+-]
-  "Warm repls have events, but not mose moved or every frame events."
-  (let [warms (set (:warm-repls s))
-        sel (set (:selected-comp-keys s))
-        target (cond (= selected+- 0) warms (> selected+- 0) (set/intersection warms sel)
-                 (< selected+- 0) (set/difference warms sel))]
-    (reduce (fn [s k] (single-comp-dispatch (assoc evt-c :unselected? (not (contains? sel k))) s k)) 
-        s target)))
-
-(defn update-warmhot-repls [s]
-  "Which repls have user-customized events?
-   :warm-repls = have events besides :mouseMoved and :everyFrame. :hot-repls = have :mouseMoved or :everyFrame events."
-  (let [warm-fns #{:mousePressed :mouseReleased :keyPressed :keyReleased :mouseDragged}
-        hot-fns #{:mouseMoved :everyFrame}
-        comps (:components s)
-        repl-kys (filterv #(= (:type (get comps %)) :orepl) (keys comps))
-        warm-kys (filterv #(> (count (set/intersection (set (keys (get comps %))) warm-fns)) 0) repl-kys)
-        hot-kys (filterv #(> (count (set/intersection (set (keys (get comps %))) hot-fns)) 0) repl-kys)]
-   (assoc s :warm-repls warm-kys :hot-repls hot-kys)))
-
 (defn dispatch-listener [evt-g s] 
   "Transforms and dispatches an event (that doesn't change :typing-mode? and :active-tool).
    Only certain changes to f need diff checking."
   (cond 
     (= (:type evt-g) :everyFrame)
-    (if (> (count (:hot-repls s)) 0) (dispatch-hot-repls s evt-g 0) s)
+    (if (> (count (:hot-repls s)) 0) (orepl/dispatch-hot-repls s evt-g 0 single-comp-dispatch) s)
     (= (:type evt-g) :mouseMoved) ; don't let mouse moves eat up CPU time, but still update the mouse itself.
     (let [evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g)
           s1 (update-mouse evt-g evt-c s :mouseMoved)]
-      (if (> (count (:hot-repls s)) 0) (dispatch-hot-repls s1 evt-c 0)) s1)
+      (if (> (count (:hot-repls s)) 0) (orepl/dispatch-hot-repls s1 evt-c 0 single-comp-dispatch)) s1)
     (= (:type evt-g) :quit)
     (on-quit-attempt evt-g s)
     :else
@@ -330,12 +238,12 @@
                     (throw (Exception. (str "Eval of: " txt "\n Produced this error: " (.getMessage e)))))))) 
           s (if x (siconsole/log s (str "Parent command result:\n" x)) s)
           s (update-mouse evt-g evt-c s k)
-          s (dispatch-warm-repls s evt-c -1) ; dispatch unselected so they get events.
+          s (orepl/dispatch-warm-repls s evt-c -1 single-comp-dispatch) ; dispatch unselected so they get events.
           
           s (diff-checkpoint s #(hotkey-cycle evt-g evt-c % k))
           hk? (boolean (:tmp-hotkey-triggered? s)) ; a recognized hotkey.
           s (dissoc s :tmp-hotkey-triggered?)]
-      (update-warmhot-repls 
+      (orepl/update-warmhot-repls 
         (if hk? s ; hotkeys block other actions.
         (let [; Typing mode forces single component use.
               s (if (and (:typing-mode? s) (= k :mousePressed)) (single-select evt-c s) s)
@@ -437,7 +345,7 @@
   (let [layout (onecode/layout)
         s {:layout layout :components {} :camera [0 0 1 1] :typing-mode? true :active-tool (first (get-tools))}
         s1 (if (and (globals/can-child?) (not (globals/are-we-child?))) (iteration/ensure-childapp-folder-init!! s) s)
-        s2 ((:initial-position layout) s1 (root-fbrowser s1) (orepl/new-repl) (siconsole/new-console))
+        s2 ((:initial-position layout) s1 (fbrowser/add-root-fbrowser s1) (orepl/new-repl) (siconsole/new-console))
         
         s3 (assoc s2 :selected-comp-keys #{})
         s4 (update s3 :components #(multisync/update-keytags {} %))]

@@ -6,13 +6,13 @@
    [app.stringdiff :as stringdiff]
    [javac.file :as jfile]
    [clojure.string :as string]
-   [coder.langs :as langs]
-   [coder.cnav :as cnav]
+   [coder.crosslang.langs :as langs]
    [coder.plurality :as plurality]
+   [coder.cnav :as cnav]
    [layout.colorful :as colorful]
-   [coder.cbase :as cbase] [coder.sunshine :as sunshine]))
+   [coder.cbase :as cbase]))
 
-; The global rtext contains a language protocol in :lang that is used for text coloring and 
+; The global rtext contains a language protocol in :langkwd that is used for text coloring and 
 ; contraction/expansion, etc.
 ; There isnt much of a tree, the exported id are in order and there is only one element
 ; which is the code itself's real string sans exported children.
@@ -35,18 +35,10 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;; Updating the precomputation ;;;;;;;;;;;;;;;;;;;
 
-(defn tokenize [lang s] ; this function is written in a yucky way.
-  (cond (or (= lang :clojure) (not lang)) ((:tokenize (:clojure langs/supported-langs)) s)
-    (= lang :human) (langs/human-leaf-tokenize s)
-    :else (throw (Exception. (str "Language not supported:" lang)))))
-
 (defn set-precompute [box]
-  (let [inter-levels (cond (= (get box :lang :clojure) :clojure)
-                       ((:depth (:clojure langs/supported-langs)) (rtext/rendered-string box))
-                        :else (throw (Exception. (str "Language not supported:" (:lang box)))))
-        ; Inclusive indents.
-        levels (mapv max (butlast inter-levels) (rest inter-levels))]
-    (assoc box :precompute {:levels levels :inter-levels inter-levels})))
+  (let [inter-levels (langs/interstitial-depth (rtext/rendered-string box) (:langkwd box))
+        levels-inclusive (mapv max (butlast inter-levels) (rest inter-levels))]
+    (assoc box :precompute {:levels levels-inclusive :inter-levels inter-levels})))
 
 (defn edits-update [box box1 edits]
   ; For now we don't implement editing.
@@ -93,12 +85,13 @@
   "Uses precomputed values here for folded or exported pieces, otherwise uses the string."
   (dec (count (string/split (piece-real-string piece) #"\n"))))
 
-(defn contain-ixs [box cur-ix] 
+(defn contain-ixs [box] 
  "Indexes on the rendered str that contain the index
   grab the string using an inclusive, exclusive pattern to select the internal region and the brackets. 
   rtext/cursor-ix-to-piece can get the piece index.
   Used for cold-folding, etc."
   (let [levels (:inter-levels (:precompute box))
+        cur-ix (:cursor-ix box)
         n (dec (count levels)) cur-ix (max 0 (min cur-ix n))
         lev (nth levels cur-ix)
         lo (loop [ix cur-ix]
@@ -108,6 +101,9 @@
              (if (or (= ix n) (< (nth levels ix) lev)) ix
                (recur (inc ix))))]
     [lo hi]))    
+(defn contain-ixs1 [box cur-ix]
+  "We commonly want to test modified cursor-ixs, so this is a convenience function."
+  (contain-ixs (assoc box :cursor-ix cur-ix)))
 
 (defn colorize [box s piece-ix char-ix0 char-ix1]
   "Level based colorization, with exported pieces counting differently."
@@ -117,7 +113,7 @@
 
 (defn new-codebox []
   (assoc rtext/empty-text :interact-fns (interact-fns) :outline-color [0.8 0 0 1] :path [] :head "" :foot ""
-    :type :codebox :lang :clojure :precompute {:levels [] :inter-levels [0]} :colorize-fn (fn [& args] (apply colorize args))))
+    :type :codebox :langkwd :clojure :precompute {:levels [] :inter-levels [0]} :colorize-fn (fn [& args] (apply colorize args))))
 
 (defn code-fold-toggle [cur-pieceix folding? ixs complement? box]
   "Folds or unfolds. complement? true to hilight instead of fold, i.e. in stead of hiding the
@@ -149,13 +145,14 @@
      :else (let [new-pieces (_rml (into [] (concat pieces-b4 (:children (first (:in stats))) pieces-afr)))] ; remove the dots.
              (set-precompute (assoc box :pieces new-pieces :cursor-ix (first ixs)))))))
 
-(defn code-fold-toggle-at-cursor [cur-ix folding? complement? box]
+(defn code-fold-toggle-at-cursor [box folding? complement?]
   "Fold up the outer-level paren level of the code, or unfold folded code.
    Folded code splits the :pieces, unfolded code merges the :pieces.
    complement? true: folds everything else that is not the target."
-  (let [pieces (_rml (:pieces box))
+  (let [cur-ix (:cursor-ix box)
+        pieces (_rml (:pieces box))
         ; The cursor may be between two pieces:
-        cur-pieceix0 (first (rtext/cursor-ix-to-piece (assoc box :cursor-ix cur-ix :pieces pieces)))
+        cur-pieceix0 (first (rtext/cursor-ix-to-piece (assoc box :pieces pieces)))
         cur-pieceix1 (first (rtext/cursor-ix-to-piece (assoc box :cursor-ix (inc cur-ix) :pieces pieces)))
 
         folded?0 (folded? (nth (:pieces box) cur-pieceix0))
@@ -164,7 +161,7 @@
         cur-pieceix (if (or (and folding? (not folded?0)) (and (not folding?) folded?0)) cur-pieceix0 cur-pieceix1)
 
         ; Cursor ixs to base the edit on and to divide up the pieces for folding:
-        ixs (if folding? (let [ix0s (contain-ixs box cur-ix)] ; contain-ixs include the ().
+        ixs (if folding? (let [ix0s (contain-ixs1 box cur-ix)] ; contain-ixs include the ().
                            (if (> (second ix0s) (+ (first ix0s) 2)) [(inc (first ix0s)) (dec (second ix0s))] ix0s))
               (let [cur-ix-piece-begin (rtext/cursor-piece-to-ix box cur-pieceix)]
                 [cur-ix-piece-begin (+ cur-ix-piece-begin (count (:text (nth pieces cur-pieceix))))]))]
@@ -206,7 +203,7 @@
 (defn from-text [txt lang-kwd]
   "Sets up a text-editor from a given text and language keyword."
   (set-precompute (assoc (new-codebox) :pieces [{:text txt}]
-                   :lang lang-kwd)))
+                   :langkwd lang-kwd)))
 
 (defn token-cur-ix01 [strings allowed?s ix]
    "Returns the cursor indexes that select the token enclosing index ix.
@@ -234,7 +231,7 @@
         c-ix1 (loop [ix c-ix] ; has this code been written somewhere else?
                 (if (>= ix (dec n)) (dec n)
                   (if (and (> l0 0) (= (nth ils ix) (dec l0))) ix (recur (inc ix)))))
-        toksty (tokenize (:lang box) (subs st c-ix0 c-ix1))
+        toksty (cbase/tokenize (subs st c-ix0 c-ix1) (:langkwd box))
         toks (first toksty) ty (second toksty)
         
         cur-jx (- c-ix c-ix0)
@@ -243,7 +240,7 @@
         t-in (get toks tix-in)
         jx01 (if (and (= (get ty tix-in) 0) (re-find #"[a-zA-Z0-9]+" t-in)) ; Trigger for in-comment mode which uses human language instead.
                (let [jx0 (first jx01-tix)
-                     piecesty (tokenize :human t-in)
+                     piecesty (cbase/tokenize t-in :human)
                      pieces (first piecesty) ty (second piecesty)
                      kx01-tix (token-cur-ix01 pieces (repeat true) (inc (- cur-jx jx0)))]
                 [(+ jx0 (first kx01-tix) -1) (+ jx0 (second kx01-tix) -1)])
@@ -271,7 +268,7 @@
                     [(second xy0) (second xy1) (first xy0)])
                   (let [c-ix (:cursor-ix box)
                         c-range (#(vector (max (first %1) (first %2)) (min (second %1) (second %2))) 
-                                  (contain-ixs box c-ix) (contain-ixs box (inc c-ix)))
+                                  (contain-ixs1 box c-ix) (contain-ixs1 box (inc c-ix)))
                         xy0 (get-xy (first c-range))
                         xy1 (get-xy (second c-range))]
                     [(second xy0) (second xy1) (first xy0)])) ; sneak in an x0.
@@ -293,7 +290,7 @@
          (set-precompute box2))
       (= (:KeyCode key-evt) 10) ; indent current line as far.
       (let [box1 (rtext/key-press key-evt box) cix (:cursor-ix box)
-            ix0 (first (contain-ixs box cix))
+            ix0 (first (contain-ixs1 box cix))
             indent-add (if (= (try (subs (rtext/rendered-string box) ix0 (inc ix0)) (catch Exception e false)) "(") 2 1)
             n-indented (+ (first (get-xy ix0)) indent-add)
             spacer (apply str (repeat n-indented " "))
@@ -308,7 +305,7 @@
           cur-pieceix1 (first (rtext/cursor-ix-to-piece (assoc box :cursor-ix (inc cur-ix))))
           folding? (and (not (folded? (nth (:pieces box) cur-pieceix)))
                      (not (folded? (nth (:pieces box) cur-pieceix1))))]
-      (code-fold-toggle-at-cursor cur-ix folding? nil box)) 
+      (code-fold-toggle-at-cursor (assoc box :cursor-ix cur-ix) folding? nil)) 
     (= (:ClickCount m-evt) 2)
     (select-twofour-click box false)
     (= (:ClickCount m-evt) 4)
@@ -383,13 +380,13 @@
         box1 (assoc box :cursor-ix rcur-ix :pieces [{:text real-s}])]
     (cond 
       (and (not land?) (open? cs0))
-      (contain-ixs box1 (:cursor-ix box1))
+      (contain-ixs box1)
       (and (not land?) (open? cs1))
-      (contain-ixs box1 (inc (:cursor-ix box1)))
+      (contain-ixs1 box1 (inc (:cursor-ix box1)))
       (and (not land?) (closed? cs0))
-      (contain-ixs box1 (dec (:cursor-ix box1)))
+      (contain-ixs1 box1 (dec (:cursor-ix box1)))
       (and (not land?) (closed? cs1))
-      (contain-ixs box1 (:cursor-ix box1))
+      (contain-ixs box1)
       :else
       (let [box1 (if (or (sp? cs1) (open? cs1) (closed? cs1)) (update box1 :cursor-ix dec) box1)
             box1 (select-twofour-click (set-precompute box1) false)
@@ -400,62 +397,30 @@
 (defn generic-ns-sym [box]
   "Not just codeboxes"
   (let [ty (:type box)]
-    (cond (= ty :codebox) (cbase/file2ns (fbrowser/devec-file (:path box)))
-      (= ty :orepl) 'app.orepl :else 'clojure.core)))
-
-(defn _cursor2x-cpath [box]
-  "Tuple of thing at cursor and cpath to it.
-   cpath isn't meaningful unless box's cursor is in a def."
-  (let [_ (if (and (= (:type box) :codebox) (not= (:lang box) :clojure))
-            (throw (Exception. "This function currently only works for clojure")))
-        ns-sym (generic-ns-sym box)
-        real (real-string box)
-        ix01 (real-string-ixs-for-thing-at-cursor box)
-        mark (gensym "hereIam")
-        real1 (str (subs real 0 (first ix01)) " " mark " " (subs real (second ix01)))
-        codes (read-string (str "[\n" real "\n]"))
-        codesm (read-string (str "[\n" real1 "\n]"))
-        vpath (cnav/path-of codesm mark)
-        code (nth codes (first vpath))
-        path (into [] (rest vpath))
-        def? (contains? #{'def 'defn 'defmacro `defn `defmacro 
-                          'defprotocol `defprotocol 'defmulti `defmulti
-                          'definline `definline `def*} 
-               (if (collections/listy? code) (first code)))
-        qual-sym (if def? (symbol (str ns-sym "/" (second code)))
-                   (cbase/resolved ns-sym (collections/cget-in code path)))]
-    [(collections/cget-in codes vpath) (collections/vcat [qual-sym] (if def? path []))]))
-
-(defn cursor2x-cpath [box]
-  (try (_cursor2x-cpath box)
-    (catch Exception e ; special
-      (let [^String msg (.getMessage ^Exception e)]
-        (cond (.contains msg "Invalid token:")
-          (let [s (string/replace msg "Invalid token:" "")
-                s (string/trim s)]
-            [(symbol s) []])
-          :else (let [real-str (real-string box) ; taking emergency measures here.
-                       buffer 64
-                       cur-ix (cursor-to-real-string box)
-                       ix0 (max (- cur-ix buffer) 0) ix1 (min (+ cur-ix buffer) (count real-str))
-                       piece (subs real-str ix0 ix1) cur-ix1 (- cur-ix ix0)
-                       rp #(string/replace %1 %2 (apply str (repeat (count %2) " ")))
-                       piece1 (-> piece (rp ";") (rp "#") (rp "'") (rp "\"") (rp "\\") (rp ":")
-                                (rp "(") (rp ")") (rp "[") (rp "]") (rp "{") (rp "}"))
-                       box1 (assoc box :pieces [{:text piece1}] :cursor-ix cur-ix1)]
-                   ((if (< (count piece1) (count real-str)) cursor2x-cpath _cursor2x-cpath) box1)))))))
+    (if (= ty :codebox) 
+      (langs/file2ns (fbrowser/devec-file (:path box)))
+      'app.orepl)))
 
 (defn cursor2cpath [box]
     "Returns a complete path where the cursor in a codebox is.
-  Example path: [my.ns/my-sym 4 2 5 1]"
-  (second (cursor2x-cpath box)))
+     For the first element of the cpath, uses what is stored in the file if read-string fails.
+     Example path: [my.ns/my-sym 4 2 5 1]."
+  (let [txt (real-string box) ix (cursor-to-real-string box)
+        wpath (cbase/stringlang-to-wpath txt ix (:langkwd box))
+        codes (langs/reads-string txt (:langkwd box))
+        codes (if codes codes (langs/reads-string (jfile/open (fbrowser/devec-file (:path box))) (:langkwd box)))
+        subdef-path (cnav/path2subdef-path codes wpath)
+        def-sym-qual (langs/resolved (generic-ns-sym box) (cnav/path2defsym codes wpath))
+        def-sym-qual (if def-sym-qual def-sym-qual (symbol (str "Unknown_cpath_head" (first wpath))))]
+    (into [] (concat [def-sym-qual] subdef-path))))
 
 (defn x-qual-at-cursor [box]
-    "The object at the box's cursor, always qualified if a nonlocal-symbol. Not just codeboxes."
+  "The object at the box's cursor, qualified if possible. Not just codeboxes.
+   Tries to return a valid result even if the code is broken (TODO: it will try to qualify local symbols)."
   (let [ns-sym (generic-ns-sym box)
-        rs #(if (symbol? %) (if-let [xq (cbase/resolved ns-sym %)] xq %) %)
-        xp (cursor2x-cpath box)]
-    (rs (first xp))))
+        txt (real-string box) ix (cursor-to-real-string box)
+        thingy (cbase/x-at-stringlang txt ix (:langkwd box))]
+    (if (symbol? thingy) (if-let [xq (langs/resolved ns-sym thingy)] xq thingy) thingy)))
 
 ;;;;;;;;;;;;;;;;;;;;; other child UI functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -469,7 +434,7 @@
   "Hilights a section of code. Since we don't really have children we return the unmodified parent.
    Not to be confused with code-unfolding."
   (let [cur-ix (rtext/cursor-pixel-to-ix box (:X mouse-evt) (:Y mouse-evt))
-        windowed-box (code-fold-toggle-at-cursor cur-ix true true box)]
+        windowed-box (code-fold-toggle-at-cursor (assoc box :cursor-ix cur-ix) true true)]
     (if (not= (real-string windowed-box) (real-string box)) (throw (Exception. "Bug in code-fold-toggle-at-cursor"))) ; check.
     [box windowed-box]))
 

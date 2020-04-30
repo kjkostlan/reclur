@@ -5,7 +5,8 @@
    [app.rtext :as rtext]
    [clojure.string :as string]
    [app.stringdiff :as stringdiff]
-   [coder.plurality :as plurality]))
+   [coder.plurality :as plurality]
+   [globals]))
 
 ; Each :piece of the our app.gaui.rtext contains:
  ; :text = indentation, an arrow for folders, the filename itselfm and a newline
@@ -169,6 +170,8 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Disk file and pathing ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defn rootfbrowser? [box] (and (= (:type box) :fbrowser) (= (count (:path box)) 0)))
+
 (defn paths-of-lines [box] "subtracts out the global level, doesn't include children."
   (let [lines (:pieces box) n (count lines)
         levels (let [l (mapv level-of lines)] (mapv #(- % (first l)) l))
@@ -222,6 +225,13 @@
    TODO: lazy filesystem that only operates at need, probably manual implementation b/c the mechanics are complex."
   (assoc (new-fbrowser [(_text-to-leaf0 (_load-from-folder foldername-full) 0)]) 
     :path (into [] (butlast (vec-file foldername-full)))))
+
+(defn add-root-fbrowser [s] 
+  "Creates a new fbrowser from our own folder once per startup, otherwise just copies an existing root fbrowser (we never allow closing all root fbrowsers)."
+  (let [comps (:components s)
+        kys (filterv #(rootfbrowser? (get comps %)) (keys comps))
+        new-comp (if (> (count kys) 0) (get comps (first kys)) 
+                   (load-from-folder (globals/get-working-folder)))] new-comp))
 
 (defn _recursive-indent [x] ; any :children are also indented.
   (update (if-let [ch (:children x)] (assoc x :children (mapv _recursive-indent ch)) x) 
@@ -502,3 +512,35 @@
    :expandable? expandable?
    :expand-child expand-child :contract-child contract-child
    :is-child? (fn [box] (> (count (vec-file (:path box))) 1))}))
+
+;;;;;;;;;;;;;;;;;;;;;;;;; Nonstandard interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn load-from-file [comps filename codebox-from-text-fn]
+  "Returns a component. It will copy a component if one is already open, to ensure agreement in exported stuff.
+   This means be careful with external modifications to the disk."
+  (let [kys (filterv #(let [c (get comps %)]
+                        (and (= (:type c) :codebox) (= (devec-file (:path c)) filename))) (keys comps))]
+    (if (= (count kys) 0) ; first component.
+      (let [txt (jfile/open filename)]
+        (if (not txt) (throw (Exception. (str  "Attempted to load non-existant file: " filename))))
+        (assoc (codebox-from-text-fn txt :clojure) :path (vec-file filename)))
+      (let [; TODO: better picking of which one.
+            ky (first kys)]
+        (if ky (assoc (get comps ky) :position [0 0] :size [512 512]))))))
+
+(defn open-file-attempt [evt s fbrowserk blank-codebox codebox-from-text-fn]
+  "Tries to open a file. core.clj normally calls this when the fbrowser isn't in edit but the user clicks on it.
+   returns s if it fails."
+  (let [box (get-in s [:components fbrowserk])
+        s (assoc-in s [:precompute :desync-safe-mod?] true) 
+        fname (if (and (= (:type evt) :mousePressed) (= (:type box) :fbrowser)) 
+                 (fullfile-click evt box))
+        non-folder? (if fname (non-folder-file-click? evt box))]
+    (if (and fname non-folder?)
+      (let [lix (pixel-to-line box (:X evt) (:Y evt))
+            pos (:position box) sz (:size box)
+            cbox (assoc (if (jfile/exists? fname) (load-from-file (:components s) fname codebox-from-text-fn)
+                          blank-codebox)
+                   :path (vec-file fname)
+                   :position (mapv + pos (mapv * sz [0.25 0.75])))]
+        ((:add-component (:layout s)) s cbox (gensym 'codebox))) s)))

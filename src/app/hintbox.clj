@@ -1,8 +1,10 @@
 ; The simple hintbox.
+
 (ns app.hintbox
   (:require [app.rtext :as rtext]
     [coder.plurality :as plurality]
-    [coder.cbase :as cbase]
+    [coder.cbase :as cbase] [coder.crosslang.langs :as langs]
+    [coder.textparse :as textparse]
     [app.orepl :as orepl]
     [clojure.string :as string]
     [app.codebox :as codebox]
@@ -10,8 +12,7 @@
     [app.selectmovesize :as selectmovesize]))
 
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
+;;;;;;;;;;;;;;;;;;;;;;;;;;; Setting stuff up ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (declare interact-fns) ; Possible dependency cycle with the new function being used by some interact fns.
 
@@ -74,8 +75,8 @@
       (symbol (str piece))
       (symbol? sym)
       (let [ns-sym (if (= (:type cbox) :orepl) 'app.orepl
-                     (cbase/file2ns (fbrowser/devec-file (:path cbox))))
-            sym-resolved (if ns-sym (try (cbase/resolved ns-sym sym)
+                     (langs/file2ns (fbrowser/devec-file (:path cbox))))
+            sym-resolved (if ns-sym (try (langs/resolved ns-sym sym)
                                       (catch Exception e (resolve sym)))
                             (resolve sym))
             sym-resolved (cond (symbol? sym-resolved) sym-resolved
@@ -94,22 +95,22 @@
   (let [x (codebox/x-qual-at-cursor cbox)
         special? (fn [sym] 
                    (contains? #{'def 'let* 'var 'quote 'if 'loop* 'recur '. 'new 'throw 'catch 'monitor-enter 'monitor-exit 'set!}
-                     sym))] ; TODO: this is language dependent and also doesn't belong here.
+                     sym))]
     (cond (nil? x) (add-hint-box s cbox ["Nothing here"] :doc)
       (and (symbol? x) (special? x))
       (add-hint-box s cbox [(str x) " (special form)" ] :doc)
       (and (symbol? x) (string/includes? (str x) "/") 
-        (find-ns (cbase/ns-of x)))
-      (let [info (cbase/var-info x true)
-            doc (if (coll? (:source info)) (second (rest (rest (:source info)))))
+        (langs/findable-ns? (textparse/sym2ns x))
+        (:arglists (langs/var-info x false)))
+      (let [info (langs/var-info x true)
+            doc (if (coll? (:source info)) (second (rest (rest (:source info)))) (:source info))
             doc (if (:doc info) (str (:doc info)) (str doc))
-            txts [(str x " ") (apply str (interpose " " (:arglists info)))
-                  (str "\n" doc)]]
+            txts [(str x " ") (apply str (interpose " " (:arglists info))) (str "\n" doc)]]
         (add-hint-box s cbox txts :doc))
       (symbol? x)
       (let [ty (:type cbox)
             ns-sym (cond (= ty :orepl) (symbol (str orepl/r-ns))
-                     (= ty :codebox) (cbase/file2ns (fbrowser/devec-file (:path cbox)))
+                     (= ty :codebox) (langs/file2ns (fbrowser/devec-file (:path cbox)))
                      :else (symbol (str *ns*)))
             hints (try (cbase/auto-complete ns-sym x)
                     (catch Exception e
@@ -118,6 +119,20 @@
           (add-hint-box s cbox [(lineanate hints)] :autocomplete)
           (add-hint-box s cbox [(str x " (java method, local variable or can't be resolved).")] :doc)))
       :else (add-hint-box s cbox ["Literal " (.replace ^String (str (type x)) "class " "")] :doc))))
+
+(defn try-to-toggle-hint-box [s]
+  "If it can't add a hintbox and none exists it returns the unmodified s."
+  (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
+    (if (or (= (:type fc) :codebox) (= (:type fc) :orepl))
+      (if-let [hb (codebox-hint s fc)] 
+        (if (let [hb0 (get-in s [:components ::hintbox])]
+              (and hb0 (= (mapv int (:position hb0)) (mapv int (:position hb)))))
+          (update s :components 
+            #(dissoc % ::hintbox))
+          (assoc-in s [:components ::hintbox] hb)) 
+          (do (println "No hint found at location") s)) 
+        (do (println "A codebox or orepl needs to be selected.") s)) 
+    (do (println "No components selected.") s)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Interactions beyond the usual rtext interactions.

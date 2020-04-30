@@ -315,7 +315,7 @@
    cmds-old and sprites are for precomputation, set to {} to recalculate everything.
    Returns the map of sprites to use for the precompute."
   (fixed-width-font! g) (interpolate-img! g)
-  (let [kys (sort-by #(:z (get cmds %)) (keys cmds)) vls (mapv #(get cmds %) kys) ; z-sort
+  (let [kys (sort-by #(get-in cmds [% :z] 0.0) (keys cmds)) vls (mapv #(get cmds %) kys) ; z-sort
         ; code here a bit messy...
         cameras (zipmap kys (mapv :camera vls))
         gfx-cmds (zipmap kys (mapv :gfx vls))

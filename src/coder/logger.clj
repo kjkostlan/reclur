@@ -1,13 +1,14 @@
-; Different languages will be added eventually.
+; TODO: this makes heavy use of clojure-only functions. This should be refactored to langs.
 
 (ns coder.logger
   (:require [collections]
     [clojure.pprint :as pprint]
     [coder.refactor :as refactor]
-    [coder.clojure :as cljparse]
-    [coder.cbase :as cbase]
+    [coder.crosslang.langs :as langs]
     [coder.unerror :as unerror]
     [coder.cnav :as cnav]
+    [coder.textparse :as textparse]
+    [app.rtext :as rtext]
     [clojure.walk :as walk]
     [clojure.test :as test]
     [clojure.set :as set]
@@ -17,12 +18,12 @@
     [layout.blit :as blit]
     [globals]))
 
-;;;;; MISC ;;;;
+(def _junk-ns (create-ns 'logger-ns))
+
+;;;;; Error reporting ;;;;
 
 (defn error [& args] "Debug"
   (throw (Exception. (apply str args))))
-  
-(def _junk-ns (create-ns 'logger-ns))
 
 #_(def ^:dynamic *debug-shorten-code?* false)
 
@@ -54,10 +55,10 @@
     (catch Exception e
       (do (unerror/errprint? code)
           (reset! coder.logger/eval-lasterr 
-            (merge {:ns (cbase/ns-ob2sym *ns*) :code code} 
+            (merge {:ns (ns-name *ns*) :code code} 
               (clean-error-stack (jexc/clje e) "none"))) (throw e)))))
 
-;;;;; Core function, data processing ;;;;
+;;;;;;;;;;;;; Code processing functions ;;;;;;;;;;;;;;
 
 (defn nest-status [code path-in-code]
   "Special considerations for logging purposes."
@@ -73,10 +74,8 @@
 
 (defn logify-code1 [code log-path path-in-code]
   "log-path = ['mynamespace/foo 1 2 3].
-   path-in-code = [1 2 3] for code containing the def. It's fully macroexpanded first!
+   path-in-code = [1 2 3] within code.
    Returns the logged code if successful, false for not successful."
-   ; TODO: java, specials, etc not allowing.
-   ; TODO: fns remove & args.
   (let [stik (collections/cget-in code (butlast (butlast path-in-code)))
         twig (collections/cget-in code (butlast path-in-code))
         leaf (collections/cget-in code path-in-code)
@@ -84,8 +83,6 @@
         log-pathq (update log-path 0 #(list 'quote %))
         lgcore #(list `log! % log-pathq)
         sts (nest-status code path-in-code)
-        binding-sym? (and (even? (last path-in-code)) (contains? #{'let 'let* 'binding 'loop 'loop*} (first stik)))
-        no-and (fn [v] (filterv #(not= % '&) v))
         ch-path (subvec path-in-code 0 ; ch-path = change path.
                   (- (count path-in-code)
                     (cond (:fn-call? sts) 1 (:fn-call1? sts) 1
@@ -100,19 +97,15 @@
                  (apply list (first target-twig) leaf (lgcore target) (rest (rest target-twig)))
                  :else
                  (lgcore target))]
-    ;(println "THIS LOG:")
-    ;(layout.blit/vp (collections/cassoc-in code ch-path piece1))
-    ;(layout.blit/vp piece1)
     (collections/cassoc-in code ch-path piece1)))
-
 
 (defn symqual2code [sym-qual mexpand?]
   "Fully macroexpanded, in the local namespace.
    Maybe this code should go in cbase instead?"
-  (let [v-info (cbase/var-info sym-qual true)
+  (let [v-info (langs/var-info sym-qual true)
         _ (if (not v-info) (throw (Exception. (str "This (assumbed to be fully qualified symbol) can't be found: " sym-qual))))
         s-code (:source v-info)
-        ns-obj (find-ns (cbase/ns-of sym-qual))
+        ns-obj (find-ns (textparse/sym2ns sym-qual))
         _ (if (and  mexpand? (not ns-obj)) (throw "Strange where did the ns go?"))
         s-code1 (if mexpand?
                   (into [] (binding [*ns* ns-obj] (clojure.walk/macroexpand-all s-code))))]
@@ -123,23 +116,35 @@
   (println "Logging failed:")
   (unerror/errprint? bad-code))
  
-;;; Core functions, manipulation ;;;;
+;;;;;;;;;;; Querying logs and loggers ;;;;;;;;;;;;
 
-(defn get-logs [] (:logs @globals/one-atom))
-(defn get-loggers [] (:loggers @globals/one-atom))
-(defn clear-logs! [] (update @globals/one-atom #(swap! % (assoc % :logs []))))
+(defn get-logs [] (:logs @globals/one-atom)) ; logs are a vector of :path :time :value :Thead.
+(defn get-loggers [] (:loggers @globals/one-atom)) ; loggers are {symbol {path ...}} format.
+(defn clear-logs! [] (swap! globals/one-atom #(assoc % :logs [])))
+(defn logged? [sym-qual path]
+  (boolean (get-in (:loggers @globals/one-atom) [sym-qual path])))
+
+(defn last-log-of [sym-qual path-within-code]
+  "Useful for debugging. Nil on failure."
+  (let [logs (get-logs) lpath (collections/vcat [sym-qual] path-within-code)]
+    (last (filter #(= (:path %) lpath) logs))))
+
+;;;;;;;;;;;;;;; Runtime ;;;;;;;;;;;;;;;;
 
 (defn log! [x path]
   "Called when the logged code runs." 
   (swap! globals/one-atom
-    #(let [log {:path path :time (System/nanoTime) :value x :Thread (Thread/currentThread)}
+    #(let [log {:path path :time (System/nanoTime) :value x :Thread (format "0x%x" (System/identityHashCode (Thread/currentThread)))}
            logs (if (:logs %) (:logs %) [])]
       (assoc % :logs (conj logs log)))) x)
 
+;;;;;;;;;;;;;;; Low-level loggering ;;;;;;;;;;;;;;;;
+
 (defn set-logpaths! [sym-qual paths mexpand?]
-  "Set the log paths of a given code."
+  "Set the log paths of a given code.
+   Every call to set-logpaths! will have to rebuild the code."
   (let [paths (set paths) ; remove dupes.
-        ns-obj (find-ns (cbase/ns-of sym-qual))
+        ns-obj (find-ns (textparse/sym2ns sym-qual))
         code (symqual2code sym-qual mexpand?)
         s-fn #(+ (* (double (count %)) 1.0e8)
                 (if (number? (last %)) (last %) 0.0))
@@ -151,8 +156,6 @@
         logged-fn-code (if mexpand? (last logged-code)
                          (apply list 'fn (collections/cget logged-code 2) (subvec (into [] logged-code) 3)))
         loggers (zipmap paths (repeat (count paths) {:mexpand? mexpand? :source code}))]
-    ;(layout.blit/vp logged-fn-code)
-    ;(println "Finding var:" sym-qual (find-var sym-qual))
     (binding [*ns* ns-obj]
       (let [var-f (eval+ logged-fn-code)]
         (alter-var-root (find-var sym-qual)
@@ -164,12 +167,40 @@
                   loggers1 (zipmap (keys loggers)
                              (mapv #(merge (get loggers-old % {}) (get loggers %))
                                (keys loggers)))]
-              (assoc-in world [:loggers sym-qual] loggers1))))))))
+              (if (= (count loggers1) 0)
+                (update world :loggers #(dissoc % sym-qual))
+                (assoc-in world [:loggers sym-qual] loggers1)))))))))
+
+(defn reload-tryto-keep-loggers! [ns-sym & quiet?]
+  "Reloads the namespace, attempts keeping all loggers we need.
+   Even if no code changes it will wipe the loggers so we need to re-add them."
+  (let [_ (binding [*ns* _junk-ns]
+            (require ns-sym :reload))
+        syms (keys (ns-interns ns-sym))
+        sym-quals (set (mapv #(langs/resolved ns-sym %) syms))
+        loggers (:loggers @globals/one-atom)
+        sym-logged (set (keys loggers))
+        need-logged (set/intersection sym-quals sym-logged)]
+    (mapv
+      (fn [sym-qual]
+        (let [loggers-for-sym (get loggers sym-qual)
+              paths (keys loggers-for-sym)
+              mexpand? (:mexpand? (first (vals loggers-for-sym)))
+              old-code (:source (get loggers-for-sym (first (keys loggers-for-sym))))
+              code (symqual2code sym-qual mexpand?)
+              paths1 (set (filterv identity 
+                            (mapv #(cnav/drag-path old-code code %) paths)))
+              _ (if (not (first quiet?)) 
+                  (println "Reloading logged symbol:" ns-sym (count paths1) "of" (count (keys loggers-for-sym)) "kept."))] ; this may get annoying.
+           (set-logpaths! sym-qual paths1 mexpand?))) need-logged)))
+
+;;;;;;;;;;;;;;; High-level loggering ;;;;;;;;;;;;;;;;
 
 (defn add-logger! [sym-qual path mexpand? & messages]
   "mexpand? should be false for individual logging requests, but true for deep mass-logging"
-  (let [mexpand? (boolean mexpand?)
-        ns-obj (find-ns (cbase/ns-of sym-qual))
+  (let [path (into [] path)
+        mexpand? (boolean mexpand?)
+        ns-obj (find-ns (textparse/sym2ns sym-qual))
         current-loggers (get-in @globals/one-atom [:loggers sym-qual] {}) ; path -> logger
         mexpand?-old (:mexpand? (first (vals current-loggers)))
         untouched-loggers (dissoc current-loggers path)
@@ -184,18 +215,13 @@
         new? (not (get current-loggers path))]
     (if (not= (first messages) :quiet)
       (if new?
-        (println new-msg "Adding logger for:" sym-qual path " expand? " mexpand?)
-        (println already-msg "Re-Adding logger for:" sym-qual path " expand? " mexpand?)))
+        (println (str new-msg "Adding logger for:") sym-qual path " expand? " mexpand?)
+        (println (str already-msg "Re-Adding logger for:") sym-qual path " expand? " mexpand?)))
     (set-logpaths! sym-qual (set (conj (keys current-loggers) path)) mexpand?)))
 
-(defn user-data-logger! [sym-qual path udata]
-  "Put user data for the logger here."
-  (swap! globals/one-atom
-    (fn [world] (update-in world [:loggers sym-qual path]
-                  #(merge % udata)))))
-
 (defn remove-logger! [sym-qual path]
-  (let [old-loggers (get-in @globals/one-atom [:loggers sym-qual])
+  (let [path (into [] path)
+        old-loggers (get-in @globals/one-atom [:loggers sym-qual])
         old-paths (set (keys old-loggers))
         new-paths (disj old-paths path)
         hit? (< (count new-paths) (count old-paths))]
@@ -204,99 +230,37 @@
 
 (defn remove-loggers! [sym-qual]
   (if (> (count (get-in @globals/one-atom [:loggers sym-qual])) 0)
-    (do (println "Removing all loggers for:" sym-qual)
+    (do (println "Removing loggers for:" sym-qual)
       (set-logpaths! sym-qual [] false))
     (println "No loggers to remove for:" sym-qual)))
 
 (defn remove-all-loggers! []
   (let [syms (keys (get @globals/one-atom :loggers {}))]
-    (if (> (count keys) 0)
+    (if (> (count syms) 0)
        (do (println "Removing all loggers, " (count syms) "symbols will be cleaned") 
          (mapv remove-loggers! syms))
        (println "No loggers anywhere, no need to remove"))))
 
-(defn reload-tryto-keep-loggers! [ns-sym & quiet?]
-  "Reloads the namespace, attempts keeping all loggers we need.
-   Even if no code changes it will wipe the loggers so we need to re-add them."
-  (let [_ (binding [*ns* _junk-ns]
-            (require ns-sym :reload))
-        syms (keys (ns-interns ns-sym))
-        sym-quals (set (mapv #(cbase/qual ns-sym %) syms))
-        loggers (:loggers @globals/one-atom)
-        sym-logged (set (keys loggers))
-        need-logged (set/intersection sym-quals sym-logged)]
-    (mapv
-      (fn [sym-qual]
-        (let [loggers-for-sym (get loggers sym-qual)
-              paths (keys loggers-for-sym)
-              mexpand? (:mexpand? (first (vals loggers-for-sym)))
-              old-code (:code (get loggers-for-sym (first (keys loggers-for-sym))))
-              code (symqual2code sym-qual mexpand?)
-              paths1 (set (filterv identity 
-                            (mapv #(cnav/drag-path old-code code %) paths)))
-              _ (if (not (first quiet?)) 
-                  (println "Reloading logged symbol:" ns-sym (count paths1) "of" (count (keys loggers-for-sym)) "kept."))] ; this may get annoying.
-           (set-logpaths! sym-qual paths1 mexpand?))) need-logged)))
+(defn toggle-logger! [sym-qual path mexpand?]
+  "Returns true for add, false for remove."
+  (let [add? (not (logged? sym-qual path))]
+    (if add? (add-logger! sym-qual path mexpand?)
+      (remove-logger! sym-qual path))
+    add?))
 
-; User interface functions.
-
-(defn log-toggle-at-cursor [s fname cursor-ix cache-txt blanck-repl] 
-  "Toggles logging code in the form enclosing the cursor, 
-   doesn't change the code, instead uses alter-var-root." 
-   (throw (Exception. "TODO: update this function under the new logging paradigm."))   
-  (let [x (cljparse/forwards cache-txt)
-        char-ix (let [ch (get cache-txt (dec cursor-ix))]
-                  (if (or (= ch \)) (= ch \]) (= ch \}))
-                    cursor-ix (dec cursor-ix)))
-        ph (if (= char-ix -1) [] (cljparse/path-at x char-ix false))
-        ph (if (coll? (collections/cget-in x ph)) ph (into [] (butlast ph)))
-        
-        func-name (second (get x (first ph))) ; TODO: work for more complex nested defs, etc.
-        ns-sym (cbase/file2ns fname)
-        qual-sym (cbase/qual ns-sym func-name)
-        logged? (get-in @globals/one-atom [:loggers qual-sym])]
-    
-    (if logged? (do (remove-logger! qual-sym) s)
-      (let [_ (add-logger! qual-sym)
-        
-            ; Add a repl that has a basic inspection engine:
-            repl-code "(do (require 'globals) \n  (let [logs (:logs @globals/one-atom)\n        loggers (:loggers @globals/one-atom)] \n    ))"
-            k-sc (layoutcore/most-on-screen s #(= (:type %) :orepl))
-            st=? (fn [st1 st2]
-                   (apply = (mapv #(.replaceAll ^String (subs (str %) 0 (min (count (str %)) 70)) "\\s" "")
-                              [st1 st2])))
-            k (first k-sc) sc (second k-sc) use? (and sc (> sc 0.5))
-            need-rcode? (not (st=? repl-code (get-in s [:components k :pieces 0 :text])))
-            p0 {:text repl-code} p1 {:text ""} p2 p1
-            maybe-mod #(if need-rcode? (assoc (assoc % :pieces [p0 p1 p2]) :cursor-ix 114) %)
-            the-repl (maybe-mod (if use? (get (:components s) k) blanck-repl))
-            k (if use? k (gensym 'logrepl))
-            s1 (if use? (assoc-in s [:components k] the-repl) 
-                 ((:add-component (:layout s)) s the-repl k true))] 
-       s1))))
-
-(defn clear-logs! [] (swap! globals/one-atom #(assoc % :logs [])))
-
-(defn toggle-core [loggers toggled-keys]
-  "Are at least 50% of them currently included?"
-  (let [toggled-keys (set toggled-keys)
-        included (filterv #(get loggers %) toggled-keys)
-        excluded (filterv #(not (get loggers %)) toggled-keys)
-        on? (>= (count excluded) (count included))]
-    [on? (if on? excluded included)]))
-
-(defn toggle-ui-loggers! []
-  (let [syms #{'core/dispatch-listener} oc (toggle-core (get @globals/one-atom :loggers))
-        on? (first oc) changes (second oc)]
-    (if on? (println "Added global UI logger") (println "Removed global UI logger"))
-    ; Adding a loger twice is OK, so the multi-use of atom is OK.
-    (if on? (mapv add-logger! changes) (mapv remove-logger! changes))))
+;;;;;;;;;;;; Debugger system based on key-symbols instead of logging paths ;;;;;;;;;;;;;;;;;;
 
 (defn w2ps [sym-qual search-key mexpand?]
    (let [code (symqual2code sym-qual mexpand?)
         _ (if (not code) (throw (Exception. (str "Cant find code for:" sym-qual))))
         phs (cnav/paths-of code search-key)] 
      phs))
+
+(defn user-data-logger! [sym-qual path udata]
+  "Put user data for the logger here."
+  (swap! globals/one-atom
+    (fn [world] (update-in world [:loggers sym-qual path]
+                  #(merge % udata)))))
 
 (defn add-watchpoint! [sym-qual search-key & adjacents]
   "A debug watch, which is easier to clear. Adjacents is an optional next-to key that helps with disambugation."

@@ -96,7 +96,9 @@
              n (inc (if (last nks) (last nks) -1))
              xv (mapv #(get xm %) (range n))] ; nil fill, ignores non-numerical keys.
          (if v? xv (apply list xv)))
-       (set? x) (apply conj x k (evens kvs)) ; only keys matter.
+       (set? x) (let [kys (set (concat [k] (evens kvs)))
+                      vs (set (concat [v] (odds kvs)))]
+                  (set/union (set/difference x kys) vs)) ; Replace the key with the val.
        :else (wtf x)) metax)))
 
 (defn cupdate [x k f & args]

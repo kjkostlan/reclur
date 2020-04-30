@@ -1,8 +1,8 @@
+; TODO: this relies heavily on clojure-based syntax. It should be refactored to use langs.
 ; Helps you remove bugs by catching *compile* time errors.
 
 (ns coder.unerror
   (:require 
-    [coder.cbase :as cbase]
     [clojure.walk :as walk]
     [clojure.set :as set]
     [clojure.reflect :as reflect]
@@ -39,9 +39,14 @@
 
 ;;;;;;;;;;;; Macro expansion-based checking ;;;;;;;;;;;;;
 
+(defn var2sym [v]
+  "Fully qualified."
+  (let [st (str v)]
+    (symbol (subs st 2))))
+
 (defn _msg-merrxpand [code ^java.lang.Exception e]
   (let [macr (first code)
-        macr (if-let [macrfull (resolve macr)] (cbase/var2sym macrfull) macr)
+        macr (if-let [macrfull (resolve macr)] (var2sym macrfull) macr)
         msg-full (.getMessage e)
         head "[On macroexpand] "]
     (if (string/includes? msg-full "did not conform to spec") ; long-winded message.
@@ -292,7 +297,7 @@
 (defn compile-err-catch [code ns]
   "Catches macroexpanded or compile-time errors in code,
    returns the path in the macroexpanded code if there is an error and type of error."
-  (binding [*ns* (if ns (if (symbol? ns) (cbase/ns-sym2ob ns) ns) *ns*)]
+  (binding [*ns* (if ns (if (symbol? ns) (find-ns ns) ns) *ns*)]
     (let [_err? (atom true)
           code-or-err (try (let [code-ex (walk/macroexpand-all code)] 
                              (reset! _err? false) code-ex)

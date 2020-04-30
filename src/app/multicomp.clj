@@ -14,12 +14,11 @@
     [app.stringdiff :as stringdiff]
     [app.fbrowser :as fbrowser]))
 
-(defn rootfbrowser? [box] (and (= (:type box) :fbrowser) (= (count (:path box)) 0)))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Searching ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn who-has [s filename real-char-ix]
-  "Returns pairs of [key, cursor-ix], empty vector if it can't find anything."
+  "Returns pairs of [key, cursor-ix], empty vector if it can't find anything.
+   Convenience function that may not be all that helpful."
   (let [comps (:components s) box-ks (filterv #(= (:type (get comps %)) :codebox) (keys comps))
         box-ks1 (filterv #(= (:path (get comps %)) (fbrowser/vec-file filename)) box-ks)]
     (mapv #(vector % (codebox/real-string-to-cursor (get comps %) real-char-ix -1)) box-ks1)))
@@ -106,21 +105,6 @@
   "Which files are open in our codeboxes."
   (set (mapv #(fbrowser/devec-file (:path %)) (filterv #(= (:type %) :codebox) (vals (:components s))))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; DISK based file handling ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn load-from-file [comps filename]
-  "Returns a component. It will copy a component if one is already open, to ensure agreement in exported stuff.
-   This means be careful with external modifications to the disk."
-  (let [kys (filterv #(let [c (get comps %)]
-                        (and (= (:type c) :codebox) (= (fbrowser/devec-file (:path c)) filename))) (keys comps))]
-    (if (= (count kys) 0) ; first component.
-      (let [txt (jfile/open filename)]
-        (if (not txt) (throw (Exception. (str  "Attempted to load non-existant file: " filename))))
-        (assoc (codebox/from-text txt :clojure) :path (fbrowser/vec-file filename)))
-      (let [; TODO: better picking of which one.
-            ky (first kys)]
-        (if ky (assoc (get comps ky) :position [0 0] :size [512 512]))))))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Child expansion and contraction ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn expand-child [k-parent k-child mevt-c s]
@@ -203,7 +187,7 @@
               (close-component-noprompt s kwd)
               :else s))
           (close-component-noprompt s kwd)))
-      (and (rootfbrowser? comp) (= (count (filterv rootfbrowser? (vals (:components s)))) 1))
+      (and (fbrowser/rootfbrowser? comp) (= (count (filterv fbrowser/rootfbrowser? (vals (:components s)))) 1))
       (do (println "Can't close the last root fbrowser.") s)
       :else (close-component-noprompt s kwd))))
 

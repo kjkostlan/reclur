@@ -1,7 +1,9 @@
+; TODO: this relies heavily on clojure-based syntax. It should be refactored to use langs.
+
 ; Lisps love nesting. Lets make it well-indented!
 ; This isn't designed to be bulletproof in terms of printing and reading; possible edge-cases; it is mostly for human consumption.
 (ns layout.blit
-  (:require [coder.langs :as langs]
+  (:require [coder.crosslang.langs :as langs] [coder.cbase :as cbase]
     [clojure.string :as string]
     [collections]
     [clojure.walk :as walk]
@@ -59,12 +61,11 @@
 (defn lean-tokenize [code-or-str]
   "Lean tokenization of the code that removes extra whitespace, etc but keeps comments etc.
    There is a trailing newline for (blanck) tokens that are comments.
-   Leaves asingle space for space tokens so thingsdontjamtogether."
+   Leaves a single space for space tokens so thingsdontjamtogether."
   (let [s (if (string? code-or-str) code-or-str
             (binding [*print-meta* true]
               (pr-str code-or-str)))
-        tok-fn (:tokenize (:clojure langs/supported-langs))
-        vt (tok-fn s)
+        vt (cbase/tokenize s :clojure)
         strings (first vt)
         types (second vt) ; 0 = empty, 4=opening, 5=closing.
         lean-strings (mapv #(if (= %2 0) (lean-space-tok %1) %1) strings types)

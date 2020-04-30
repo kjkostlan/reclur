@@ -5,10 +5,13 @@
     [clojure.string :as string]
     [app.fbrowser :as fbrowser]
     [javac.file :as jfile]
-    [collections]
-    [coder.sunshine :as sunshine] [coder.cbase :as cbase] [coder.clojure :as clojure]))
+    [clojure.set :as set]
+    [collections]))
 
 ;;;;;;;; Support fns ;;;;;;;;;
+
+(def specials #{'def 'let* 'var 'quote 'if 'loop* 'recur '. 'new 'throw 'catch 'monitor-enter 'monitor-exit 'set!})
+(def def-variants #{'def 'defn `defn 'defmacro `defmacro 'def*})
 
 (defn vcons [a x]
   (into [] (concat [a] x)))
@@ -24,6 +27,12 @@
   (clojure.walk/prewalk #(if (= (_lty %) 1) (apply list %) %) t))
 
 ;;;;;;;; Pathing fns ;;;;;;;;;
+
+(defn third [x] (first (rest (rest x))))
+(defn fourth [x] (first (rest (rest (rest x)))))
+
+(defn evens [x] (into [] (take-nth 2 x)))
+(defn odds [x] (into [] (take-nth 2 (rest x))))
 
 (defn tree-diff [x y]
   "Finds a shortest path that differences x and y, false if x=y.
@@ -65,6 +74,7 @@
   (let [stop (if search-key false true)]
     (loop [x code out []]
       (let [ph1 (path-of x search-key)]
+        (if (= ph1 (last out)) (throw (Exception. "Something is not working.")))
         (if ph1 
           (recur (collections/cassoc-in x ph1 stop) (conj out ph1))
           out)))))
@@ -92,8 +102,9 @@
        path-old false))))
 
 (defn sym-def? [code path]
-  "Is path in code the location of a defined symbol?
-   I.e. the path to 'x in '(let [x 1])."
+  "Is path in code the location of a local defined symbol?
+   I.e. the path to 'x in '(let [x 1]).
+   Class members don't count as local, variables defined within fns do."
   (let [x (collections/cget-in code path)
         first? #(if (coll? %) (first %) false)
         pairbind? (contains? #{`let `let* `loop `loop* 'let 'loop} (first? (collections/cget-in code (drop-last 2 path))))
@@ -107,7 +118,7 @@
         fn-unpacked? fn-packed?) true
       :else false)))
 
-;;;;;;;; Text reducing functions ;;;;;;;;;
+;;;;;;;; Big thing reducing functions ;;;;;;;;;
  
 (defn lucky-branch [code path]
   "Takes a sample, this fn is intended as a debugger."
@@ -159,49 +170,40 @@
       ns code code-marked)))
 
 ;;;;;;;; Code navigaton fns ;;;;;;;;
-;symqual-to-fstr-ixs
-(defn symqual-to-fstr-ixs [sym-qual]
-  "Filename and. what (cursor) indexes on the string correspond to sym-qual.
-   This function isn't fool-proof though, but should work except in unusual cases.
-   TODO: move this function go into coder.clojure as it is language dependent, or be combined with the massive unwieldy reversible parser.?"
-  (let [filename (cbase/ns2file (cbase/ns-of sym-qual))
-        codes-txt (jfile/open filename)
-        ; TODO: polyglot use a specialized reads-string function.
-        reads #(try (read-string (str "[\n" % "\n]")) (catch Exception e false))
-        N (count codes-txt)
-        lookfor (str (cbase/unqual sym-qual))]
-    (loop [ix 0]
-      (if (>= ix N) (let [ix0 (string/index-of codes-txt lookfor) ix0 (if ix0 ix0 0)] 
-                      [filename ix0 (+ ix0 (count lookfor))]) ; fail
-        (let [ix0 (string/index-of codes-txt lookfor ix)]
-          (if ix0
-            (let [ix1 (+ ix0 (count lookfor)) tsym (symbol (str "TESTSYM" "24"))
-                  codes-txt1 (str (subs codes-txt 0 ix0) " " tsym " " (subs codes-txt ix1))
-                  sym-set (set (sunshine/all-syms (reads codes-txt1)))]
-              (if (contains? sym-set tsym) [filename ix0 ix1]
-               (recur ix1)))
-            (recur 1e100)))))))
 
-(defn local-downhills [cpath]
+(defn unqual [sym-qual] "Duplicated from textparse to avoid circles." 
+  (symbol (last (string/split (str sym-qual) #"\/"))))
+
+(defn symbol2defpath-qual [codes sym]
+  "The path to the path enclosing def in codes.
+   In java and other languages, it usually wouldn't be explicitly a 'def'."
+  (let [def-paths (into [] (apply concat (mapv #(paths-of codes %) def-variants)))
+        defenclose-paths (mapv #(into [] (butlast %)) def-paths)
+        def-vals (mapv #(collections/cget-in codes (conj % 1)) defenclose-paths)
+        sym-unqual (unqual sym)
+        path-ix (first (filter #(or (= (nth def-vals %) sym-unqual) (= (nth def-vals %) sym)) (range (count def-vals))))
+        _ (if (not path-ix) (throw (Exception. (str "Can't find the def-path for: " sym))))
+        path+1 (nth def-paths path-ix)]
+    (subvec path+1 0 (dec (count path+1)))))
+
+(defn local-downhills [cpath code-fully-qual]
   "Returns the where-it-is-used paths of a variable addressed by path in code.
    [] if it can't find anything or no symbol is defined."
   (let [sym-qual (first cpath)
         path (into [] (rest cpath))
-        code (:source (cbase/var-info sym-qual true))
-        codeu (sunshine/pipeline code false identity)]
-    (if (sym-def? code path)
+        codeu code-fully-qual]
+    (if (sym-def? codeu path)
       (let [paths (collections/paths codeu)
             target (collections/cget-in codeu path)
             path-ix (first (filter #(= (nth paths %) path) (range)))]
         (filterv #(= (collections/cget-in codeu %) target) (subvec paths (inc path-ix))))
       [])))
 
-(defn local-uphill [cpath]
+(defn local-uphill [cpath code-fully-qual]
   "Returns the path to the local variable that defined us, false if we can't find anything."
   (let [sym-qual (first cpath)
         path (into [] (rest cpath))
-        code (:source (cbase/var-info sym-qual true))
-        codeu (sunshine/pipeline code false identity)
+        codeu code-fully-qual
         target (collections/cget-in codeu path)]
     (if (symbol? target)
       (let [first-use (first (filter #(= (collections/cget-in codeu %) target) (collections/paths codeu)))]
@@ -209,6 +211,91 @@
           (collections/vcat [sym-qual] first-use) false))
       false)))
 
-;cbase/uses-of
-;cbase/used-by
-;
+(defn _class? [code]
+  (and (collections/listy? code)
+    (contains? #{'defclass 'definterface `definterface 'defenum 'defprotocol `defprotocol} (first code))))
+
+(defn path2subdef-path [codes path]
+  "The part of path that digs into the def.
+   Handles java classes and other stuff, but for normal defns it simply removes the first element from path.
+   defclass, definterface, defenum, and defprotocol trigger going deeper."
+  (loop [codes1 (nth codes (first path)) path1 (into [] (rest path))]
+    (if (_class? codes1) (recur (collections/cget codes1 (first path)) (into [] (rest path1)))
+      path1)))
+
+(defn all-defpaths [codes]
+  "All paths to the codes that enclose the defs."
+  (apply collections/vcat
+    (mapv (fn [codei ix]
+            (cond (_class? codei)
+              (let [ipaths (all-defpaths codei)]
+                (mapv (collections/vcat [ix] ipaths)))
+              (and (collections/listy? codei) (contains? def-variants (first codei)))
+              [[ix]]
+              :else [])) 
+      codes (range))))
+
+(defn path2defsym [codes path]
+  "The foo in (def foo)."
+  (let [fpath (path2subdef-path codes path) path2def (subvec (into [] path) 0 (- (count path) (count fpath)))]
+    (collections/cget-in codes (conj path2def 1))))
+
+;;;;;;;;;;;;;;;;; Recursive functions ;;;;;;;;;;;;;;;;
+
+(defn all-syms [x]
+  "Acts recursivly, returns a set. Does not include special forms or map keys."
+  (cond (contains? specials x) #{}
+    (symbol? x) #{x}
+    (map? x) (set/union #_(all-syms (keys x)) (all-syms (vals x)))
+    (coll? x) (apply set/union (mapv all-syms x))
+    :else #{}))
+
+#_(defn broadcast [ks vs]
+  "Makes a vector of maps. Non-vector vs are broad-casted into vectors.
+   If there are no vectors, just zipmaps the maps together."
+  (let [n (count (first (filter vector? vs)))]
+    (if n
+      (mapv (fn [ix] (zipmap ks (mapv #(if (vector? %) (nth % ix) %) vs))))
+      (zipmap ks vs))))
+
+#_(defn fbcast [f x]
+  (if (vector x) (mapv f x)
+    (f x)))
+
+(defn locals-walk [f x locals]
+  "Applies (f x locals) recursively, locals is a set.
+   Locals includes any symbols defined before x, as well as x itself."
+  (let [locals (set locals)]
+    (cond (not (coll? x)) (f x locals)
+      (vector? x) (mapv #(locals-walk f % locals) x)
+      (set? x) (set (mapv #(locals-walk f % locals) x))
+      (map? x) (zipmap (keys x) (mapv #(locals-walk f % locals) (vals x)))
+      (contains? #{'let `let `let* `loop `loop* 'loop} (first x)) ; Note: (binding [] ...) can't add locals.
+      (let [pairs (into [] (if (coll? (second x)) (second x) [(second x)]))
+            n (count pairs)
+            pairs1b1 (loop [code [] ix 0 locals locals]
+                      (if (>= ix n) [code locals]
+                        (let [locals1 (conj locals (nth pairs ix))
+                              sym (locals-walk f (nth pairs ix) locals1)
+                              val (locals-walk f (get pairs (inc ix) 'nil) locals)]
+                          (recur (conj code sym val) (+ ix 2) locals1))))
+            pairs1 (f (first pairs1b1) locals)
+            locals1 (second pairs1b1)
+            tail (rest (rest x))]
+        (f (apply list (f (first x) locals)
+             pairs1 (mapv #(locals-walk f % locals1) tail)) locals))
+      (and (contains? #{'fn `fn `fn*} (first x)) (vector? (second x))) ; unwrapped.
+      (let [locals1 (set/union locals (set (second x)))
+            head1 (f (first x) locals)]
+        (f (apply list head1 (mapv #(locals-walk f % locals1) (rest x))) locals))
+      (contains? #{'fn `fn `fn*} (first x)) ; wrapped.
+      (let [pieces (rest x)
+            bindingss (mapv #(set (first %)) pieces)
+            head1 (f (first x) locals)
+            pieces1 (mapv #(locals-walk f %1 (set/union %1 %2)) pieces bindingss)]
+        (f (apply list head1 pieces1) locals))
+      (contains? #{'defn `defn 'defn- `defn- 'definline `deflinline 'defmacro `defmacro} (first x)) ; only handles basic defn, use macroexpand to handle more stuff.
+      (let [bindings (set (first (filter vector? x)))
+            locals1 (set/union bindings locals)]
+        (f (apply list (mapv #(locals-walk f % locals1) x)) locals))
+      :else (apply list (mapv #(locals-walk f % locals) x)))))

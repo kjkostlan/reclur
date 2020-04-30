@@ -1,7 +1,7 @@
 ; Simple Doxygen or Sphynx-like plots only with runtime-aware information.
 ; It's not fully automatic, the user has to select which fns are logged
 ; and has control over the queries.
-(ns search.runtimemap
+(ns navigate.runtimemap
   (:require [coder.cbase :as cbase]
     [coder.logger :as logger]
     [app.xform :as xform]

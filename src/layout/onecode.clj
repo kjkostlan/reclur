@@ -4,6 +4,7 @@
   (:require [globals]
     [app.xform :as xform]
     [app.multicomp :as multicomp]
+    [app.fbrowser :as fbrowser]
     [app.codebox :as codebox]
     [app.rtext :as rtext]
     [layout.layoutcore :as layoutcore]))
@@ -76,7 +77,7 @@
             ky1 (keyword (gensym 'goto-target))]
         (add-then (select s ky1) comp ky1 hilite))
       :else ; no comps at all, must make them.
-      (let [comp (multicomp/load-from-file comps k)
+      (let [comp (fbrowser/load-from-file comps k codebox/from-text)
             ky1 (keyword (gensym 'goto-target))]
         (add-then (select s ky1) comp ky1 hilite)))))
 

@@ -1,5 +1,5 @@
 ; String-based search tools, the most basic kind of searching.
-(ns search.strfind
+(ns navigate.strfind
   (:require [clojure.string :as string] [clojure.set :as set] [clojure.pprint]
             [javac.file :as jfile]
             [layout.layoutcore :as layoutcore]
@@ -123,9 +123,7 @@
             blit #(if (symbol? %) (symbol (str "'" %)) %)
             cky (first ckys)
             m (assoc m0 :target (blit cky) :boxk (blit boxk))
-            code (list 'do
-                       '(require 'search.strfind)
-                       (list 'search.strfind/search-step 's m))
+            code (list 'navigate.strfind/search-step 's m)
             code (pretty code)
             cursor-ix0 (+ (first (first (boring-find code ":key \"\"" false))) 6)
             new-comp (orepl/filled-repl 's code cursor-ix0)

@@ -1,15 +1,16 @@
 ; One repl: it shows the output of commands.
+; It assumes the language is in clojure. A repl for another language is a big endeavor.
 (ns app.orepl
   (:require [clojure.string :as string]
     [clojure.set :as set]
     [app.codebox :as codebox]
     [app.rtext :as rtext]
     [coder.logger :as logger]
-    [coder.cbase :as cbase]
+    [coder.textparse :as textparse]
+    [coder.plurality :as plurality]
     [javac.clipboard :as clipboard] 
     [javac.file :as jfile]
     [javac.exception :as jexc]
-    [coder.plurality :as plurality]
     [layout.colorful :as colorful]
     [layout.keybind :as kb]))
 
@@ -45,11 +46,11 @@
   (let [max-len 10000 tmp "...<too long to show>"]
     (if (> (count s) max-len) (str (subs s 0 (- max-len (count tmp))) tmp) s)))
 
+;;;;;;;;;;;;;;;;;;;;;;;;; Creating a repl box ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;;;;;;;;;;;;;;;;;;;;;;;;; Setting up a repl ;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn new-repl []
-  (assoc rtext/empty-text :type :orepl :lang :clojure :pieces [{:text "(+ 1 2)"}] :result "3"
+(defn new-repl [& code]
+  (assoc rtext/empty-text :type :orepl :langkwd :clojure :pieces [{:text (if (first code) (first code) "(+ 1 2)")}] 
+   :result (if (first code) "" "3")
    :num-run-times 0
    :outline-color [0.2 0.2 1 1]
    :cmd-history [] :cmd-history-viewix 1e100
@@ -66,7 +67,7 @@
     (assoc (new-repl) :cursor-ix cursor-ix
       :pieces [{:text code}])))
 
-;;;;;;;;;;;;;;;;;;;;;;;;; Running the repl ;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;; Low repl running ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
 (def r-ns *ns*) ; default ns for the repls.
@@ -110,7 +111,7 @@
       (lim-len (str "Syntax error:" (.getMessage code-or-e) " " (type code-or-e)))
       (try
         (let [current-ns-sym (get-in s [:components repl-k :*ns*])
-              r-ns1 (if current-ns-sym (cbase/ns-sym2ob current-ns-sym) r-ns)
+              r-ns1 (if current-ns-sym (find-ns current-ns-sym) r-ns)
               y (str (binding [*ns* r-ns1 *this-k* repl-k *world* s] 
                   ;(clojure.stacktrace/print-stack-trace (Exception. "foo"))
                   ;(clojure.stacktrace/print-stack-trace (try (eval code) (catch Exception e e)))
@@ -124,7 +125,7 @@
   "The result will contain error messages if there is a problem."
   (try (let [code (read-string txt)] ; internal mutation of _state-atom possible.
          (try (let [current-ns-sym (get-in s [:components repl-k :*ns*])
-                    r-ns1 (if current-ns-sym (cbase/ns-sym2ob current-ns-sym) r-ns)
+                    r-ns1 (if current-ns-sym (find-ns current-ns-sym) r-ns)
                     y (str (binding [*ns* r-ns1 *this-k* repl-k *world* s] 
                              ;(clojure.stacktrace/print-stack-trace (Exception. "foo"))
                              ;(clojure.stacktrace/print-stack-trace (try (eval code) (catch Exception e e)))
@@ -153,7 +154,7 @@
           ;_ (println "result:" result)
           state1 @_state-atom
           repl1 (-> (get-in state1 [:components repl-k]) (assoc :result result)
-                  (assoc :*ns* (cbase/ns-ob2sym @new-ns-at))
+                  (assoc :*ns* (textparse/sym2ns @new-ns-at))
                   (update :num-run-times inc)
                   (update :cmd-history #(conj % txt)))]
       (assoc-in @_state-atom [:components repl-k] repl1)))
@@ -252,7 +253,7 @@
 (defn mouse-press [m-evt comp]
   (let [nc (:ClickCount m-evt) ctxt (:text (first (:pieces comp)))]
     (if (and (or (= nc 2) (= nc 4)) (<= (:cursor-ix comp) (count ctxt)))
-      (let [cbox (codebox/from-text ctxt (:lang comp))
+      (let [cbox (codebox/from-text ctxt (:langkwd comp))
             ckys [:selection-start :selection-end :cursor-ix]
             cbox (merge cbox (select-keys comp ckys))
             cbox1 (codebox/select-twofour-click cbox (= nc 4))]
@@ -280,7 +281,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;; Component interface ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn render+ [box & show-cursor?]
-  (let [box-with-out (assoc box :pieces [(first (:pieces box)) {:text (str " \n" (:result box))}])]
+  (let [box-with-out (assoc box :pieces 
+                       [{:text (apply str (mapv :text (:pieces box)))} 
+                        {:text (str " \n" (:result box))}])]
     (apply rtext/render box-with-out show-cursor?)))
 
 ; No child UI is planned in the near future.
@@ -319,3 +322,71 @@
    :expandable? expandable?
    :is-child? (fn [box] false)
    :expand-child expand-child :contract-child contract-child}))
+
+;;;;;;;;;;;;;;;;;;;;;;;;; High level repl dispatching ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn dispatch-hot-repls [s evt-c selected+- single-comp-dispatch-fn]
+  "Mouse move evts and everyFrame evts are ignored, as they cost CPU battery life.
+   But what if you are using the repl as a video game? They should let you do anything. We store the hot repl list."
+  (let [hots (:hot-repls s)
+        sel (set (:selected-comp-keys s))
+        target (cond (= selected+- 0) hots (> selected+- 0) (set/intersection hots sel)
+                 (< selected+- 0) (set/difference hots sel))]
+    (reduce (fn [s k] (single-comp-dispatch-fn evt-c s k)) 
+        s target)))
+
+(defn dispatch-warm-repls [s evt-c selected+- single-comp-dispatch-fn]
+  "Warm repls have events, but not mose moved or every frame events."
+  (let [warms (set (:warm-repls s))
+        sel (set (:selected-comp-keys s))
+        target (cond (= selected+- 0) warms (> selected+- 0) (set/intersection warms sel)
+                 (< selected+- 0) (set/difference warms sel))]
+    (reduce (fn [s k] (single-comp-dispatch-fn (assoc evt-c :unselected? (not (contains? sel k))) s k)) 
+        s target)))
+
+(defn update-warmhot-repls [s]
+  "Which repls have user-customized events?
+   :warm-repls = have events besides :mouseMoved and :everyFrame. :hot-repls = have :mouseMoved or :everyFrame events."
+  (let [warm-fns #{:mousePressed :mouseReleased :keyPressed :keyReleased :mouseDragged}
+        hot-fns #{:mouseMoved :everyFrame}
+        comps (:components s)
+        repl-kys (filterv #(= (:type (get comps %)) :orepl) (keys comps))
+        warm-kys (filterv #(> (count (set/intersection (set (keys (get comps %))) warm-fns)) 0) repl-kys)
+        hot-kys (filterv #(> (count (set/intersection (set (keys (get comps %))) hot-fns)) 0) repl-kys)]
+   (assoc s :warm-repls warm-kys :hot-repls hot-kys)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;; Interacting with the logger ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn make-lrepl [sym-qual path-within-code]
+  "Start seeing your log immediately (ok with a ctrl+enter)."
+  (let [path-within-code (into [] path-within-code)
+        code-str (str "^:active-logview\n"
+                   "(:value (coder.logger/last-log-of '" sym-qual "\n           " path-within-code "))")]
+    (assoc (new-repl) :pieces [{:text code-str}] :result "")))
+
+(defn is-repl-loggy? [box]
+  "Change the log-view repl immediately."
+  (let [code-str (:text (first (:pieces box)))]
+    (or (.contains ^String code-str "^:active-logview")
+      (= code-str "(+ 1 2)"))))
+
+(defn log-and-toggle-viewlogbox [s]
+   "There is one repl we want to keep changing as we toggle logs in different places.
+    If no place that can be logged is selected the unmodified s is returned."
+    (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
+      (if (= (:type fc) :codebox)
+        (let [comps (:components s)
+              cpath (codebox/cursor2cpath fc)
+              added? (logger/toggle-logger! (first cpath) (rest cpath) false)]
+          (if added?
+            (let [replks (filterv #(= (:type (get comps %)) :orepl) (keys comps))
+                  logviewk (first (filter #(is-repl-loggy? (get comps %)) replks))
+                  lrepl (make-lrepl (first cpath) (rest cpath))
+                  ;lrepl01 (if logviewk (assoc lrepl :position (:position (get comps logviewk))
+                  ;                       :size (:size (get comps logviewk))) lrepl)
+                  lrepl1 (if logviewk (assoc (get comps logviewk) :pieces (:pieces lrepl) :result "") lrepl)]
+              (if logviewk (assoc-in s [:components logviewk] lrepl1)
+                ((:add-component (:layout s)) s lrepl1 (keyword (gensym "logviewrepl")) true)))
+              s))
+          (do (println "Must select something in a codebox to use this function") s)) 
+        (do (println "Must select something (in a codebox) to use this function") s)))

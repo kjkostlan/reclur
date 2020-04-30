@@ -2,7 +2,7 @@
 (ns app.graphbox
   (:require [app.rtext :as rtext]
     [coder.plurality :as plurality] [coder.sunshine :as sunshine]
-    [coder.cbase :as cbase] [coder.cnav :as cnav]
+    [coder.cbase :as cbase] [coder.cnav :as cnav] [coder.crosslang.langs :as langs]
     [app.orepl :as orepl] [app.hintbox :as hintbox] [app.codebox :as codebox]
     [app.selectmovesize :as selectmovesize]
     [app.fbrowser :as fbrowser] [app.rtext :as rtext]
@@ -24,7 +24,7 @@
 
 (defn qual-name [code cbox]
   "Qualified name for a defn in code."
-  (let [ns-sym (cbase/file2ns (fbrowser/devec-file (:path cbox)))
+  (let [ns-sym (langs/file2ns (fbrowser/devec-file (:path cbox)))
         unqual-sym (second code)]
     (symbol (str ns-sym "/" unqual-sym))))
 
@@ -67,6 +67,18 @@
         box (assoc box :position 
               (mapv - xy [(* (first sz) 0.5) (+ (second sz) m)]))]
     (selectmovesize/fit-to-screen s box)))
+
+(defn try-to-toggle-graph-box [s]
+  (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
+    (if (or (= (:type fc) :codebox) (= (:type fc) :orepl))
+      (if-let [gb (add-graph-box s fc)] 
+        (if (get-in s [:components ::graphbox])
+          (update s :components 
+            #(dissoc % ::graphbox))
+          (assoc-in s [:components ::graphbox] gb)) 
+        (do (println "A nonlocal symbol needs to be aimed at.") s)) 
+      (do (println "A codebox or orepl needs to be selected.") s)) 
+    (do (println "No components selected.") s)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Interactions beyond the usual rtext interactions.

@@ -23,7 +23,9 @@
         gfx (try ((:render ifns) (dissoc comp :position) focused?)
               (catch Exception e 
                 (let [pieces (string/split (orepl/pr-error e) #"\n")]
-                  (mapv #(vector :drawString [%1 10 (+ 10 (* %2 10))] {:Color [1 1 1 1]}) pieces (range)))))] gfx))
+                  (mapv #(vector :drawString [%1 10 (+ 10 (* %2 10))] {:Color [1 1 1 1]}) pieces (range)))))] 
+        (if (= (count gfx) 0) (println "WARNING: no graphics drawn."))
+    gfx))
 
 (defn gfx-l2g [gfx cam position]
   (let [xform (xform/xx cam (pos-xform position))]

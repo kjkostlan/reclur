@@ -1,0 +1,241 @@
+; Compiles language-dependent functions into one area.
+
+; Common functions:
+; Depth: The interstial indentation depth. "a(b)()"->[0011010].
+; Reads-string: read-string but with and outer [], allowing reading the whole file at once.
+; tokenize: Returns [token-string, tiken-types]. See below for types.
+
+; Token codes (which can generalize to 95% of languages):
+  ; 0 = space and comments and #_(foo), includes delimiters as found in java, python, etc, even if they are necessary, includes MOST python whitespace.
+  ; 1 = symbols (basically the same in any language, + and = are symbols in java even though they are treated differently).
+  ; 2 = keywords (reserved words like "class" in java, python, etc).
+  ; 3 = literals (boolean, number, string, regexp, etc).
+  ; 4 = opening ( [ { #{ almost the same in any language, includes opening <tags>, and includes indent whitespace in python.
+  ; 5 = closing ) ] } almost the same in any language, includes </tags>, empty for python as there are no chars to be assigned to a dedent.
+  ; 6 = punctuation like ending semicolons. Does not exist in lisp.
+  ; 7 = reader macros (does not include metadata, sets, or regexp), includes spaces in reader macros which is possible in poorly formatted code, mostly unique to lisps.
+  ; 8 = meta tag (java annotations and python decorators).
+
+; Notes about files:
+;   Must take linux newlines, the file reader should automatically replace windows newlines with linux newlines.
+;   Tabs should be converted to spaces.
+
+; Notes about Java and similar syntaxes:
+; if (x>0) {do-stuff}
+; Gets converted into:
+; (if (> 0 x) (do-stuff))
+; Statements:
+; x=1;y=2;z=x*y
+; Gets converted into a let:
+; (let [x 1 y 2 z x*y])
+; The let spans the scope of all local statements, so it envelopes the function def.
+; Global statements: x=1 => _ (reset! x 1)
+; Non-returning calls: x=1; foo.doSomething(); y=2; => (x)
+; trailing ; are punctuations if they are mandatory.
+; Private tags etc into the metadata.
+; Types into :tag in the metadata much like clojure type hinting.
+; Vector<String> vec = new Vector<String>(2);
+; The tag simply is in (symbol "Vector<String>"), we don't parse this further.
+
+; Notes about python:
+; def foo(x=1):
+;   if x>1:
+;      return x
+;   else:
+;      print('hit min') # Open token is the last three spaces before the print 
+;      return 1.0  # No open token on this line, but a closing one at the '\n' at the end.
+;   ___  <- above this line are the spaces that indent the if and else. Any other whitespace is an empty token.
+; __ <- above this line rae the spaces that indent the foo.
+; The \n at the end dedents things.
+; Whitespace at the beginning of each line not including is punctuation.
+; Special fn calls:
+; def foo(x=1, y) => (defn foo ^{:defaults [1 nil]} [x y])
+; foo(a,b,*stuff) => (apply foo a b stuff)
+; foo(a,b,**dicty) => (apply-kv foo a b dicty)
+; foo(a,b,x=5) => (^{:arglist [%1 %2 x]} foo a b 5)
+; Decorators into the metadata.
+
+; Notes about C/C++ macros:
+; #foo
+; The entire thing is a reader macro, no attempt to parse it.
+
+(ns coder.crosslang.langs
+  (:require [coder.textparse :as textparse]
+            [coder.crosslang.langparsers.clojure :as clojure] 
+            [coder.crosslang.langparsers.human :as human]
+            [collections]
+            [clojure.string :as string]
+            [coder.cnav :as cnav]
+            [javac.file :as jfile]
+            [clojure.set :as set]))
+
+;;;;;;;;;;;;;;;;;;;;;; Support functions that aren't language dependent ;;;;;;;;;;;;;
+
+(defn errlang [fn-name langkwd]
+  "One day this function will be removed. One day..."
+  (throw (Exception. (str "langs/" fn-name " not yet supported with " langkwd))))
+
+;;;;;;;;;;;;;;;;;;;;;; Language specific fns of medium size ;;;;;;;;;;;;;
+; Small = inline. Large = put in dedicated files in coder.crosslang.langparsers.
+
+(defn get-code-clojure [file line col assert?]
+  ; TODO: not just clojure.
+  "Returns the code using the disk, if the file exists, nil otherwise.
+   Reader macros are expanded but not vanilla macros."
+  (let [file (str "./src/" file) txt (jfile/open file)
+        _ (if (and assert? (not txt)) (throw (Exception. (str file " not found"))))]
+    (if txt
+      (let [lines (string/split-lines txt)
+            clip-txt (subs (apply str (interpose "\n" (subvec lines (dec line)))) (dec col))]
+        (read-string clip-txt)))))
+
+;;;;;;;;;;;;;;;;;;;;;; Functions that don't require knowing the language itself, but do depend on language ;;;;;;;;;;;;;
+
+(defn resolved [ns-sym code-sym]
+  "Resolves code-sym in ns-sym, which depends on the :requires, :imports, etc.
+   Returns a fully qualified symbol."
+  (let [langkwd (textparse/ns2langkwd ns-sym)]
+    (cond (= langkwd :clojure)
+      (let [ns-ob (find-ns ns-sym)
+            _ (if (not ns-ob) (throw (Exception. (str "Namespace: " (pr-str ns-sym) " not found."))))
+            var-ob (ns-resolve ns-ob (symbol code-sym))]
+        ;(println "langs/resolved:" ns-sym code-sym var-ob)
+        (if var-ob (symbol (subs (str var-ob) 2))))
+      (= langkwd :human) (symbol (str :human (textparse/rm-lang code-sym)))
+      :else (errlang "resolved" langkwd))))
+
+(defn fileext2langkwd [ext]
+  "Infer the language from the file extension."
+  (let [ext (last (string/split ext #"\."))
+        priority-order [:clojure :java :javascript :python :haskell :segfault :shell :human]
+        ext-map {:clojure #{"clj" "cljs"}
+                 :java #{"java"} :javascript #{"js"}
+                 :python #{"py"}
+                 :haskell #{"hs"}
+                 :segfault #{"C" "CPP" "C++"}
+                 :shell #{"sh" "bat"}
+                 :human #{"txt" "md"}}
+        langkwd (first (filter #(contains? (get ext-map %) ext) priority-order))]
+    (if langkwd langkwd (throw (Exception. (str "unrecognized file exension:" ext))))))
+
+(defn langkwd2fileext [kwd]
+  (let [m {:clojure "clj" :java "java" :javascript "js" :python "py" 
+           :haskell "hs" :segfault "cpp" :shell "sh" :human "txt"}]
+    (get m kwd :unknown)))
+
+(defn file2ns [file]
+  "Converts a local filepath to a namespace symbol."
+  (let [file-ext (string/split (subs (jfile/full-to-local file) 2) #"\.")
+        file0 (first file-ext) ext (second file-ext)
+        langkwd (fileext2langkwd ext)]
+    (cond (or (= langkwd :human) (= langkwd :clojure))
+      (let [pieces (rest (string/split file0 #"\/")) ; exclude the src/
+            st (string/join "." pieces)]
+        (symbol st))
+    :else (errlang "file2ns" langkwd))))
+
+(defn ns2file [ns-sym]
+  "Converts a namespace representation to a file representation."
+  (let [langkwd (textparse/ns2langkwd ns-sym)]
+    (cond (or (= langkwd :clojure) (= langkwd :human))
+      (let [ns-sym0 (textparse/rm-lang ns-sym)
+            txt (.replace ^String (str ns-sym) "." "/")]
+        (str "./src/" txt "." (langkwd2fileext langkwd)))
+    :else (errlang "ns2file" langkwd))))
+
+(defn findable-ns? [ns-sym]
+  "Maybe it isn't findable."
+  (let [langkwd (textparse/ns2langkwd ns-sym)]
+    (cond (= langkwd :clojure)
+      (boolean (find-ns ns-sym))
+      (= langkwd :human) true
+      :else (errlang "findable-ns?" langkwd))))
+
+(defn var-info [qual-sym source?]
+  "Gets information about a var in the form of clojure datastructures."
+  (let [langkwd (textparse/ns2langkwd (textparse/sym2ns qual-sym))] 
+    (if (not= langkwd :clojure)
+      (errlang "var-info" langkwd)))
+  (let [ns-sym (textparse/sym2ns qual-sym) ns-obj (find-ns ns-sym)
+        _ (if (nil? ns-obj) (throw (Exception. (str "Namespace not found:" ns-sym))))
+        sym2var (ns-map ns-obj)
+        var-obj (get sym2var (textparse/unqual qual-sym))
+        out (meta var-obj) out (assoc out :ns ns-sym)
+        out (if source? (let [src (get-code-clojure (:file out) (:line out) (:column out) false)] 
+                          (if src (assoc out :source src) out)) out)]
+    out))
+
+(defn defs [ns-sym]
+  "Not qualified."
+  (let [langkwd (textparse/ns2langkwd ns-sym)]
+    (cond (= langkwd :clojure)
+      (into [] (keys (ns-interns ns-sym)))
+      (= langkwd :human) []
+      :else (errlang "defs" langkwd))))
+
+(defn valid-symbols [ns-sym]
+  "All recognized symbols of the namespace, with :as qualifications, etc.
+   TODO: java imports for clojure.
+   Only includes things that were imported."
+ (let [langkwd (textparse/ns2langkwd ns-sym)
+       _ (if (not= langkwd :clojure) (errlang "valid-symbols" langkwd))
+       x (ns-aliases ns-sym)
+       as2ns (zipmap (keys x) (mapv ns-name (vals x)))
+       standard (keys (ns-map 'clojure.core))
+       native (defs ns-sym)
+       foreign (apply concat
+                 (mapv (fn [stub nms] (mapv #(symbol (str stub "/" %)) 
+                                       (defs nms))) 
+                   (keys as2ns) (vals as2ns)))] 
+    (collections/vcat native foreign standard)))
+
+;;;;;;;;;;;;;;;;;;;;;; Functions that need to know which language to use ;;;;;;;;;;;;;;;;;
+
+(defn reads-string [txt langkwd]
+  "Reads txt into a clojure datastructure using lang to parse it.
+   Returns false if it fails, which is different than []."
+  (cond (= langkwd :clojure) (clojure/reads-string txt)
+    (= langkwd :human) (human/reads-string txt)
+    :else (errlang "reads-string" langkwd)))
+
+(defn interstitial-depth [txt langkwd]
+  "The depth at all cursor-ix values, with the cursor going between characters.
+   Has one more element than the length of txt. 
+   It can see zero-wide gaps in stuff like ()()."
+  (cond (= langkwd :clojure) (clojure/interstitial-depth txt)
+    (= langkwd :human) (human/interstitial-depth txt)
+    :else (errlang "interstitial-depth" langkwd)))
+
+(defn tokenize-ints [txt langkwd]
+  "Creates ^ints of [st en ty].
+   st = start ix on string of token. en = end ix on string of token.
+   ty is the type as defined above. It is an int that tells us wether it is a symbol, literal, bracket, whitespace, etc."
+  (cond (= langkwd :clojure) (clojure/tokenize-ints txt)
+    (= langkwd :human) (human/tokenize-ints txt)
+    :else (errlang "tokenize-ints" langkwd)))
+
+;;;;;;;;;;;;;;;;;;;;;; Functions that work with multiple languages at once ;;;;;;;;;;;;;
+
+(defn get-all-loaded-ns [] 
+  (let [clojures (mapv ns-name (all-ns))]
+    ; Will add more in the future.
+    clojures))
+
+(defn ensure-src-ns-loaded! []
+  "Our sources. More languages will be added."
+  (let [t0 (System/nanoTime)
+        loaded-ns-syms (set (mapv ns-name (all-ns)))
+        all-clj-files (filterv jfile/clj? (jfile/all-files-inside "./src"))
+        src-ns-syms (set (mapv file2ns all-clj-files))
+        needed-ns-syms (set/difference src-ns-syms loaded-ns-syms)
+        _ (println "# namespaces loaded:" (count loaded-ns-syms) 
+            "# namespaces in src" (count src-ns-syms)
+             " # namespaces need to load for coder/cbase:" 
+            (count needed-ns-syms))
+        _ (binding [*ns* (create-ns (gensym 'tmploadnscbase))]
+            (mapv #(try (require %)
+                     (catch Exception e
+                       (println "Failed to load ns (bad clj file?):" %)))
+              needed-ns-syms))
+        t1 (System/nanoTime)]
+    (println "Elapsed time (s) to make sure all files in ./src are loaded:" (/ (- t1 t0) 1.0e9))))
