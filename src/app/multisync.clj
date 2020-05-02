@@ -4,15 +4,13 @@
 (ns app.multisync
   (:require 
     [clojure.set :as set] [clojure.string :as string]
-    [app.singlecomp :as singlecomp]
     [app.codebox :as codebox]
-    [app.xform :as xform]
     [app.rtext :as rtext]
     [app.stringdiff :as stringdiff]
     [app.fbrowser :as fbrowser]))
 
 ;;;;;;;;;;;;;;;;; Simple collection stuff ;;;;;;;;;;;;;;;;;
- 
+
 (defn comp-eq? [c0 c1]
   (= (:pieces c0) (:pieces c1)))
 

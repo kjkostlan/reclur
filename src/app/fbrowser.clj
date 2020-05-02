@@ -515,10 +515,10 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Nonstandard interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn load-from-file [comps filename codebox-from-text-fn]
-  "Returns a component. It will copy a component if one is already open, to ensure agreement in exported stuff.
-   This means be careful with external modifications to the disk."
-  (let [kys (filterv #(let [c (get comps %)]
+(defn load-from-cache-or-file [comps filename codebox-from-text-fn]
+  "Returns a component. Uses the file iff no cache is available."
+  (let [comps (if (map? comps) comps (zipmap (range) comps))
+        kys (filterv #(let [c (get comps %)]
                         (and (= (:type c) :codebox) (= (devec-file (:path c)) filename))) (keys comps))]
     (if (= (count kys) 0) ; first component.
       (let [txt (jfile/open filename)]
@@ -539,7 +539,7 @@
     (if (and fname non-folder?)
       (let [lix (pixel-to-line box (:X evt) (:Y evt))
             pos (:position box) sz (:size box)
-            cbox (assoc (if (jfile/exists? fname) (load-from-file (:components s) fname codebox-from-text-fn)
+            cbox (assoc (if (jfile/exists? fname) (load-from-cache-or-file (:components s) fname codebox-from-text-fn)
                           blank-codebox)
                    :path (vec-file fname)
                    :position (mapv + pos (mapv * sz [0.25 0.75])))]

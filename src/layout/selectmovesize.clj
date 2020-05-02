@@ -1,8 +1,7 @@
 ; Handles selection (single or multible), moving and resizing.
 
-(ns app.selectmovesize
-  (:require [app.xform :as xform]
-    [app.singlecomp :as singlecomp]
+(ns layout.selectmovesize
+  (:require [layout.xform :as xform]
     [app.multicomp :as multicomp]
     [clojure.string :as string]
     [layout.keybind :as kb]
@@ -34,8 +33,16 @@
   (and (< (xxyy-big 0) (xxyy-small 0)) (> (xxyy-big 1) (xxyy-small 1))
     (< (xxyy-big 2) (xxyy-small 2)) (> (xxyy-big 3) (xxyy-small 3))))
 
+(defn click? [x y comp]
+  (if (or (nil? x) (nil? y)) (throw (Exception. "Nil coords")))
+  (let [x0 (first (:position comp))
+        y0 (second (:position comp))
+        sx (first (:size comp))
+        sy (second (:size comp))]
+    (and (>= x x0) (>= y y0) (<= x (+ x0 sx)) (<= y (+ y0 sy)))))
+
 (defn unders-cursor [x y comps]
-  (filterv #(singlecomp/click? x y (get comps %)) (keys comps)))
+  (filterv #(click? x y (get comps %)) (keys comps)))
 
 (defn under-cursor [x y comps] 
   "Returns the key to the highest z-valued comp under the mouse, nil if nothing is under the mouse."
@@ -135,7 +142,8 @@
 
 ; Inkscape-like selection tool:
 (defn get-tool []
-  {:render (fn [s] (let [ts (gts s) zoom (last (:camera s)) 
+  {:render (fn [s] (let [ts (gts s) zoom (last (:camera s))
+                         _ (if (< zoom 1e-10) (throw (Exception. "The zoom got set to zero somehow.")))
                          sh? (is-sh?) ; shifting disables seeing the selection (until the mouse gets going), as it disables being to drag the selection.
                          alt? (is-alt?) ; alt is the same idea and it removes selections.
                          mouse? (is-mouse?) ts (gts s)] 

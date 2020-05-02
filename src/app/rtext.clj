@@ -493,6 +493,16 @@
         boxxy (cond (< y t) (scy boxx (+ (- y t) (if sh? -1 0))) (> y b) (scy boxx (- y b)) :else boxx)] 
     (scroll-bound boxxy)))
 
+(defn scroll-to-see-selection [box]
+  "Tries to make the entire selection visible. Will always make the cursor visible."
+  (-> box
+    (assoc :cursor-ix (:selection-end box))
+    scroll-to-see-cursor
+    (assoc :cursor-ix (:selection-start box))
+    scroll-to-see-cursor
+    (assoc :cursor-ix (:cursor-ix box))
+    scroll-to-see-cursor))
+
 (defn cursor-scroll-update [box box1 vis-edits]
   "box is the old box, box1 is the new box, and vix-edits gets from box to box1."
   (let [cur-ix (:cursor-ix box) line0 (cursor-ix-to-lix box)

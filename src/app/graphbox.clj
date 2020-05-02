@@ -4,7 +4,7 @@
     [coder.plurality :as plurality] [coder.sunshine :as sunshine]
     [coder.cbase :as cbase] [coder.cnav :as cnav] [coder.crosslang.langs :as langs]
     [app.orepl :as orepl] [app.hintbox :as hintbox] [app.codebox :as codebox]
-    [app.selectmovesize :as selectmovesize]
+    [layout.selectmovesize :as selectmovesize]
     [app.fbrowser :as fbrowser] [app.rtext :as rtext]
     [collections]))
 

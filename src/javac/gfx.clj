@@ -27,7 +27,7 @@
     [java.awt.image BufferedImage]
     [java.awt.geom AffineTransform])
   (:require [clojure.set :as set]
-    [app.xform :as xform]
+    [layout.xform :as xform]
     [javac.gfxcustom :as gfxcustom]
     [clojure.string :as string]))
 
@@ -198,7 +198,72 @@
   (.setStroke g ^BasicStroke (BasicStroke. (float 2.0))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;; Rendering runtime.
+;;;;;;; How cameras xform clojure gfx structures ;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn new-location [xform name-kwd old-loc]
+  "Default behavior to get the new location (which is the second argument of the graphics, in vector form).
+   what we call 'location' is really the list of arguments passed to the java graphics call.
+   but it acts like location to a large extent."
+  ; only numbers are converted.
+  ; the default pattern is [x y width height width height width height].
+  ; dievations are handled in the default.
+  ; changes to linewidth are NOT handled here.
+  ; The code could be made shorter by having functions that perform each elementary transform.
+  (let [x (first xform) y (second xform) sx (nth xform 2) sy (nth xform 3)]
+    (cond (and (= x 0) (= y 0) (= sx 1) (= sy 1)) old-loc ; no change if not bieng transformed.
+      (or (= name-kwd :drawBytes) (= name-kwd :drawChars)) ; don't know how to size these.
+      [(first old-loc) (second old-loc) (nth old-loc 2) 
+       (+ (* (nth old-loc 3) sx) x) (+ (* (nth old-loc 4) sy) y)]
+      (= name-kwd :drawImage)
+      (cond (< (count old-loc) 6) (throw (Exception. ":drawImage must use a form that specifies the width and height."))
+        (< (count old-loc) 8) ; unscaled form, must scale it.
+        (into [] 
+          (concat
+            [(first old-loc) (+ (* (second old-loc) sx) x) (+ (* (nth old-loc 2) sy) y)
+             (+ (* (+ (second old-loc) (nth old-loc 3)) sx) x)
+             (+ (* (+ (nth old-loc 2) (nth old-loc 4)) sy) y)] (subvec old-loc 5)))
+        :else
+        (into [] 
+          (concat [(first old-loc) (+ (* (second old-loc) sx) x) (+ (* (nth old-loc 2) sy) y)
+                   (+ (* (nth old-loc 3) sx) x) (+ (* (nth old-loc 4) sy) y)]
+           (subvec old-loc 5))))
+      (= name-kwd :drawLine)
+      [(+ (* (first old-loc) sx) x) (+ (* (second old-loc) sy) y)
+       (+ (* (nth old-loc 2) sx) x) (+ (* (nth old-loc 3) sy) y)]
+      (or (= name-kwd :drawPolygon) (= name-kwd :drawPolyline))
+      (throw (Exception. "TODO: support polygons and polylines"))
+      (or (= name-kwd :drawRect) (= name-kwd :fillRect) (= name-kwd :drawOval) (= name-kwd :fillOval))
+      [(+ (* (first old-loc) sx) x) (+ (* (second old-loc) sy) y)
+       (* (nth old-loc 2) sx) (* (nth old-loc 3) sy)] ; x y w h
+      (= name-kwd :drawString)
+      [(first old-loc) (+ (* (second old-loc) sx) x) (+ (* (nth old-loc 2) sy) y)]
+      :else ; guessing, this list isn't complete.
+      (mapv #(cond (not (number? %1)) %1 
+              (even? %2) (+ (* %1 sx) x)
+              :else (+ (* %1 sy) y)) old-loc (range)))))
+
+(defn xgfx [xform g-cmd keep-width?]
+  "Transforms a single graphics command.
+   xform is how the component is transformed; use this to draw transformed components.
+   TODO: implement this keep-width? false mean lines get thinner/thicker (using transparancy when < 1 pixel).
+   true will keep lines at the same width, so a 1-pixel line stays 1 pixel."
+  (let [kwd (first g-cmd) cf (get gfxcustom/custom-xforms kwd)]
+    (if cf (cf xform g-cmd keep-width?)
+      (if (= kwd :java) g-cmd ; custom commands, no way to try to parse them.
+        (let [g-cmdl (assoc g-cmd 1 (new-location xform (first g-cmd) (second g-cmd)))]
+          (cond (= kwd :drawString)
+            (let [sz (* (if-let [sz (:FontSize (get g-cmdl 2))] sz 11) (nth xform 2))]
+              (assoc-in g-cmdl [2 :FontSize] sz))
+            :else g-cmdl))))))
+
+(defn gfx-local2global [gfx cam position]
+  "Converts local to global graphics, given a clojure datastructure for the graphics."
+  (let [xfrm (xform/xx cam (xform/pos-xform position))]
+    (mapv #(xgfx xfrm % true) gfx)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;; Rendering runtime ;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn convert-commands [cmds]
@@ -294,7 +359,7 @@
         ;(BufferedImage. (int sx) (int sy) (int BufferedImage/TYPE_INT_ARGB))
         ^Graphics2D g (.createGraphics img)
         _ (healthy-stroke! g)
-        cmds-xformed (mapv #(xform/xgfx xf % true) cmds)]
+        cmds-xformed (mapv #(xgfx xf % true) cmds)]
     (fixed-width-font! g)
     (paint-gfx! g cmds-xformed) [img xf]))
   
@@ -331,7 +396,7 @@
                                  sp? (and (:bitmap-cache? %2) enough-for-sprite?)]
                              (if (and sp? sp-old (= gc-old gc)) sp-old
                                (if sp? (make-imagep gc)))) kys vls))
-        camg (fn [cm] #(xform/xgfx cm %1 true))]
+        camg (fn [cm] #(xgfx cm %1 true))]
     (mapv #(let [sp (get sprites1p %) cam (get cameras %)]
              (if sp 
                (add-image! g (first sp) (xform/x-1 (second sp)) cam)

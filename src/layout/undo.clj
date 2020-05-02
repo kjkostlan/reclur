@@ -25,8 +25,8 @@
           (not= o-n #{}) (str "close files: " n-o)
           :else
           (let [files (into [] files-old)
-                strs-old (mapv #(multicomp/open-cache s-old %) files)
-                strs-new (mapv #(multicomp/open-cache s %) files)
+                strs-old (mapv #(multicomp/open-fcache (:components s-old) %) files)
+                strs-new (mapv #(multicomp/open-fcache (:components s) %) files)
                 changed-ixs (filterv #(not= (nth strs-old %) (nth strs-new %)) (range (count files)))
                 changed (mapv #(nth files %) changed-ixs)]
             (if (= changed []) "non-edit component change."

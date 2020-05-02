@@ -134,7 +134,7 @@
         open (apply hash-set (mapv #(fbrowser/devec-file (:path (get comps %))) codeboxks))
         new2?old (multicomp/new2?old-files s)
         open2text (zipmap (into [] open)
-                    (mapv #(multicomp/open-cache s %) (into [] open)))
+                    (mapv #(multicomp/open-fcache (:components s) %) (into [] open)))
         get-old (fn [new] (if-let [x (get new2?old new)] x new))
         old2new (dissoc (zipmap (vals new2?old) (keys new2?old)) nil false)
 

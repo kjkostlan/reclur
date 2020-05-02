@@ -74,6 +74,14 @@
         x2 (assoc x k v)]
     (if v? x2 (apply list x2))))
 
+(defn linspace
+  ;https://crossclj.info/ns/anglican/1.0.0/anglican.ais.html#_linspace
+  "returns a equally spaced sequence of points"
+  [start end size]
+  (let [delta (/ (- end start) (dec size))]
+    (map (fn [n] (+ start (* n delta)))
+         (range size))))
+
 ;;;;;;;;;;;;;;;; Generalized functions (wider valid argument set) ;;;;;;;;;;;;;;
 
 (defn cget [x k]

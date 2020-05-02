@@ -9,7 +9,7 @@
     [clojure.string :as string]
     [app.codebox :as codebox]
     [app.fbrowser :as fbrowser]
-    [app.selectmovesize :as selectmovesize]))
+    [layout.selectmovesize :as selectmovesize]))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Setting stuff up ;;;;;;;;;;;;;;;;;;;;;;;;;;;

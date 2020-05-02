@@ -4,12 +4,12 @@
 (ns app.multicomp
   (:require 
     [clojure.set :as set] [clojure.string :as string]
-    [app.singlecomp :as singlecomp]
     [app.codebox :as codebox]
-    [app.xform :as xform]
+    [layout.xform :as xform]
     globals
     [javac.file :as jfile]
     [javac.warnbox :as warnbox]
+    [javac.gfx :as gfx]
     [app.multisync :as multisync]
     [app.stringdiff :as stringdiff]
     [app.fbrowser :as fbrowser]))
@@ -67,10 +67,9 @@
         comps1 (dissoc (multisync/comprehensive-sync (:components s) (assoc (:components s) tmpk fb)) tmpk)]
     (assoc s :components (if reset-fullname0s? (zipmap (keys comps1) (mapv fbrowser/reset-fullname0s (vals comps1))) comps1))))
 
-(defn open-cache [s fname]
+(defn open-fcache [comps fname]
   "Loads fname from s, not the disk. nil if fname isn't found."
-  (let [comps (:components s)
-        codeboxks (codebox-keys comps fname)]
+  (let [codeboxks (codebox-keys comps fname)]
     (if (> (count codeboxks) 0)
       (codebox/real-string (get comps (first codeboxks))))))
 
@@ -86,7 +85,7 @@
         comps1 (reduce (fn [comp-map k]
                          (assoc comp-map k
                            (codebox/apply-edits-to-real-string (get comps codeboxks) edits))) comps codeboxks)]
-    (if (not= (open-cache (assoc s :components comps1) fname) new-string) (throw (Exception. "Bug in multicomp/save-cache"))) ; Extra safety double check.
+    (if (not= (open-fcache comps1 fname) new-string) (throw (Exception. "Bug in multicomp/save-cache"))) ; Extra safety double check.
     (assoc s :components comps1)))
 
 (defn add-file [s fname folder?]
@@ -114,7 +113,7 @@
         s (assoc-in s [:precompute :desync-safe-mod?] true)
 
         expandable? (:expandable? int-fns)
-        mevt (xform/xevt (xform/x-1 (singlecomp/pos-xform (:position comp0))) mevt-c)
+        mevt (xform/xevt (xform/x-1 (xform/pos-xform (:position comp0))) mevt-c)
         x (if (expandable? mevt comp) 
             ((:expand-child int-fns) mevt comp))]
     (if x 
@@ -151,45 +150,56 @@
   (if (> (count (multisync/twins comps k)) 0) comps
     (contract-all-descendents comps k)))
 
-(defn close-component-noprompt [s kwd]
+(defn close-component-noprompt [comps kwd]
   "Contracts into the parent(s) if it has parents."
-  (let [cs0 (:components s) ty (get-in cs0 [kwd :type])]
+  (let [ty (get-in comps [kwd :type])]
     (if (= ty :fbrowser) 
-      (let [cs (contract-descendents-if-twinless cs0 kwd)
+      (let [cs (contract-descendents-if-twinless comps kwd)
             doomed (get cs kwd)
-            s (assoc-in s [:precompute :desync-safe-mod?] true)
             twins? (> (count (multisync/twins cs kwd)) 0)
-            
             cs1 (dissoc cs kwd)
             
-            s (assoc s :components cs1) 
             parent-ks (filterv #(= ty (:type (get cs %))) 
                         (multisync/fbrowser-padres cs kwd))]
-        (if (or twins? (= (count parent-ks) 0)) s ; don't contract the child unless it is the last one remaining.
-          (reduce #(assoc-in %1 [:components %2] (contract-child (get cs %2) doomed)) s parent-ks))) 
-      (assoc s :components (dissoc cs0 kwd)))))
+        (if (or twins? (= (count parent-ks) 0)) cs1 ; don't contract the child unless it is the last one remaining.
+          (reduce #(assoc %1 %2 (contract-child (get comps %2) doomed)) cs1 parent-ks))) 
+      (dissoc comps kwd))))
 
-(defn close-component [s kwd]
+(defn close-component-vanilla-layout [comps kwd]
   "Prompts the user if there are modified files open and the last codebox of a given type is open.
    Closes will fail if the user clicks cancel."
-  (let [comp (get (:components s) kwd)]
+  (let [comp (get comps kwd)]
     (cond (and (= (:type comp) :codebox) ; Closing the last open codebox.
-            (= (count (multisync/twins (:components s) kwd)) 0))
+            (= (count (multisync/twins comps kwd)) 0))
       (let [fname (fbrowser/devec-file (:path comp))
             txt0 (if (jfile/exists? fname) (jfile/open fname))
-            txt1 (open-cache s fname)]
+            txt1 (open-fcache comps fname)]
         (if (not= txt0 txt1)
           (let [opt (warnbox/choice (str "Save file before closing? " fname) [:yes :no :cancel] :yes)]
             (cond (= opt :yes) 
               (do (jfile/save!! fname txt1)
-                (close-component-noprompt s kwd)) ; the cache is stored in the components; closing it removes the cache.
+                (close-component-noprompt comps kwd)) ; the cache is stored in the components; closing it removes the cache.
               (= opt :no)
-              (close-component-noprompt s kwd)
-              :else s))
-          (close-component-noprompt s kwd)))
-      (and (fbrowser/rootfbrowser? comp) (= (count (filterv fbrowser/rootfbrowser? (vals (:components s)))) 1))
-      (do (println "Can't close the last root fbrowser.") s)
-      :else (close-component-noprompt s kwd))))
+              (close-component-noprompt comps kwd)
+              :else comps))
+          (close-component-noprompt comps kwd)))
+      (and (fbrowser/rootfbrowser? comp) (= (count (filterv fbrowser/rootfbrowser? (vals comps))) 1))
+      (do (println "Can't close the last root fbrowser.") comps)
+      :else (close-component-noprompt comps kwd))))
+
+(defn close-component [s kwd]
+  "Includes the visual layout function."
+  (let [clf (:close-components (:layout s)) comps (:components s)
+        comps1 (close-component-vanilla-layout comps kwd)
+        kys-gone (set/difference (set (keys comps)) (set (keys comps1)))
+        s1 (assoc (assoc-in s [:precompute :desync-safe-mod?] true) :components comps1)] ; we handled all synching during the close.
+    (if clf 
+      (let [s2 (assoc s1 :components (merge comps comps1))
+            s3 (clf s2 kys-gone)] ; The comps that were removed are doomed anyway.
+        (if (not= (keys (:components s3)) (keys comps1))
+          (throw (Exception. "The layout close function didn't behave properly.")))
+        s3) 
+      s1)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -200,4 +210,4 @@
 
 (defn draw-select-box [comps k camera]
   (let [f-comp (get comps k) p (:position f-comp) sz (:size f-comp)]
-    [(xform/xgfx camera [:drawRect [(dec (first p)) (dec (second p)) (+ (first sz) 2) (+ (second sz) 2)] {:Color [0.9 1 0.7 1.0]}] true)]))
+    [(gfx/xgfx camera [:drawRect [(dec (first p)) (dec (second p)) (+ (first sz) 2) (+ (second sz) 2)] {:Color [0.9 1 0.7 1.0]}] true)]))

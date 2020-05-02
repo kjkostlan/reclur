@@ -133,10 +133,10 @@
         
         ; Alphanumeric symbols and spaces are pretty universal:
         sym (gensym "IAmUnique")
-        txt1 (str (subs txt 0 c0) " " sym (subs txt c1) " ")
+        txt1 (str (subs txt 0 c0) " " sym " " (subs txt c1))
         x1 (reads-string-fn txt1)
         path (cnav/path-of x1 sym)]
-    (if (not path) (throw (Exception. (str "String-to-wpath not working: ..." (subs txt (max 0 (- ix 20)) (min (+ ix 20) (count txt))) "..."))))
+    (if (not path) (throw (Exception. (str "String-to-wpath not working: ..." (subs txt1 (max 0 (- ix 20)) (min (+ ix 20) (count txt1))) "..."))))
     path))
 
 (defn wpath-to-string-ixs [txt wpath tok-ints-fn reads-string-fn]

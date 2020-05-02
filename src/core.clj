@@ -7,6 +7,7 @@
 ; Trying not to have too much component-specific code here, but the coupling is just so tight for the structural editor.
 
 (ns core
+  (:import [java.awt.image BufferedImage])
   (:require 
     [clojure.string :as string]
     [clojure.set :as set]
@@ -14,7 +15,8 @@
     [javac.file :as jfile]
     [javac.warnbox :as warnbox]
     [javac.clojurize :as clojurize]
-    [layout.onecode :as onecode]
+    [javac.gfxcustom :as gfxcustom]
+    [layout.layouts :as layouts]
     [layout.undo :as undo]
     [app.orepl :as orepl]
     [app.fbrowser :as fbrowser] 
@@ -24,13 +26,13 @@
     [app.graphbox :as graphbox]
     [app.multicomp :as multicomp] 
     [app.multisync :as multisync] 
-    [app.singlecomp :as singlecomp]
-    [app.selectmovesize :as selectmovesize]
-    [app.xform :as xform]
     [app.iteration :as iteration]
     [navigate.strfind :as strfind]
     [navigate.funcjump :as funcjump]
     [layout.keybind :as kb]
+    [layout.selectmovesize :as selectmovesize]
+    [layout.xform :as xform]
+    [layout.layoutcore :as layoutcore]
     [coder.logger :as logger]
     [coder.cnav :as cnav]
     [coder.cbase :as cbase]))
@@ -74,6 +76,8 @@
    "esc" toggle-typing
    "C-S-r" #(if (or (globals/are-we-child?) (warnbox/yes-no? "Relaunch app, losing any unsaved work? Does not affect the child app." false)) 
                             (do (future (launch-main-app!)) (throw (Exception. "This iteration is dead, reloading."))) %)
+   "C-l" (fn [s] (layouts/next-layout s)) 
+   "C-S-l" (fn [s] (layouts/prev-layout s))
    "C-`" selectmovesize/swap-on-top 
    "C-f" (fn [s] (strfind/add-search-box s)) 
    "C-p p" (fn [s] (orepl/log-and-toggle-viewlogbox s))
@@ -117,7 +121,7 @@
 
 (defn single-comp-dispatch [evt-c s comp-k]
   (let [comp (get-in s [:components comp-k])
-              evt (xform/xevt (xform/x-1 (singlecomp/pos-xform (:position comp))) evt-c)
+              evt (xform/xevt (xform/x-1 (xform/pos-xform (:position comp))) evt-c)
               s (let [ifn-heavy (get (:interact-fns comp) :dispatch-heavy)] ; allows modifying s itself.
                   (if ifn-heavy (ifn-heavy evt s comp-k) s))
               comp (get-in s [:components comp-k])
@@ -134,7 +138,7 @@
 ; The maybe-x fns return the effects of doing x if the task is triggered, else s.
 (defn maybe-open-file [evt-c s compk]
   (let [box (get (:components s) compk)
-        evt (xform/xevt (xform/x-1 (singlecomp/pos-xform (:position box))) evt-c)]
+        evt (xform/xevt (xform/x-1 (xform/pos-xform (:position box))) evt-c)]
     (fbrowser/open-file-attempt evt s compk (codebox/new-codebox) codebox/from-text)))
 
 (defn update-mouse [evt-g evt-c s k]
@@ -255,6 +259,53 @@
 
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
 
+(def bg-filename "./assets/forest.jpg")
+(def bg-scale 16.0)
+(def bg-perspective-effect 4.0) ; make it slightly in the background.
+
+(def bg-size (let [^BufferedImage img (gfxcustom/filename2BufferedImage bg-filename)]
+               [(.getWidth img) (.getHeight img)]))
+
+
+(defn limit-cam [s]
+  "Cameras are transformations, [x y scalex scaley], scaling first."
+  (let [cam (:camera s)
+        bg-scale0 (- bg-scale bg-perspective-effect)
+        bound-xxyy [(- (* 0.5 bg-scale0 (first bg-size))) (* 0.5 bg-scale0 (first bg-size))
+                    (- (* 0.5 bg-scale0 (second bg-size))) (* 0.5 bg-scale0 (second bg-size))]
+        cam-limit (layoutcore/visible-xxyy-to-cam bound-xxyy)
+        
+        min-zoom (nth cam-limit 2)
+        max-zoom 64.0
+        zoom (* 0.5 (+ (nth cam 2) (nth cam 3)))
+        zoom1 (max min-zoom (min max-zoom zoom))
+        
+        cam-xxyy0 (layoutcore/visible-xxyy cam)
+        mX (* 0.5 (+ (nth cam-xxyy0 0) (nth cam-xxyy0 1)))
+        mY (* 0.5 (+ (nth cam-xxyy0 2) (nth cam-xxyy0 3)))
+        rzoom (/ max-zoom zoom)
+        cam1 (if (> zoom max-zoom) 
+              (xform/xx cam [(* mX (- 1 rzoom)) (* mY (- 1 rzoom)) zoom1 zoom1]) cam)
+        
+        cam-xxyy (layoutcore/visible-xxyy cam1)
+        
+        ; It works "backwards":
+        move+x (* (- (nth cam-xxyy 1) (nth bound-xxyy 1)) zoom1)
+        move-x (* (- (nth bound-xxyy 0) (nth cam-xxyy 0)) zoom1)
+        move+y (* (- (nth cam-xxyy 3) (nth bound-xxyy 3)) zoom1)
+        move-y (* (- (nth bound-xxyy 2) (nth cam-xxyy 2)) zoom1)
+                
+        conflictx (max 0.0 (* 0.5 (+ move-x move+x))) conflicty (max 0.0 (* 0.5 (+ move-y move+y)))
+        move+x (- move+x conflictx) move-x (- move-x conflictx)
+        move+y (- move+y conflicty) move-y (- move-y conflicty)
+        
+        ;_ (println "Stuff:" cam-xxyy bound-xxyy move+x move-x move+y move-y)
+        ;move+x 0 move-x 0 move+y 0 move-y 0
+        cam2x (cond (> move+x 0) (+ (first cam1) move+x) (> move-x 0) (- (first cam1) move-x) :else (first cam1))
+        cam2y (cond (> move+y 0) (+ (second cam1) move+y) (> move-y 0) (- (second cam1) move-y) :else (second cam1))
+        cam2 [cam2x cam2y zoom1 zoom1]]
+    (assoc s :camera cam2)))
+
 (defn globalize-gfx [comps cam local-comp-renders selected-comp-keys tool-sprite sel-move-sz-sprite typing?]
   "Takes the local gfx of components as well as tool information to make the global gfx"
   (let [sel-keys (apply hash-set selected-comp-keys)
@@ -263,19 +314,30 @@
                        (mapv (fn [k] 
                                (let [c (get comps k)
 
-                                     cam1 (xform/xx cam (singlecomp/pos-xform (:position c)))]
+                                     cam1 (xform/xx cam (xform/pos-xform (:position c)))]
                                  {:bitmap-cache? true :camera cam1 :gfx (get local-comp-renders k) :z (:z c)}))
                              (keys comps)))
-        bg-scale 10.0
-        bg-perspective-effect 2.0 ; make it in the background.
         bg {:camera cam :z -1e100
-            :gfx [[:bitmap [(* bg-scale -500) (* bg-scale -500) bg-scale bg-perspective-effect "./assets/forest.jpg"]]]}
+            :gfx [[:bitmap [(* bg-scale (* -0.5 (first bg-size))) 
+                            (* bg-scale (* -0.5 (second bg-size)))
+                            bg-scale bg-perspective-effect bg-filename]]]}
         sel-sprite {:camera cam :z 2e10
                     :gfx (into [] (apply concat (mapv #(multicomp/draw-select-box comps % [0 0 1 1]) sel-keys)))}
         haze-sprite {:camera [0 0 1 1] :z -1e99
                      :gfx (if typing? [[:fillRect [0 0 1500 1500] {:Color [0 0 0 0.333]}]] [])}]
     (assoc comp-sprites ::TOOL-SPRITE-CORE tool-sprite ::TOOL-SMS-SPRITE sel-move-sz-sprite ::TOOL-SEL-SPRITE sel-sprite 
     ::BACKGROUND-SPRITE bg ::HAZE-SPRITE haze-sprite)))
+
+(defn draw-component-l [comp focused?]
+  (if (nil? comp) (throw (Exception. "nil component")))
+  (if (not (map? comp)) (throw (Exception. "Non-map component")))
+  (let [ifns (:interact-fns comp) 
+        gfx (try ((:render ifns) (dissoc comp :position) focused?)
+              (catch Exception e 
+                (let [pieces (string/split (orepl/pr-error e) #"\n")]
+                  (mapv #(vector :drawString [%1 10 (+ 10 (* %2 10))] {:Color [1 1 1 1]}) pieces (range)))))] 
+        (if (= (count gfx) 0) (println "WARNING: no graphics drawn."))
+    gfx))
 
 (defn update-gfx [s]
   "Returns s with updated graphics information. app-render will then use the updated graphics to return a sprite map."
@@ -288,7 +350,7 @@
         draw-or-reuse (fn [k] (let [c (get comps k) c0 (get old-comps k) g0 (get old-compgfx k)] 
                                 ; Cant use comp-eq? b/c comp-eq? is only for the :pieces not the gfx.
                                 (if (and (:pure-gfx? (:optimize c)) (= (dissoc c0 :position) (dissoc c :position)))
-                                  g0 (singlecomp/draw-component-l c true))))
+                                  g0 (draw-component-l c true))))
         gfx-comps-l (zipmap (keys comps) (mapv draw-or-reuse (keys comps)))
         
         precompute1 (assoc precompute :comps-at-render comps :comp-renders gfx-comps-l)
@@ -329,8 +391,9 @@
         _ (if (> (count txt) 0) (println txt)) ; mirror the output in the real console.
         err? (instance? java.lang.Exception s1-or-ex) 
         s2 (if err? s s1-or-ex)
-        s3 (if (= (count txt) 0) s2 (siconsole/log s2 txt))]
-     (if err? (do (println (orepl/pr-error s1-or-ex)) (siconsole/log s3 (orepl/pr-error s1-or-ex))) s3)))
+        s3 (if (= (count txt) 0) s2 (siconsole/log s2 txt))
+        s4 (limit-cam s3)]
+     (if err? (do (println (orepl/pr-error s1-or-ex)) (siconsole/log s4 (orepl/pr-error s1-or-ex))) s4)))
 
 (defn undo-wrapped-listener [evt-g s]
   (let [ty (:type evt-g)
@@ -342,7 +405,7 @@
 
 (defn launch-main-app! []
   (cpanel/stop-app!)
-  (let [layout (onecode/layout)
+  (let [layout (layouts/default-lmode)
         s {:layout layout :components {} :camera [0 0 1 1] :typing-mode? true :active-tool (first (get-tools))}
         s1 (if (and (globals/can-child?) (not (globals/are-we-child?))) (iteration/ensure-childapp-folder-init!! s) s)
         s2 ((:initial-position layout) s1 (fbrowser/add-root-fbrowser s1) (orepl/new-repl) (siconsole/new-console))

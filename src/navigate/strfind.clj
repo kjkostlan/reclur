@@ -129,4 +129,4 @@
             new-comp (orepl/filled-repl 's code cursor-ix0)
             s1 (assoc s :selected-comp-keys #{boxk} :typing-mode? true)
             s2 (if (> (count ckys) 1) (siconsole/log s1 "Multible components selected, only selecting the first one.") s1)]
-        ((:add-component (:layout s2)) s2 new-comp boxk true)))))
+        ((:add-component (:layout s2)) s2 new-comp boxk)))))
