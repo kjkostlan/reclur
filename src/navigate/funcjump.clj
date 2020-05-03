@@ -24,7 +24,7 @@
                           (mapv (fn [sq] (let [source (:source (langs/var-info sq true))
                                                ns-sym (textparse/sym2ns sq)
                                                source-qual (sunshine/pipeline ns-sym source false)
-                                               subdefpaths (cnav/paths-of source-qual x)]
+                                               subdefpaths (cnav/paths-of source-qual x false)]
                                            (mapv #(cbase/subdefpath-fstr-ixs sq %) subdefpaths)))
                             syms-qual)))
                  fnames (mapv first f01s) ix0s (mapv second f01s) ix1s (mapv last f01s)]

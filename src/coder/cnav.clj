@@ -57,23 +57,28 @@
       :else (let [x (into [] x) y (into [] y)]
               (into [] (concat diff (tree-diff (nth x diff0) (nth y diff0))))))))
 
-(defn path-of [code search-key]
-  "Finds the first path of search-key in code. False when nothing found."
+(defn path-of [code search-key include-map-keys?]
+  "Finds the first path of search-key in code. False when nothing found.
+   include-map-keys?: Stuff that is or is inside of a map's keys paths to the map itself."
   (cond (= code search-key) []
     (not (coll? code)) false
     :else
     (let [kys (into [] (collections/ckeys code)) vals (into [] (collections/cvals code))
-          n (count vals)]
-      (loop [ix 0]
-        (if (= ix n) false
-          (if-let [p (path-of (nth vals ix) search-key)]
-            (vcons (nth kys ix) p) (recur (inc ix))))))))
+          n (count vals)
+          ph (loop [ix 0]
+               (if (= ix n) false
+                 (if-let [p (path-of (nth vals ix) search-key include-map-keys?)]
+                   (vcons (nth kys ix) p) (recur (inc ix)))))]
+      (cond ph ph
+        (and include-map-keys? (map? code)) 
+        (if (first (filter #(path-of % search-key true) (keys code))) [] false)
+        :else false))))
 
-(defn paths-of [code search-key]
+(defn paths-of [code search-key include-map-keys?]
   "Paths that lead to search-key in code."
   (let [stop (if search-key false true)]
     (loop [x code out []]
-      (let [ph1 (path-of x search-key)]
+      (let [ph1 (path-of x search-key include-map-keys?)]
         (if (= ph1 (last out)) (throw (Exception. "Something is not working.")))
         (if ph1 
           (recur (collections/cassoc-in x ph1 stop) (conj out ph1))
@@ -177,7 +182,7 @@
 (defn symbol2defpath-qual [codes sym]
   "The path to the path enclosing def in codes.
    In java and other languages, it usually wouldn't be explicitly a 'def'."
-  (let [def-paths (into [] (apply concat (mapv #(paths-of codes %) def-variants)))
+  (let [def-paths (into [] (apply concat (mapv #(paths-of codes % false) def-variants)))
         defenclose-paths (mapv #(into [] (butlast %)) def-paths)
         def-vals (mapv #(collections/cget-in codes (conj % 1)) defenclose-paths)
         sym-unqual (unqual sym)
