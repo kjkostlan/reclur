@@ -3,7 +3,7 @@
 
 (ns javac.cpanel
   (:require [clojure.string :as string] [globals]
-    [javac.gfx :as gfx] [javac.exception :as exception]
+    [javac.gfx :as gfx]
     [javac.clojurize :as clojurize]
     [app.orepl :as orepl]
     [app.iteration :as iteration]

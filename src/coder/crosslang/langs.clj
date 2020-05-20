@@ -67,7 +67,8 @@
             [clojure.string :as string]
             [coder.cnav :as cnav]
             [javac.file :as jfile]
-            [clojure.set :as set]))
+            [clojure.set :as set]
+            [clojure.main :as main]))
 
 ;;;;;;;;;;;;;;;;;;;;;; Support functions that aren't language dependent ;;;;;;;;;;;;;
 
@@ -213,6 +214,37 @@
   (cond (= langkwd :clojure) (clojure/tokenize-ints txt)
     (= langkwd :human) (human/tokenize-ints txt)
     :else (errlang "tokenize-ints" langkwd)))
+
+(defn convert-stack-trace [stack-trace stop-stack langkwd] 
+  "Converts a stack trace created in language langkwd into a natural clojure data-structure format.
+   Stop-stack (which can be empty []) is a vector of stops for the stacktrace."
+  (cond (= langkwd :clojure)
+      (let [^"[Ljava.lang.StackTraceElement;" stack-trace stack-trace ;]
+            stack (mapv #(str (main/demunge ^String (.getClassName ^java.lang.StackTraceElement %))
+                           " " (.getLineNumber ^java.lang.StackTraceElement %)) stack-trace)
+            root (fn [elem] (first (string/split (str (if-let [x (textparse/sym2ns elem)] x elem)) #"\.")))
+            of-clojure? (fn [elem] (= (root elem) "clojure"))
+            of-java? (fn [elem] (= (root elem) "java"))
+            stack1 (filterv #(not (or (of-clojure? %) (of-java? %))) stack)
+            stop-stack (if (coll? stop-stack) stop-stack [stop-stack])
+            stop? (fn [x] (boolean (first (filter #(string/starts-with? (str x) (str %)) stop-stack))))
+            stop-ix (first (filter #(stop? (nth stack1 %))
+                             (range (count stack1))))
+            stack2 (if stop-ix (subvec stack1 0 (inc stop-ix)) stack1)
+            stack3 (if stop-ix (conj stack2 {:ClassName "..." :FileName "" :LineNumber "" :MethodName ""}) stack2)]
+        stack3)
+    :else (errlang "convert-stack-trace" langkwd)))
+
+(defn convert-exception [e stop-stack langkwd]
+  "Converts an exception thrown in language langkwd to a readable format.
+   Stop-stack (which can be empty []) is a vector of stops for the stacktrace."
+  (cond (= langkwd :clojure)
+      (let [^Exception e e
+            ^"[Ljava.lang.StackTraceElement;" stack-trace (.getStackTrace e)  ;]
+            ^String message (.getMessage e)
+            stack-clj (convert-stack-trace stack-trace stop-stack langkwd)]
+        {:Message message :StackTrace stack-clj})
+        :else (errlang "convert-exception" langkwd)))
 
 ;;;;;;;;;;;;;;;;;;;;;; Functions that work with multiple languages at once ;;;;;;;;;;;;;
 

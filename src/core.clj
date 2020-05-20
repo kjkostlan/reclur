@@ -85,6 +85,7 @@
                       #_(println "Cleared all loggers") s))
    "C-p C-x" (fn [s] (do (logger/clear-logs!) ; clear logs
                        #_(println "Cleared all logs") s))
+   "C-p ^^" (fn [s] (funcjump/try-to-go-ups s false true))
    ; The saving system: 
    ; ctrl+s = save onto child generation.
    ; ctrl+shift+s = pull child onto ourselves (TODO: do this when we quit as well).
@@ -98,8 +99,8 @@
    "C-S-g" (fn [s] (graphbox/try-to-toggle-graph-box s))
    "C-S c" store-state!
    "C-S z" (fn [_] (retrieve-state!))
-   "C-^^" (fn [s] (funcjump/try-to-go-ups s true))
-   "C-S-^^" (fn [s] (funcjump/try-to-go-ups s false))
+   "C-^^" (fn [s] (funcjump/try-to-go-ups s true false))
+   "C-S-^^" (fn [s] (funcjump/try-to-go-ups s false false))
    "C-vv" (fn [s] (funcjump/try-to-go-into s))
    "C-S-M-n ^^ ^^ vv vv << >> << >> b a" (fn [s] (println "We hope you enjoy this sandbox-genre game!") s)})
 
@@ -121,13 +122,14 @@
 
 (defn single-comp-dispatch [evt-c s comp-k]
   (let [comp (get-in s [:components comp-k])
-              evt (xform/xevt (xform/x-1 (xform/pos-xform (:position comp))) evt-c)
-              s (let [ifn-heavy (get (:interact-fns comp) :dispatch-heavy)] ; allows modifying s itself.
-                  (if ifn-heavy (ifn-heavy evt s comp-k) s))
-              comp (get-in s [:components comp-k])
-              comp1 (let [ifn (get (:interact-fns comp) :dispatch)]
-                        (if ifn (ifn evt comp) comp))]
-         (assoc-in s [:components comp-k] comp1)))
+        evt (xform/xevt (xform/x-1 (xform/pos-xform (:position comp))) evt-c)
+        comp (get-in s [:components comp-k])
+        comp1 (let [ifn (get (:interact-fns comp) :dispatch)]
+                (if ifn (ifn evt comp) comp))
+        s1 (assoc-in s [:components comp-k] comp1)
+        s2 (let [ifn-heavy (get (:interact-fns comp) :dispatch-heavy)] ; allows modifying s itself.
+            (if ifn-heavy (ifn-heavy evt s s1 comp-k) s1))]
+    s2))
 
 (defn single-comp-dispatches [evt-c s]
   (let [sel (set/intersection (apply hash-set (keys (:components s))) (apply hash-set (:selected-comp-keys s)))] ; normalize this.

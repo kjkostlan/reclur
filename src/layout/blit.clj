@@ -293,3 +293,12 @@
 (defn vp [code-or-str]
   "Very Prettyprint"
   (println (vps code-or-str)))
+
+(defn vpsu [code]
+  "Unquals all symbols, which may make it easier to read."
+  (let [uf (fn [x] (if (symbol? x) (symbol (last (string/split (str x) #"\/"))) x))]
+    (vps (walk/postwalk uf code))))
+
+(defn vpu [code]
+  "Unquals all symbols, which may make it easier to read."
+  (println (vpsu code)))

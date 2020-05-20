@@ -8,10 +8,10 @@
     [java.awt.geom AffineTransform]
     [java.io File]
     [javax.swing SwingUtilities]
-    [javax.imageio ImageIO]
-    [globals])
+    [javax.imageio ImageIO])
   (:require [javac.file :as jfile]
-    [layout.xform :as xform]))
+    [layout.xform :as xform]
+    [globals]))
 
 ;;;;;;;;;;;;;;;;;;; Defining graphics commands, which can avoid unnecessary gfx reset calls ;;;;;;;;
 

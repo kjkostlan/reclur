@@ -8,13 +8,13 @@
   :main core
   :java-source-paths ["src"]
   :jvm-opts ^:replace ["-XX:-OmitStackTraceInFastThrow"]
-  :dependencies [[org.clojure/clojure "1.9.0"] ; granular-dependencies.clj per-file.
+  :dependencies [[org.clojure/clojure "1.10.1"] ; Keep this up-to-date.
                  [clj-inspector "0.0.12"]      ; clojure spec website read rationale.
                  [slamhound "1.2.0"]           ; spec-ulation rich hickey (recent note).
                  [com.cemerick/pomegranate "0.0.11"]
                  [com.fifesoft/rsyntaxtextarea "2.5.0"]
                  [org.clojure/tools.nrepl "0.2.12"]
-                 [rewrite-clj "0.6.0"]
+                 ;[rewrite-clj "0.6.0"]
                  [org.clojure/core.match "0.2.2"]
                  ;[org.clojars.charles-stain/lwjgl "3.0"]
                  ;[jogl2 "0.1.0"]
@@ -32,10 +32,5 @@
    ;                 "jogl/jogl-all-natives-macosx-universal.jar"
    ;                 "jogl/jogl-all.jar"]
                                         ;:plugins [[lein-nodisassemble "0.1.3"]] ; this slows us down on startup quite a bit.
-  :plugins [[cider/cider-nrepl "0.18.0-SNAPSHOT"]]
+  ;:plugins [[cider/cider-nrepl "0.18.0-SNAPSHOT"]]
 )
-
-; How to run on a mac in both java8 and java9 for compat testing, individual versions may vary:
-; export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk1.8.0_51.jdk/Contents/Home
-; export JAVA_HOME=Library/Java/JavaVirtualMachines/jdk-9.0.4.jdk/Contents/Home
-; (System/getProperty "java.version") => "1.8.0_51", "9.0.4"

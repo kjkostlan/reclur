@@ -71,7 +71,8 @@
 
 (defn djava1 [x]
   "Combines static java calls into one symbol.
-   (. Math sin 1.2) => (java.lang.Math/sin 1.2) which can be treated like a qualified symbol."
+   (. Math sin 1.2) => (java.lang.Math/sin 1.2) which can be treated like a qualified symbol.
+  This is a clojure-unique function; for any other lang it will do nothing."
   (cond (not (collections/listy? x)) x
     (= (first x) 'new) (apply list (symbol (str (second x) ".")) (nthrest x 2))
     (and (= (first x) '.) (resolve-class (second x))) 
@@ -124,7 +125,7 @@
         qualf (fn [x locals] 
                 (if (and (symbol? x) (not (get locals x)))        
                   (if-let [sq (qual x)] sq x) x))
-        x2 (cnav/locals-walk qualf x #{})
+        x2 (cnav/locals-walk qualf x1 #{})
         x3 (if fn-pack?
              (walk/postwalk #(if-let [upk (unpacked-fn? %)] 
                              (if (= upk 1) (list (first %) (rest %)) 
@@ -223,12 +224,12 @@
    Optional macro-expand-all and symbol modification."
   (binding [*ns-sym* ns-sym]
     (-> (if mexpand? (walk/macroexpand-all form) form)
-      (qual-all-syms false false) symbol-unique-tag clean-gensym
+      (qual-all-syms true false) symbol-unique-tag clean-gensym
       (local-symbol-modify (if (first local-sym-modify-f) (first local-sym-modify-f) identity))
       clean-mark)))
 
 (defn fpipeline [ns-sym form mexpand? & local-sym-modify-f]
-  "Makes functions and javs easier to manage."
+  "Pipeline but also packs functions."
   (binding [*ns-sym* ns-sym]
     (-> (if mexpand? (walk/macroexpand-all form) form)
       (qual-all-syms true true) symbol-unique-tag clean-gensym
@@ -236,7 +237,7 @@
       clean-mark)))
 
 (defn ppipeline [ns-sym form mexpand? & local-sym-modify-f]
-  "This one cleans up clojure.core and java.lang stuff as well."
+  "Pretty print that removes clojure.core and java.lang qualifiers that 99% of the time aren't human-useful."
   (binding [*ns-sym* ns-sym]
     (-> (if mexpand? (walk/macroexpand-all form) form)
       (qual-all-syms true false) symbol-unique-tag clean-gensym

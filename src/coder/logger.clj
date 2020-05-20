@@ -1,4 +1,4 @@
-; TODO: this makes heavy use of clojure-only functions. This should be refactored to langs.
+; TODO: this makes heavy use of clojure-only functions. They should be refactored to langs.
 
 (ns coder.logger
   (:require [collections]
@@ -13,7 +13,6 @@
     [clojure.test :as test]
     [clojure.set :as set]
     [clojure.string :as string]
-    [javac.exception :as jexc]
     [layout.layoutcore :as layoutcore]
     [layout.blit :as blit]
     [globals]))
@@ -29,25 +28,6 @@
 
 (defonce eval-lasterr (atom ""))
 
-(defn clean-error-stack [e-clj stop-stack]
-  "No need to go into the guts of clojure or java."
-  (let [stack (:StackTrace e-clj) root (fn [elem] (first (string/split (:ClassName elem) #"\.")))
-        of-clojure? (fn [elem] (= (root elem) "clojure"))
-        of-java? (fn [elem] (= (root elem) "java"))
-        stack1 (filterv #(not (or (of-clojure? %) (of-java? %))) stack)
-        ;_ (println stop-call)
-        ;_ (mapv println stack1)
-        stop-stack (if (coll? stop-stack) stop-stack [stop-stack])
-        stop? (fn [txt] (boolean (first (filter #(string/starts-with? txt %) stop-stack))))
-        stop-ix (first (filter #(stop? (:ClassName (nth stack1 %)))
-                         (range (count stack1))))
-        stack2 (if stop-ix (subvec stack1 0 (inc stop-ix)) stack1)
-        stack3 (if stop-ix (conj stack2 {:ClassName "..." :FileName "" :LineNumber "" :MethodName ""}) stack2)]
-    ; {:ClassName clojure.lang.Compiler, :FileName Compiler.java, 
-    ;  :LineNumber 6792, :MethodName analyze}
-    ;(println (first stack))) 
-    (assoc e-clj :StackTrace stack3)))
-
 (defn eval+ [code]
   "Like eval but also logs any compilation error message, for debugging. Still throws said error.
    @coder.logger/eval-lasterr"
@@ -56,7 +36,7 @@
       (do (unerror/errprint? code)
           (reset! coder.logger/eval-lasterr 
             (merge {:ns (ns-name *ns*) :code code} 
-              (clean-error-stack (jexc/clje e) "none"))) (throw e)))))
+              (langs/convert-exception e "none" :clojure))) (throw e)))))
 
 ;;;;;;;;;;;;; Code processing functions ;;;;;;;;;;;;;;
 
@@ -120,7 +100,10 @@
 
 (defn get-logs [] (:logs @globals/one-atom)) ; logs are a vector of :path :time :value :Thead.
 (defn get-loggers [] (:loggers @globals/one-atom)) ; loggers are {symbol {path ...}} format.
-(defn clear-logs! [] (swap! globals/one-atom #(assoc % :logs [])))
+(defn clear-logs! [] (do (let [n-log (count (get-logs))] 
+                           (if (> n-log 0) (println "Removing all" n-log "logs")
+                             (println "No logs to remove.")) 
+                       (swap! globals/one-atom #(assoc % :logs [])))))
 (defn logged? [sym-qual path]
   (boolean (get-in (:loggers @globals/one-atom) [sym-qual path])))
 
@@ -134,7 +117,9 @@
 (defn log! [x path]
   "Called when the logged code runs." 
   (swap! globals/one-atom
-    #(let [log {:path path :time (System/nanoTime) :value x :Thread (format "0x%x" (System/identityHashCode (Thread/currentThread)))}
+    #(let [log {:path path :time (System/nanoTime) :value x :Thread (format "0x%x" (System/identityHashCode (Thread/currentThread)))
+                :TraceOb (.getStackTrace ^Thread (Thread/currentThread))
+                :lang :clojure} ; loggers for other languages will use different lang keywords.
            logs (if (:logs %) (:logs %) [])]
       (assoc % :logs (conj logs log)))) x)
 

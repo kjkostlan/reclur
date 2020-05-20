@@ -1,6 +1,6 @@
 ; Just a place to grab println et al, coder/logger is the more "proper" debug logging tool.
 (ns app.siconsole
- (:require [app.rtext :as rtext]
+ (:require [app.rtext :as rtext] [app.orepl :as orepl]
    [layout.colorful :as colorful]
    [layout.keybind :as kb]
    [coder.plurality :as plurality]))
@@ -56,6 +56,14 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defn dispatch-heavy [evt s s1 k]
+  "Running the repl may affect s, depending on the command. Running is agnostic to which repl is focused, i.e the k value."
+  (cond 
+    (and (= (:type evt) :mousePressed)
+      (= (:ClickCount evt) 2))
+    (orepl/dispatch-heavy-doubleclick s s1 k)
+    :else s1))
+
 (def dispatch 
   (plurality/->simple-multi-fn
     {:mousePressed rtext/mouse-press
@@ -74,4 +82,5 @@
    :render rtext/render
    :expandable? expandable?
    :expand-child expand-child :contract-child contract-child
+   :dispatch-heavy dispatch-heavy
    :is-child? (fn [box] false)}))

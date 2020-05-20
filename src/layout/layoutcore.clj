@@ -42,7 +42,7 @@
 (defn set-xxyy [component xxyy]
   (assoc component :position [(first xxyy) (nth xxyy 2)] :size [(- (second xxyy) (first xxyy)) (- (nth xxyy 3) (nth xxyy 2))]))
 
-(defn max-z "Always at least 0" [s] (apply max 0 (mapv #(if (:z %) (:z %) 0) (vals (:components s)))))
+(defn max-z "Always at least 0" [s] (apply max 0 (mapv #(if (and (:z %) (not= (:type %) :hintbox)) (:z %) 0) (vals (:components s)))))
 
 (defn get-xxyys [s] (mapv xxyy (vals (:components s))))
 

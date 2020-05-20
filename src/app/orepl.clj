@@ -5,12 +5,13 @@
     [clojure.set :as set]
     [app.codebox :as codebox]
     [app.rtext :as rtext]
+    [navigate.funcjump :as funcjump]
     [coder.logger :as logger]
     [coder.textparse :as textparse]
     [coder.plurality :as plurality]
+    [coder.crosslang.langs :as langs]
     [javac.clipboard :as clipboard] 
     [javac.file :as jfile]
-    [javac.exception :as jexc]
     [layout.colorful :as colorful]
     [layout.keybind :as kb]))
 
@@ -22,12 +23,35 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;; Look and feel ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn pr-error [e & hide-stack?]
-  (let [e-clj (logger/clean-error-stack (jexc/clje e) ["app.orepl$eval" "app.orepl$get_repl_result"])
-        msg0 (if (:Message e-clj) (:Message e-clj) "<no Message>")
-        msg (apply str (interpose "\ncompiling:" (string/split msg0 #", compiling:")))]
-    (apply str msg " (" (subs (str (type e)) 6) ")" "\n"
-      (let [st (if (first hide-stack?) [] (:StackTrace e-clj))]
-        (interpose "\n" (mapv #(str  "  " (:ClassName %) " " (:LineNumber %)) st))))))
+  (let [e-clj (langs/convert-exception e ["app.orepl/eval" "app.orepl/get_repl_result"] :clojure)
+        ; Complicated get message because of "the syntax error that wasn't".
+        syntax-err-kys #{"EOF while reading" "arguments to if"
+                         "Unmatched delimiter"
+                         "Mismatched argument count"}
+        emsg (:Message e-clj)
+        cmsg (try (str (.getCause e)) (catch Exception eception false))
+        ;_ (println "EMSG:" emsg "CMSG:" cmsg)
+        msg0 (cond (and (not emsg) (not cmsg)) "<no message>"
+               (not emsg) cmsg (not cmsg) emsg
+               (and (string/includes? emsg "Syntax error")
+                 (not (first (filter #(string/includes? cmsg %) syntax-err-kys))))
+               ;(string/includes? cmsg "Unable to resolve symbol") ; more niche cases may be added.
+               (str (-> emsg (string/replace #"Syntax error compiling [a-zA-z ]*at " "")
+                      (string/replace ")." ")")
+                      (string/trim)) " " cmsg)
+               (string/includes? emsg "Syntax error")
+               (str emsg " " cmsg)
+               :else emsg)
+        msg0 (-> msg0 (string/replace "java.lang." "")
+               (string/trim))
+        msg (apply str (interpose "\ncompiling:" (string/split msg0 #", compiling:")))
+        msg1 (apply str msg " (" (subs (str (type e)) 6) ")" "\n"
+               (let [st (if (first hide-stack?) [] (:StackTrace e-clj))]
+                 (interpose "\n" st)))]
+    (-> msg1 
+      (string/replace "(clojure.lang.Compiler$CompilerException)" "")
+      (string/replace "RuntimeException: " "")
+      (string/replace "reading source at" "at"))))
 
 (def colorize-top codebox/colorize)
 
@@ -38,8 +62,9 @@
 (defn colorize [box s piece-ix char-ix0 char-ix1]
   (let [box (codebox/set-precompute box)
         cols-if-top (colorize-top box s piece-ix char-ix0 char-ix1)
-        cols-if-out (colorize-out box s piece-ix char-ix0 char-ix1)]
-    (mapv #(if (= %1 0) (nth cols-if-top %2)
+        cols-if-out (colorize-out box s piece-ix char-ix0 char-ix1)
+        n0 (dec (count (:pieces box)))]
+    (mapv #(if (< %1 n0) (nth cols-if-top %2)
              (nth cols-if-out %2)) piece-ix (range (count cols-if-top)))))
 
 (defn limit-length [s]
@@ -49,8 +74,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;; Creating a repl box ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn new-repl [& code]
-  (assoc rtext/empty-text :type :orepl :langkwd :clojure :pieces [{:text (if (first code) (first code) "(+ 1 2)")}] 
-   :result (if (first code) "" "3")
+  (assoc rtext/empty-text :type :orepl :langkwd :clojure :pieces [{:text (if (first code) (first code) "(+ 1 2)")}
+                                                                  {:text "\n3"}] 
    :num-run-times 0
    :outline-color [0.2 0.2 1 1]
    :cmd-history [] :cmd-history-viewix 1e100
@@ -65,7 +90,7 @@
         cursor-ix (+ (count b4) cursor-ix0)
         code (str b4 code afr)]
     (assoc (new-repl) :cursor-ix cursor-ix
-      :pieces [{:text code}])))
+      :pieces [{:text code} {:text ""}])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Low repl running ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -121,20 +146,13 @@
                 (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
                   (lim-len (str "Runtime error:\n" (repl-err-msg-tweak (pr-error e))))))))))
 
-#_(defn get-repl-result [s repl-k txt tmp-namespace-atom]
-  "The result will contain error messages if there is a problem."
-  (try (let [code (read-string txt)] ; internal mutation of _state-atom possible.
-         (try (let [current-ns-sym (get-in s [:components repl-k :*ns*])
-                    r-ns1 (if current-ns-sym (find-ns current-ns-sym) r-ns)
-                    y (str (binding [*ns* r-ns1 *this-k* repl-k *world* s] 
-                             ;(clojure.stacktrace/print-stack-trace (Exception. "foo"))
-                             ;(clojure.stacktrace/print-stack-trace (try (eval code) (catch Exception e e)))
-                             (let [out (eval code)] (reset! tmp-namespace-atom *ns*) out)))]
-                (limit-length y))
-              (catch Exception e
-                (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
-                  (limit-length (str "Runtime error:\n" (repl-err-msg-tweak (pr-error e))))))))
-    (catch Exception e (limit-length (str "Syntax error: " (.getMessage e) " " (type e))))))
+(defn set-result [box result]
+  (let [pieces (:pieces box)
+        resultn (str "\n" result)
+        pieces1 (cond (= (count pieces) 0) [{:text " "} {:text resultn}]
+                  (= (count pieces) 1) (conj pieces {:text resultn})
+                  :else (assoc pieces (dec (count pieces)) {:text resultn}))]
+    (assoc box :pieces pieces1)))
 
 (defn run-repl [s repl-k]
   ; TODO: put repls on another process with it's own threads.
@@ -153,7 +171,7 @@
           result (get-repl-result s repl-k txt new-ns-at)
           ;_ (println "result:" result)
           state1 @_state-atom
-          repl1 (-> (get-in state1 [:components repl-k]) (assoc :result result)
+          repl1 (-> (get-in state1 [:components repl-k]) (set-result result)
                   (assoc :*ns* (textparse/sym2ns @new-ns-at))
                   (update :num-run-times inc)
                   (update :cmd-history #(conj % txt)))]
@@ -170,7 +188,7 @@
         (let [cx (if (< cx 0) (dec n-cmd) cx) cx (if (>= cx n-cmd) 0 cx) ;wrap
               cmd (nth (:cmd-history box) cx)]
           (if (.contains ^String cmd txt-sel)
-             (let [box1 (assoc box :cmd-history-viewix cx :result "" :pieces [{:text cmd}])]
+             (let [box1 (assoc box :cmd-history-viewix cx :pieces [{:text cmd} {:text ""}])]
                (if (> (count txt-sel) 0)
                   (let [sel0 (string/index-of cmd txt-sel)
                         sel1 (+ sel0 (count txt-sel))]
@@ -178,12 +196,21 @@
                  box1))
              (recur (inc cx) (inc n))))))))
 
+(defn ensure-two-pieces [box]
+  "Everything goes into the first peice except the end."
+  (let [pieces (into [] (:pieces box)) n (count pieces)
+        pieces0 (if (> n 1) (butlast pieces) pieces)
+        piece1 (if (> n 1) (last pieces) {:text ""})
+        two-pieces [{:text (apply str (mapv :text pieces0))} piece1]]
+    (assoc box :pieces two-pieces)))
+
 (defn key-press [key-evt box]
-  (cond (kb/emacs-hit? "S-ret" key-evt) box ; this was handled in the heavy dispatch.
-    (kb/emacs-hit? "S-^^" key-evt) (old-cmd-search box -1)
-    (kb/emacs-hit? "S-vv" key-evt) (old-cmd-search box 1)
-    :else
-    (rtext/key-press key-evt box)))
+  (ensure-two-pieces
+    (cond (kb/emacs-hit? "S-ret" key-evt) box ; this was handled in the heavy dispatch.
+      (kb/emacs-hit? "S-^^" key-evt) (old-cmd-search box -1)
+      (kb/emacs-hit? "S-vv" key-evt) (old-cmd-search box 1)
+      :else
+      (rtext/key-press key-evt box))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Namespace reloading et al ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -280,22 +307,28 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Component interface ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn render+ [box & show-cursor?]
-  (let [box-with-out (assoc box :pieces 
-                       [{:text (apply str (mapv :text (:pieces box)))} 
-                        {:text (str " \n" (:result box))}])]
-    (apply rtext/render box-with-out show-cursor?)))
+(defn dispatch-heavy-doubleclick [s s1 k]
+  (let [file-ixs (funcjump/stack-click (get-in s [:components k]))
+        rm-sel #(assoc-in (assoc-in % [:components k :selection-start] 0) [:components k :selection-end] 0)]
+    (if file-ixs
+      (rm-sel (apply (:goto (:layout s)) s file-ixs)) s1)))
+
+(defn render+ [box & show-cursor?] (apply rtext/render box show-cursor?))
 
 ; No child UI is planned in the near future.
 (defn expandable? [mouse-evt box] false)
 (defn expand-child [mouse-evt box] (throw (Exception. "No plans to implement orepl child-UI.")))
 (defn contract-child [box child] (throw (Exception. "No plans to implement orepl child-UI.")))
 
-(defn dispatch-heavy [evt s k]
-  "Running the repl may affect s, depending on the command. This is agnostic to which repl is focused, i.e the k value."
-  (if (and (= (:type evt) :keyPressed) (kb/emacs-hit? "S-ret" evt))
+(defn dispatch-heavy [evt s s1 k]
+  "Running the repl may affect s, depending on the command. Running is agnostic to which repl is focused, i.e the k value."
+  (cond (and (= (:type evt) :keyPressed) (kb/emacs-hit? "S-ret" evt))
     (reduce #(if (= (:type (get (:components %1) %2)) :orepl)
-               (run-repl %1 %2) %1) s (:selected-comp-keys s)) s))
+               (run-repl %1 %2) %1) s1 (:selected-comp-keys s1)) 
+    (and (= (:type evt) :mousePressed)
+      (= (:ClickCount evt) 2))
+    (dispatch-heavy-doubleclick s s1 k)
+    :else s1))
 
 (def dispatch 
   (plurality/->simple-multi-fn
@@ -360,9 +393,12 @@
 (defn make-lrepl [sym-qual path-within-code]
   "Start seeing your log immediately (ok with a ctrl+enter)."
   (let [path-within-code (into [] path-within-code)
+        src-piece-str (str (collections/cget-in (:source (langs/var-info sym-qual true)) path-within-code))
+        hint-str (if (< (count src-piece-str) 32) src-piece-str
+                   (str (subs src-piece-str 0 14) "..." (subs src-piece-str (- (count src-piece-str) 14))))
         code-str (str "^:active-logview\n"
-                   "(:value (coder.logger/last-log-of '" sym-qual "\n           " path-within-code "))")]
-    (assoc (new-repl) :pieces [{:text code-str}] :result "")))
+                   "(get (logger/last-log-of '" sym-qual " " path-within-code ") :value \"<No logs yet>\")\n;" hint-str)]
+    (assoc (new-repl) :pieces [{:text code-str} {:text ""}])))
 
 (defn is-repl-loggy? [box]
   "Change the log-view repl immediately."
@@ -382,11 +418,9 @@
             (let [replks (filterv #(= (:type (get comps %)) :orepl) (keys comps))
                   logviewk (first (filter #(is-repl-loggy? (get comps %)) replks))
                   lrepl (make-lrepl (first cpath) (rest cpath))
-                  ;lrepl01 (if logviewk (assoc lrepl :position (:position (get comps logviewk))
-                  ;                       :size (:size (get comps logviewk))) lrepl)
-                  lrepl1 (if logviewk (assoc (get comps logviewk) :pieces (:pieces lrepl) :result "") lrepl)]
+                  lrepl1 (if logviewk (assoc (get comps logviewk) :pieces (:pieces lrepl)) lrepl)]
               (if logviewk (assoc-in s [:components logviewk] lrepl1)
-                ((:add-component (:layout s)) s lrepl1 (keyword (gensym "logviewrepl")) true)))
+                ((:add-component (:layout s)) s lrepl1 (keyword (gensym "logviewrepl")))))
               s))
           (do (println "Must select something in a codebox to use this function") s)) 
         (do (println "Must select something (in a codebox) to use this function") s)))

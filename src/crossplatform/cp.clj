@@ -24,12 +24,20 @@
   (let [^String ver (System/getProperty "java.version")]
     (or (.startsWith ver "1.9") (.startsWith ver "9."))))
 
+(defn java10? []
+  (let [^String ver (System/getProperty "java.version")]
+    (or (.startsWith ver "1.10") (.startsWith ver "10."))))
+    
+(defn java11? []
+  (let [^String ver (System/getProperty "java.version")]
+    (or (.startsWith ver "1.11") (.startsWith ver "11."))))
+
 ; TODO: test the program on all three main PC, and mobile?
 (if (and #_(not (java9?)) (not (mac?)))
   (warnbox/warning "Reclur hasn't been tested on this platform, use at your own risk."))
 
 (def import-code
-  (cond (java9?)
+  (cond (or (java9?) (java10?) (java11?))
     '(do 
        (import java.awt.desktop.QuitHandler)
        (import java.awt.Desktop))
@@ -42,7 +50,7 @@
 (eval import-code)
 
 (defmacro handler-code [quit-listener!]
-  (cond (or (java9?) (mac?))
+  (cond (or (java9?) (java10?) (java11?) (mac?))
    `(proxy [QuitHandler] []
       (handleQuitRequestWith [e# response#]
         (~quit-listener! e#)
@@ -50,7 +58,7 @@
     :else false))
 
 (defmacro quit-request-listener-code [quit-listener!]
-  (cond (java9?)
+  (cond (or (java9?) (java10?) (java11?))
     `(let [^QuitHandler handler# (handler-code ~quit-listener!)
           ^Desktop d# (Desktop/getDesktop)]
        (.setQuitHandler d# handler#) true)

@@ -38,7 +38,7 @@
   (let [cix (:cursor-ix cbox)
         xy (mapv + (rtext/cursor-ix-to-pixel cbox) (:position cbox))
         box (assoc (new-hintbox) :pieces (mapv #(hash-map :text %) txts) 
-              :z (+ (:z cbox) 0.01))
+              :z (+ (:z cbox) 1e6))
         box (rtext/fit-to-text box true true) sz (:size box)
         m 7 ; margin in pixels
         box (assoc box :position 

@@ -139,6 +139,18 @@
     (if (not path) (throw (Exception. (str "String-to-wpath not working: ..." (subs txt1 (max 0 (- ix 20)) (min (+ ix 20) (count txt1))) "..."))))
     path))
 
+(defn line-to-string-ixs [txt linenum search-key]
+  "Used for stack tracing. Can be confused once in a while, but will still return the correct linenum."
+  (let [lines (string/split txt #"\n")
+        line-counts (mapv #(inc (count %)) lines)
+        nchars-b4-line (conj (into [] (reductions + 0 line-counts)) (count txt))
+        ix-in-line (string/index-of txt (str search-key))
+        c0 (nth nchars-b4-line (dec linenum))
+        jux-of (if c0 (string/index-of (nth lines (dec linenum)) (str search-key)))
+        jx-of (if jux-of (+ c0 jux-of))]
+    (if (and search-key jx-of) [jx-of (+ jx-of (count (str search-key)))]
+      [c0 (nth nchars-b4-line linenum)])))
+
 (defn wpath-to-string-ixs [txt wpath tok-ints-fn reads-string-fn]
   "The string-ixs within text given wrapped path wpath.
    The w stands for wrapped.
@@ -169,25 +181,6 @@
             tokixs (tok12345-at-cursor txt (nth str-ixs kx) st en ty)
             tok-ix (apply choice-convention ty tokixs)]
         [(nth st tok-ix) (nth en tok-ix)]))))
-
-#_(defn string-to-vpath [txt ix tokenize-ints-fn]
-  "The string to the path within the wrapped string for a given character ix.
-   The w stands for wrapped."
-  (let [n (count txt) ix (max 0 (min ix n)) x (tokenize-vints txt tokenize-ints-fn)
-        st (first x) en (second x) ty (last x)
-        max-lev (inc (count (filter #(= % 4) ty)))
-        tixs (tok12345-at-cursor txt ix st en ty)
-        tix (apply choice-convention ty tixs)]
-    (loop [ph (into [] (repeat max-lev -1)) lev 0 jx 0]
-      (let [tyi (nth ty jx)
-            c-st (nth st jx) c-en (nth en jx)]
-        (cond (or (and (= tyi 4) (= jx tix)) (> jx tix)) (subvec ph 0 lev) ; open ( stop b4, close ) and other tokens stop after. 
-          (= tyi 8) (let [jx1 (apply min (mapv #(_prevnext-ix1 txt c-en 1 % st en ty true) [1 2 3 4 5 8]))]
-                      (recur ph lev jx1)) ; jump over the meta.
-          (= tyi 4) (recur (update ph lev inc) (inc lev) (inc jx))
-          (= tyi 5) (recur (update ph lev inc) (dec lev) (inc jx))
-          (or (= tyi 1) (= tyi 2) (= tyi 3)) (recur (update ph lev inc) lev (inc jx))
-          :else (recur ph lev (inc jx)))))))
 
 (defn x-at-string [txt ix tokenize-ints-fn reads-string-fn]
   "What ever is at the given string.
@@ -223,8 +216,7 @@
     (apply str (interpose "." (if lang? (rest pieces) pieces)))))
 
 (defn sym2ns [qual-sym]
-  "Splits the symbol-as-a-string. Returns a symbol.
-   Qualified symbols in all languages have "
+  "Returns the namespace/class. Classes from non-clojure have i.e. !java.my.class rather than my.namespace."
   (if (.contains ^String (str qual-sym) "/") 
     (symbol (first (string/split (str qual-sym) #"\/")))))
 

@@ -269,38 +269,67 @@
 
 (defn locals-walk [f x locals]
   "Applies (f x locals) recursively, locals is a set.
-   Locals includes any symbols defined before x, as well as x itself."
+   Locals includes any symbols defined before x, as well as x itself.
+   Does not work for multible vars at once let statements (TODO)."
   (let [locals (set locals)]
-    (cond (not (coll? x)) (f x locals)
-      (vector? x) (mapv #(locals-walk f % locals) x)
-      (set? x) (set (mapv #(locals-walk f % locals) x))
-      (map? x) (zipmap (keys x) (mapv #(locals-walk f % locals) (vals x)))
-      (contains? #{'let `let `let* `loop `loop* 'loop} (first x)) ; Note: (binding [] ...) can't add locals.
-      (let [pairs (into [] (if (coll? (second x)) (second x) [(second x)]))
-            n (count pairs)
-            pairs1b1 (loop [code [] ix 0 locals locals]
-                      (if (>= ix n) [code locals]
-                        (let [locals1 (conj locals (nth pairs ix))
-                              sym (locals-walk f (nth pairs ix) locals1)
-                              val (locals-walk f (get pairs (inc ix) 'nil) locals)]
-                          (recur (conj code sym val) (+ ix 2) locals1))))
-            pairs1 (f (first pairs1b1) locals)
-            locals1 (second pairs1b1)
-            tail (rest (rest x))]
-        (f (apply list (f (first x) locals)
-             pairs1 (mapv #(locals-walk f % locals1) tail)) locals))
-      (and (contains? #{'fn `fn `fn*} (first x)) (vector? (second x))) ; unwrapped.
-      (let [locals1 (set/union locals (set (second x)))
-            head1 (f (first x) locals)]
-        (f (apply list head1 (mapv #(locals-walk f % locals1) (rest x))) locals))
-      (contains? #{'fn `fn `fn*} (first x)) ; wrapped.
-      (let [pieces (rest x)
-            bindingss (mapv #(set (first %)) pieces)
-            head1 (f (first x) locals)
-            pieces1 (mapv #(locals-walk f %1 (set/union %1 %2)) pieces bindingss)]
-        (f (apply list head1 pieces1) locals))
-      (contains? #{'defn `defn 'defn- `defn- 'definline `deflinline 'defmacro `defmacro} (first x)) ; only handles basic defn, use macroexpand to handle more stuff.
-      (let [bindings (set (first (filter vector? x)))
-            locals1 (set/union bindings locals)]
-        (f (apply list (mapv #(locals-walk f % locals1) x)) locals))
-      :else (apply list (mapv #(locals-walk f % locals) x)))))
+    (f
+      (cond (not (coll? x)) x
+        (vector? x) (mapv #(locals-walk f % locals) x)
+        (set? x) (set (mapv #(locals-walk f % locals) x))
+        (map? x) (zipmap (keys x) (mapv #(locals-walk f % locals) (vals x)))
+        (contains? #{'let `let `let* `loop `loop* 'loop} (first x)) ; Note: (binding [] ...) can't add locals.
+        (let [pairs (into [] (if (coll? (second x)) (second x) [(second x)]))
+              n (count pairs)
+              pairs1b1 (loop [code [] ix 0 locals locals]
+                        (if (>= ix n) [code locals]
+                          (let [locals1 (conj locals (nth pairs ix))
+                                sym (locals-walk f (nth pairs ix) locals1)
+                                val (locals-walk f (get pairs (inc ix) 'nil) locals)]
+                            (recur (conj code sym val) (+ ix 2) locals1))))
+              pairs1 (f (first pairs1b1) locals)
+              locals1 (second pairs1b1)
+              tail (rest (rest x))]
+          (apply list (f (first x) locals)
+               pairs1 (mapv #(locals-walk f % locals1) tail)))
+        (and (contains? #{'fn `fn `fn*} (first x)) (vector? (second x))) ; unwrapped.
+        (let [locals1 (set/union locals (set (second x)))
+              head1 (f (first x) locals)]
+          (apply list head1 (mapv #(locals-walk f % locals1) (rest x))))
+        (contains? #{'fn `fn `fn*} (first x)) ; wrapped.
+        (let [pieces (rest x)
+              bindingss (mapv #(set (first %)) pieces)
+              head1 (f (first x) locals)
+              pieces1 (mapv #(locals-walk f %1 (set/union %1 %2)) pieces bindingss)]
+          (apply list head1 pieces1))
+        (contains? #{'defn `defn 'defn- `defn- 'definline `deflinline 'defmacro `defmacro} (first x)) ; only handles basic defn, use macroexpand to handle more stuff.
+        (let [bindings (set (first (filter vector? x)))
+              locals1 (set/union bindings locals)]
+          (apply list (mapv #(locals-walk f % locals1) x)))
+        :else (apply list (mapv #(locals-walk f % locals) x)))
+      locals)))
+
+
+;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;
+
+(defn unbound-syms [x]
+  "All symbols that aren't defined in x. 
+   Includes all qualified symbols except clojure.core, and unqualified clojure-core symbols.
+   Does not include shadowed symbols, i.e. defining a symbol after it's used.
+   Does not include map keys.
+   Best used after sunshine/pipeline."
+  (let [blacklist (cond (not (collections/listy? x)) #{}
+                    (and (contains? #{'fn `fn `fn*} (first x))
+                      (vector? (second x)))
+                    (set (second x))
+                    (contains? #{'fn `fn `fn*} (first x))
+                    (apply set/union (mapv #(set (first %)) (rest x)))
+                    (contains? #{'let `let `let* `binding} (first x))
+                    (set (evens (second x)))
+                    :else #{})
+        blacklist (set/union blacklist specials)
+        unbounds1 (cond (map? x) (mapv unbound-syms (vals x))
+                    (coll? x) (mapv unbound-syms x)
+                    (and (symbol? x) (string/includes? (str x) "clojure.core/")) #{}
+                    (symbol? x) [#{x}]
+                    :else [])]
+    (set/difference (apply set/union unbounds1) blacklist)))
