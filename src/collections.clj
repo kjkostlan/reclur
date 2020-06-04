@@ -372,7 +372,7 @@
   (_find-value-in x v []))
 
 (defn paths [x]
-  "All paths in a given tree, non-collections return [[]]
+  "All LEAF paths in a given tree, non-collections return [[]]
   Sorted by path-order."
   (let [vp (fn [head v] (collections/vcat [head] v))
         ppvs (fn [prepends pathss]

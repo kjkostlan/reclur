@@ -30,7 +30,7 @@
       r1 false)))
 
 (defn resolve-class [sym]
-  "Namespace-dependent (I think), returns a symbol. Nil if can't be resolved."
+  "Namespace-dependent (I think). Nil if can't be resolved."
   ; TODO: since this depends on namespaces it needs to be incorporated into langs/resolved.
   (if (symbol? sym)
     (try (if (= (type (eval sym)) java.lang.Class)
@@ -45,6 +45,13 @@
     (if (Character/isDigit (last melt))
       (recur (subs melt 0 (dec (count melt)))) 
       (symbol melt))))
+
+(defn clj-ns-of [sym]
+  "The namespace of this symbol, in symbol form.
+  Uses the current *ns*."
+  (let [sym-qual (subs (str (resolve sym)) 2)
+        str-leaf (last (string/split (str sym) #"\/"))]
+    (symbol (string/replace (str (second (read-string (str "`" sym-qual)))) (str "/" str-leaf) ""))))
 
 ;;;;;;;;;;;;;;;;; Symbol marking ;;;;;;;;;;;;;;;;
 

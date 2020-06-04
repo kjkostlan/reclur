@@ -25,11 +25,12 @@
       (let [p0 (first pieces) fname? (.endsWith ^String p0 ".clj") ; TODO: not just clojure.
             fname (if fname? (if (.startsWith ^String p0 "./src") p0 (str "./src/" p0))
                     (langs/ns2file (textparse/sym2ns p0)))
-            line-num (Integer/parseInt (.trim ^String (second pieces)))
-            txt (jfile/open fname)]
-        (if txt
+            line-num (try (Integer/parseInt (.trim ^String (second pieces)))
+                       (catch Exception e false))
+            txt (if line-num (jfile/open fname))]
+        (if (and txt line-num)
           (let [ixs (textparse/line-to-string-ixs txt line-num false)]
-            [fname (first ixs) (second ixs) (if fname? false p0)]))))))
+            (if (first ixs) [fname (first ixs) (second ixs) (if fname? false p0)])))))))
 
 (defn stack-click [box]
   "Tries to find the file and character ixs for a stack."

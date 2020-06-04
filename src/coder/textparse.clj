@@ -145,7 +145,7 @@
         line-counts (mapv #(inc (count %)) lines)
         nchars-b4-line (conj (into [] (reductions + 0 line-counts)) (count txt))
         ix-in-line (string/index-of txt (str search-key))
-        c0 (nth nchars-b4-line (dec linenum))
+        c0 (get nchars-b4-line (dec linenum))
         jux-of (if c0 (string/index-of (nth lines (dec linenum)) (str search-key)))
         jx-of (if jux-of (+ c0 jux-of))]
     (if (and search-key jx-of) [jx-of (+ jx-of (count (str search-key)))]

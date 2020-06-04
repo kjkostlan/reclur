@@ -270,7 +270,7 @@
 (defn locals-walk [f x locals]
   "Applies (f x locals) recursively, locals is a set.
    Locals includes any symbols defined before x, as well as x itself.
-   Does not work for multible vars at once let statements (TODO)."
+   Does not work for multible vars at once fancy let statements (TODO)."
   (let [locals (set locals)]
     (f
       (cond (not (coll? x)) x
@@ -311,25 +311,28 @@
 
 ;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;
 
+(defn unbound-non-fn-syms [x]
+  "Unbound symbols that aren't called as a function. Returns a set.
+   Excludes clojure.core qualified symbols."
+  (let [ubs (atom #{})
+        blacklist (atom #{})
+        f (fn [x locals]
+            (if (and (symbol? x) (not (contains? locals x))
+                  (not (string/starts-with? (str x) "clojure.core/")))
+              (swap! ubs #(conj % x)))
+            (if (and (collections/listy? x) (symbol? (first x)))
+              (swap! blacklist #(conj % (first x)))) x)
+        _ (locals-walk f x #{})] 
+    (set/difference @ubs @blacklist)))
+
 (defn unbound-syms [x]
-  "All symbols that aren't defined in x. 
-   Includes all qualified symbols except clojure.core, and unqualified clojure-core symbols.
-   Does not include shadowed symbols, i.e. defining a symbol after it's used.
-   Does not include map keys.
-   Best used after sunshine/pipeline."
-  (let [blacklist (cond (not (collections/listy? x)) #{}
-                    (and (contains? #{'fn `fn `fn*} (first x))
-                      (vector? (second x)))
-                    (set (second x))
-                    (contains? #{'fn `fn `fn*} (first x))
-                    (apply set/union (mapv #(set (first %)) (rest x)))
-                    (contains? #{'let `let `let* `binding} (first x))
-                    (set (evens (second x)))
-                    :else #{})
-        blacklist (set/union blacklist specials)
-        unbounds1 (cond (map? x) (mapv unbound-syms (vals x))
-                    (coll? x) (mapv unbound-syms x)
-                    (and (symbol? x) (string/includes? (str x) "clojure.core/")) #{}
-                    (symbol? x) [#{x}]
-                    :else [])]
-    (set/difference (apply set/union unbounds1) blacklist)))
+  "Unbound symbols. Returns a set.
+   Excludes clojure.core qualified symbols."
+  (let [ubs (atom #{})
+        blacklist (atom specials)
+        f (fn [x locals]
+            (if (and (symbol? x) (not (contains? locals x))
+                  (not (string/starts-with? (str x) "clojure.core/")))
+              (swap! ubs #(conj % x))) x)
+        _ (locals-walk f x #{})] 
+    (set/difference @ubs @blacklist)))

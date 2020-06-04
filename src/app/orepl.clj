@@ -210,7 +210,7 @@
       (kb/emacs-hit? "S-^^" key-evt) (old-cmd-search box -1)
       (kb/emacs-hit? "S-vv" key-evt) (old-cmd-search box 1)
       :else
-      (rtext/key-press key-evt box))))
+      (codebox/key-press key-evt (codebox/set-precompute box)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Namespace reloading et al ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
