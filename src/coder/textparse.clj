@@ -205,9 +205,12 @@
   "If it already is quald it will double-qual"
   (symbol (str ns-sym "/" code-sym)))
 
+(defn qual? [sym] (> (count (string/split (str sym) #"/")) 1))
+
 (defn unqual [sym-qual]
   "The part after the /"
-  (symbol (last (string/split (str sym-qual) #"\/"))))
+  (if (= sym-qual 'clojure.core//) '/ 
+   (symbol (last (string/split (str sym-qual) #"\/")))))
 
 (defn rm-lang [sym]
   "Removes the ! part at the start of sym (which can be a qualed or unqualled sym), if any is present."
@@ -217,7 +220,8 @@
 
 (defn sym2ns [qual-sym]
   "Returns the namespace/class. Classes from non-clojure have i.e. !java.my.class rather than my.namespace."
-  (if (.contains ^String (str qual-sym) "/") 
+  (cond (or (= qual-sym '/) (= qual-sym "/")) 'clojure.core
+    (.contains ^String (str qual-sym) "/") 
     (symbol (first (string/split (str qual-sym) #"\/")))))
 
 (defn ns2langkwd [ns-sym]

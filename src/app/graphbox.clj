@@ -1,7 +1,7 @@
 ; Shows what code uses what functions.
 (ns app.graphbox
   (:require [app.rtext :as rtext]
-    [coder.plurality :as plurality] [coder.sunshine :as sunshine]
+    [coder.plurality :as plurality] [coder.textparse :as textparse]
     [coder.cbase :as cbase] [coder.cnav :as cnav] [coder.crosslang.langs :as langs]
     [app.orepl :as orepl] [app.hintbox :as hintbox] [app.codebox :as codebox]
     [layout.selectmovesize :as selectmovesize]
@@ -35,7 +35,7 @@
   (let [set-box (fn [t m b e?] (rtext/fit-to-text (assoc box :pieces [{:text t} {:text m} {:text b}] :error? e?
                                                     :cursor-ix (count t) :selection-start 0 :selection-end 0) 
                                  true true))]
-    (cond (and (symbol? sym-qual) (sunshine/qual? sym-qual))
+    (cond (and (symbol? sym-qual) (textparse/qual? sym-qual))
       (let [outwards (cbase/uses-of sym-qual)
             inwards (cbase/used-by sym-qual)
             sp #(hintbox/lineanate %)]

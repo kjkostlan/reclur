@@ -35,7 +35,8 @@
     [layout.layoutcore :as layoutcore]
     [coder.logger :as logger]
     [coder.cnav :as cnav]
-    [coder.cbase :as cbase]))
+    [coder.cbase :as cbase]
+    [coder.unerror :as unerror]))
 
 (declare launch-main-app!) ; avoids a circular dependency with launch main app depending on earlier fns.
 
@@ -268,7 +269,6 @@
 (def bg-size (let [^BufferedImage img (gfxcustom/filename2BufferedImage bg-filename)]
                [(.getWidth img) (.getHeight img)]))
 
-
 (defn limit-cam [s]
   "Cameras are transformations, [x y scalex scaley], scaling first."
   (let [cam (:camera s)
@@ -336,7 +336,7 @@
   (let [ifns (:interact-fns comp) 
         gfx (try ((:render ifns) (dissoc comp :position) focused?)
               (catch Exception e 
-                (let [pieces (string/split (orepl/pr-error e) #"\n")]
+                (let [pieces (string/split (unerror/pr-error e) #"\n")]
                   (mapv #(vector :drawString [%1 10 (+ 10 (* %2 10))] {:Color [1 1 1 1]}) pieces (range)))))] 
         (if (= (count gfx) 0) (println "WARNING: no graphics drawn."))
     gfx))
@@ -395,7 +395,7 @@
         s2 (if err? s s1-or-ex)
         s3 (if (= (count txt) 0) s2 (siconsole/log s2 txt))
         s4 (limit-cam s3)]
-     (if err? (do (println (orepl/pr-error s1-or-ex)) (siconsole/log s4 (orepl/pr-error s1-or-ex))) s4)))
+     (if err? (do (println (unerror/pr-error s1-or-ex)) (siconsole/log s4 (unerror/pr-error s1-or-ex))) s4)))
 
 (defn undo-wrapped-listener [evt-g s]
   (let [ty (:type evt-g)
@@ -423,5 +423,7 @@
 ; TODO: get this working so cmd+q doesn't quit.
 (defn on-shutdown [] ())
 
-;;  startup
-(defn -main [& args] (launch-main-app!))
+
+(defn -main [& args] (launch-main-app!)
+  (try (do (require 'startup) ((eval 'startup/startup-core)))
+    (catch Exception e (do (println "User startup script failed") (println (unerror/pr-error e))))))

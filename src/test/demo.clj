@@ -7,7 +7,10 @@
     [layout.blit :as blit]
     [coder.unerror :as unerror]
     [coder.logger :as logger]
-    [coder.cnav :as cnav]))
+    [coder.cnav :as cnav]
+    [coder.crosslang.langs :as langs]
+    [coder.textparse :as textparse]
+    [coder.cbase :as cbase]))
 
 (defonce futures (atom []))
 
@@ -25,10 +28,9 @@
   "Very pretty print: uses simulated annealing to decide when to indent.
    This feature is around BETA level as Jan 8 2020."
   (let [k 'app.rtext/fit-to-text ;'app.orepl/get-repl-result
-        ns-sym (cbase/ns-of k)
-        vi (cbase/var-info k true)
-        src (:source vi)
-        src-ex (binding [*ns* (find-ns ns-sym)] (walk/macroexpand-all src))
+        ns-sym (textparse/sym2ns k)
+        src (langs/var-source k)
+        src-ex (langs/mexpand ns-sym src)
         t0 (System/nanoTime)
         vp (blit/vps src-ex)
         t1 (System/nanoTime)]

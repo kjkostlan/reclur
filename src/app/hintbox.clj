@@ -5,6 +5,7 @@
     [coder.plurality :as plurality]
     [coder.cbase :as cbase] [coder.crosslang.langs :as langs]
     [coder.textparse :as textparse]
+    [coder.cnav :as cnav]
     [app.orepl :as orepl]
     [clojure.string :as string]
     [app.codebox :as codebox]
@@ -24,7 +25,7 @@
   (assoc rtext/empty-text :interact-fns (interact-fns) :pieces [{:text "\n"}]
     :outline-color [0 0.75 0 1] :path "" :type :hintbox :colorize-fn colorize
     :subtype false))
- 
+
 (defn get-text [box]
   (:text (first (:pieces box))))
 
@@ -66,7 +67,7 @@
                      (map #(try (read-string %) (catch Exception e false))
                        [piece (subs piece 0 (dec (count piece)))])))
         no? (= piece "false")
-        specials #{'def 'let* 'var 'quote 'if 'loop* 'recur '. 'new 'throw 'catch 'monitor-enter 'monitor-exit 'set!}]
+        specials cnav/specials]
     (cond (= piece "nil") nil
       no? false
       (and (symbol? sym) (get specials sym))
@@ -94,7 +95,7 @@
    nil = no hint could be found, so no box generated."
   (let [x (codebox/x-qual-at-cursor cbox)
         special? (fn [sym] 
-                   (contains? #{'def 'let* 'var 'quote 'if 'loop* 'recur '. 'new 'throw 'catch 'monitor-enter 'monitor-exit 'set!}
+                   (contains? cnav/specials
                      sym))]
     (cond (nil? x) (add-hint-box s cbox ["Nothing here"] :doc)
       (and (symbol? x) (special? x))

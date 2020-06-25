@@ -10,7 +10,7 @@
 
 ;;;;;;;; Support fns ;;;;;;;;;
 
-(def specials #{'def 'let* 'var 'quote 'if 'loop* 'recur '. 'new 'throw 'catch 'monitor-enter 'monitor-exit 'set!})
+(def specials #{'def 'let* 'fn* 'var 'quote 'if 'loop* 'recur '. 'new 'throw 'catch 'monitor-enter 'monitor-exit 'set! 'do})
 (def def-variants #{'def 'defn `defn 'defmacro `defmacro 'def*})
 
 (defn vcons [a x]
@@ -27,12 +27,6 @@
   (clojure.walk/prewalk #(if (= (_lty %) 1) (apply list %) %) t))
 
 ;;;;;;;; Pathing fns ;;;;;;;;;
-
-(defn third [x] (first (rest (rest x))))
-(defn fourth [x] (first (rest (rest (rest x)))))
-
-(defn evens [x] (into [] (take-nth 2 x)))
-(defn odds [x] (into [] (take-nth 2 (rest x))))
 
 (defn tree-diff [x y]
   "Finds a shortest path that differences x and y, false if x=y.
@@ -148,32 +142,6 @@
    Collections are collapsed to 1 element, but the depth remains."
   (lucky-branch code (path-of code search-key)))
 
-;;;;;;;; Macro fns ;;;;;;;;
-
-(defn macro-expand-hilite-track [ns code code-with-hilite]
-  "Finds the path on the expanded code of the macro of the 'hilight'."
-  (let [ns (if (symbol? ns) (find-ns ns) ns)
-        code-ex (binding [*ns* ns] 
-                  (walk/macroexpand-all code))
-        code-hx (binding [*ns* ns]
-                  (walk/macroexpand-all code-with-hilite))]
-    (tree-diff code-ex code-hx)))
-
-(defn macro-expand-path [ns code path]
-  "Where path goes on the macroexpanded code.
-   Not gaurenteed to work in all cases (should return nil when fails)."
-  (let [sy (gensym "Mark")
-        f #(cond (collections/listy? %) (list sy)
-             (vector? %) [sy]
-             (set? %) #{sy}
-             (map? %) {sy sy}
-             (number? %) (Math/random)
-             (symbol? %) sy
-             :else (str sy)) 
-        code-marked (collections/cupdate-in code path f)]
-    (macro-expand-hilite-track 
-      ns code code-marked)))
-
 ;;;;;;;; Code navigaton fns ;;;;;;;;
 
 (defn unqual [sym-qual] "Duplicated from textparse to avoid circles." 
@@ -255,18 +223,6 @@
     (coll? x) (apply set/union (mapv all-syms x))
     :else #{}))
 
-#_(defn broadcast [ks vs]
-  "Makes a vector of maps. Non-vector vs are broad-casted into vectors.
-   If there are no vectors, just zipmaps the maps together."
-  (let [n (count (first (filter vector? vs)))]
-    (if n
-      (mapv (fn [ix] (zipmap ks (mapv #(if (vector? %) (nth % ix) %) vs))))
-      (zipmap ks vs))))
-
-#_(defn fbcast [f x]
-  (if (vector x) (mapv f x)
-    (f x)))
-
 (defn locals-walk [f x locals]
   "Applies (f x locals) recursively, locals is a set.
    Locals includes any symbols defined before x, as well as x itself.
@@ -307,7 +263,6 @@
           (apply list (mapv #(locals-walk f % locals1) x)))
         :else (apply list (mapv #(locals-walk f % locals) x)))
       locals)))
-
 
 ;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;
 

@@ -68,13 +68,28 @@
             [coder.cnav :as cnav]
             [javac.file :as jfile]
             [clojure.set :as set]
-            [clojure.main :as main]))
+            [clojure.main :as main]
+            [clojure.walk :as walk]))
 
 ;;;;;;;;;;;;;;;;;;;;;; Support functions that aren't language dependent ;;;;;;;;;;;;;
 
 (defn errlang [fn-name langkwd]
   "One day this function will be removed. One day..."
   (throw (Exception. (str "langs/" fn-name " not yet supported with " langkwd))))
+
+(defn unpacked-fn? [form]
+  "Functions without packed arguments. Making all arguments packed can make things easier but changes the path."
+  (if (and (collections/listy? form) (contains? #{`fn `fn*} (first form)))
+    (cond (vector? (second form)) 1 (vector? (collections/third form)) 2 :else false)))
+
+(defn fn-pack [code]
+  "Makes single-arity functions packed like multi-arity fns.
+   This reduces the number of cases.
+   Clojure's inline functions don't pack up properly even though (fn) does."
+  (walk/postwalk #(if-let [upk (unpacked-fn? %)] 
+                    (if (= upk 1) (list (first %) (rest %)) 
+                      (list (first %) (second %) (rest %))) %) 
+    code))
 
 ;;;;;;;;;;;;;;;;;;;;;; Language specific fns of medium size ;;;;;;;;;;;;;
 ; Small = inline. Large = put in dedicated files in coder.crosslang.langparsers.
@@ -89,6 +104,28 @@
       (let [lines (string/split-lines txt)
             clip-txt (subs (apply str (interpose "\n" (subvec lines (dec line)))) (dec col))]
         (read-string clip-txt)))))
+
+(defn clj-resolve-class [sym]
+  "Namespace-dependent (I think). Nil if can't be resolved."
+  ; TODO: since this depends on namespaces it needs to be incorporated into langs/resolved.
+  (if (symbol? sym)
+    (try (if (= (type (eval sym)) java.lang.Class)
+           (second (string/split (str (eval sym)) #" "))) 
+      (catch Exception e nil))))
+
+(defn unmacro-static-java1 [x]
+  "Combines static java calls into one symbol.
+   (. Math sin 1.2) => (java.lang.Math/sin 1.2).
+   This can be treated like a qualified symbol to a function for MOST metaprogramming.
+  This is a clojure-unique function; for any other lang it will do nothing."
+  (cond (not (collections/listy? x)) x
+    (not (symbol? (first x))) x
+    (= (first x) 'new) (apply list (symbol (str (second x) ".")) (nthrest x 2))
+    (and (= (first x) '.) (clj-resolve-class (second x))) 
+    (apply list (symbol (str (clj-resolve-class (second x)) "/" (collections/third x))) (nthrest x 3))
+    (clj-resolve-class (textparse/sym2ns (first x)))
+    (apply list (symbol (str (clj-resolve-class (textparse/sym2ns (first x))) "/" (textparse/unqual (first x)))) (rest x)) ; resolve
+    :else x))
 
 ;;;;;;;;;;;;;;;;;;;;;; Functions that don't require knowing the language itself, but do depend on language ;;;;;;;;;;;;;
 
@@ -166,6 +203,10 @@
                           (if src (assoc out :source src) out)) out)]
     out))
 
+(defn var-source [qual-sym]
+  "Source-code of qual-sym, no macro expansion or symbol qualification."
+  (:source (var-info qual-sym true)))
+
 (defn defs [ns-sym]
   "Not qualified."
   (let [langkwd (textparse/ns2langkwd ns-sym)]
@@ -189,6 +230,26 @@
                                        (defs nms))) 
                    (keys as2ns) (vals as2ns)))] 
     (collections/vcat native foreign standard)))
+
+(defn defs [ns-sym]
+  "Not qualified."
+  (let [langkwd (textparse/ns2langkwd ns-sym)]
+    (cond (= langkwd :clojure)
+      (into [] (keys (ns-interns ns-sym)))
+      (= langkwd :human) []
+      :else (errlang "defs" langkwd))))
+
+(defn mexpand [ns-sym code]
+  "Performs a macroexpand-all on the function, as well as some other minor steps to make
+   the code easier to work with." 
+  (let [langkwd (textparse/ns2langkwd ns-sym)]
+    (cond (= langkwd :clojure)
+      (walk/postwalk unmacro-static-java1
+        (if-let [ns-obj (find-ns ns-sym)]
+          (binding [*ns* ns-obj] (walk/macroexpand-all code))
+            (walk/macroexpand-all code)))
+      (= langkwd :human) []
+      :else (errlang "mexpand" langkwd))))
 
 ;;;;;;;;;;;;;;;;;;;;;; Functions that need to know which language to use ;;;;;;;;;;;;;;;;;
 

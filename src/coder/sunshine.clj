@@ -12,32 +12,23 @@
   (:require [clojure.set :as set]
     [clojure.string :as string]
     [clojure.walk :as walk]
-    [coder.cnav :as cnav :refer [third fourth evens odds]]
-    [coder.crosslang.langs :as langs]))
+    [coder.cnav :as cnav]
+    [coder.crosslang.langs :as langs]
+    [coder.textparse :as textparse]
+    [collections]))
 
 (def ^:dynamic *ns-sym* 'coder.sunshine)
 
 ;;;;;;;;;;;;;;;;; Symbol functions ;;;;;;;;;;;;;;;;
 
-
-(defn branch-sym [sym] (if (= sym '/) sym (symbol (first (string/split (str sym) #"/")))))
-(defn leaf-sym [sym] (symbol (second (string/split (str sym) #"/"))))
-(defn qual? [sym] (> (count (string/split (str sym) #"/")) 1))
 ; TODO: swallow exception is a problem.
 (defn qual [sym] 
   (if-let [r (try (langs/resolved *ns-sym* sym) (catch Exception e false))] r 
     (if-let [r1 (try (langs/resolved 'clojure.core sym) (catch Exception e false))]
       r1 false)))
 
-(defn resolve-class [sym]
-  "Namespace-dependent (I think). Nil if can't be resolved."
-  ; TODO: since this depends on namespaces it needs to be incorporated into langs/resolved.
-  (if (symbol? sym)
-    (try (if (= (type (eval sym)) java.lang.Class)
-           (second (string/split (str (eval sym)) #" "))) 
-      (catch Exception e nil))))
 (defn power-resolve [sym]
-  (if-let [sym-qual (qual sym)] sym-qual (resolve-class sym)))
+  (if-let [sym-qual (qual sym)] sym-qual (langs/clj-resolve-class sym)))
 
 (defn remove-trailing-nums [sym]
   "Useful when the trailing nums should be used to de-shadow."
@@ -76,18 +67,6 @@
 
 ;;;;;;;;;;;;;;;;;;;;; Helper functions ;;;;;;;;;;;;;;;;;;
 
-(defn djava1 [x]
-  "Combines static java calls into one symbol.
-   (. Math sin 1.2) => (java.lang.Math/sin 1.2) which can be treated like a qualified symbol.
-  This is a clojure-unique function; for any other lang it will do nothing."
-  (cond (not (collections/listy? x)) x
-    (= (first x) 'new) (apply list (symbol (str (second x) ".")) (nthrest x 2))
-    (and (= (first x) '.) (resolve-class (second x))) 
-    (apply list (symbol (str (resolve-class (second x)) "/" (third x))) (nthrest x 3))
-    (resolve-class (branch-sym (first x))) 
-    (apply list (symbol (str (resolve-class (branch-sym (first x))) "/" (leaf-sym (first x)))) (rest x)) ; resolve
-    :else x))
-
 (defn sym-replace [form rmap]
   "Recursive."
   (walk/postwalk #(if (symbol? %) (get rmap % %) %) form))
@@ -99,11 +78,6 @@
 (defn fn-head? [x]
   "Does the second element of x define binding pairs?"
   (and (collections/listy? x) (contains? #{`fn `fn*} (first x))))
-
-(defn unpacked-fn? [form]
-  "Functions without packed arguments. Making all arguments packed can make things easier but changes the path."
-  (if (and (collections/listy? form) (contains? #{`fn `fn*} (first form)))
-    (cond (vector? (second form)) 1 (vector? (third form)) 2 :else false)))
 
 (defn binding-unique-tag [binding-vec]
   "Makes symbols defined and used within a binding-vec unique.
@@ -126,31 +100,24 @@
 
 ;;;;;;;;;;;;;;;;;;;;; Core pipeline functions ;;;;;;;;;;;;;;
 
-(defn qual-all-syms [x java-combine? fn-pack?]
-  "Symbol qualification, java combining, and function packing."
-  (let [x1 (if java-combine? (walk/postwalk djava1 x) x)
-        qualf (fn [x locals] 
+(defn qual-all-syms [x]
+  "Symbol qualification."
+  (let [qualf (fn [x locals] 
                 (if (and (symbol? x) (not (get locals x)))        
-                  (if-let [sq (qual x)] sq x) x))
-        x2 (cnav/locals-walk qualf x1 #{})
-        x3 (if fn-pack?
-             (walk/postwalk #(if-let [upk (unpacked-fn? %)] 
-                             (if (= upk 1) (list (first %) (rest %)) 
-                               (list (first %) (second %) (rest %))) %) x2)
-             x2)]
-    x3))
+                  (if-let [sq (qual x)] sq x) x))]
+    (cnav/locals-walk qualf x #{})))
 
 (defn symbol-unique-tag [x] 
   "Gives local symbols unique tags in the form of foo -> foo_ix=1234.
    Symbols that shadow other symbols are renamed.
    Uses gensym, so there isn't a need to keep track of locals."
   (let [walk-f (fn [form] (cond (binding-head? form)
-                            (let [v (second form) syms0 (evens v)
+                            (let [v (second form) syms0 (collections/evens v)
                                   v1 (binding-unique-tag v)
-                                  rmap (zipmap (evens v) (evens v1))
+                                  rmap (zipmap (collections/evens v) (collections/evens v1))
                                   tail1 (sym-replace (nthrest form 2) rmap)]
                               (apply list (first form) v1 tail1))
-                            (unpacked-fn? form) ; (fn [foo] (+ foo bar))
+                            (langs/unpacked-fn? form) ; (fn [foo] (+ foo bar))
                             (let [fake-argpack (rest form)
                                   fake-argpack1 (fn-argpack-unique-tag fake-argpack)]
                               (apply list (first form) fake-argpack1))
@@ -166,7 +133,7 @@
    #(%) => p1__12345#
    `a# => a__12345__auto__"
   (let [clean-sym (fn [sym]
-                    (if (qual? sym) sym
+                    (if (textparse/qual? sym) sym
                       (let [s0-s1 (split-marked-sym sym) s0 (first s0-s1) s1 (second s0-s1)
                             s0 (string/replace s0 #"__\d\d\d+__auto__" "")
                             s0 (reduce #(string/replace %1 
@@ -181,7 +148,7 @@
   "Modifies local symbols and ensues no local symbols 
    will end in numbers when unmarked-sym."
   (let [mod-sym (fn [sym] 
-                  (if (qual? sym) sym
+                  (if (textparse/qual? sym) sym
                     (let [s0-s1 (split-marked-sym sym) s0 (first s0-s1) s1 (second s0-s1)
                           s0-mod (remove-trailing-nums (f (symbol s0)))] ; Don't end in a number.
                       (symbol (str s0-mod s1)))))]
@@ -190,7 +157,7 @@
 (defn clean-mark [x]
   "Cleans up the symbol mark, making sure to not leave anything shadowed.
    Repeated symbols will be marked with 1,2,3,... to avoid shadowing."
-  (let [unsorted-locals (set (filterv #(not (qual? %)) (cnav/all-syms x)))
+  (let [unsorted-locals (set (filterv #(not (textparse/qual? %)) (cnav/all-syms x)))
         n (count unsorted-locals)
         paths (collections/paths x)
         ix2sym (reduce (fn [acc ix]
@@ -216,7 +183,7 @@
 
 (defn condense-default-imports [x]
   "Condenses down clojure.core and java.lang, both of which are imported by default."
-  (let [all-quals (filterv qual? (cnav/all-syms x))
+  (let [all-quals (filterv textparse/qual? (cnav/all-syms x))
         java-replace #(symbol (string/replace (str %) "java.lang.Math/" "Math/"))
         clojure-replace #(symbol (string/replace (str %) "clojure.core/" ""))
         replace-map (zipmap all-quals 
@@ -224,34 +191,51 @@
     (sym-replace x replace-map)))
 
 
-;;;;;;;;;;;;;;;;;;;;; Putting it all together ;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;; A processing pipeline ;;;;;;;;;;;;;;
 
 (defn pipeline [ns-sym form mexpand? & local-sym-modify-f]
   "The main code de-shadowing and qualification tool.
+   Deterministic and doesn't change the name of any uniquely-named symbols if no local-sym-modify-f is supplied.
+   If it changes what the code does there is a BUG somewhere!
    Optional macro-expand-all and symbol modification."
-  (binding [*ns-sym* ns-sym]
-    (-> (if mexpand? (walk/macroexpand-all form) form)
-      (qual-all-syms true false) symbol-unique-tag clean-gensym
-      (local-symbol-modify (if (first local-sym-modify-f) (first local-sym-modify-f) identity))
-      clean-mark)))
-
-(defn fpipeline [ns-sym form mexpand? & local-sym-modify-f]
-  "Pipeline but also packs functions."
-  (binding [*ns-sym* ns-sym]
-    (-> (if mexpand? (walk/macroexpand-all form) form)
-      (qual-all-syms true true) symbol-unique-tag clean-gensym
+  (binding [*ns-sym* (if (symbol? ns-sym) ns-sym (symbol (str ns-sym)))]
+    (-> (if mexpand? (langs/mexpand *ns-sym* form) form)
+      (qual-all-syms) symbol-unique-tag clean-gensym
       (local-symbol-modify (if (first local-sym-modify-f) (first local-sym-modify-f) identity))
       clean-mark)))
 
 (defn ppipeline [ns-sym form mexpand? & local-sym-modify-f]
   "Pretty print that removes clojure.core and java.lang qualifiers that 99% of the time aren't human-useful."
-  (binding [*ns-sym* ns-sym]
-    (-> (if mexpand? (walk/macroexpand-all form) form)
-      (qual-all-syms true false) symbol-unique-tag clean-gensym
+  (binding [*ns-sym* (if (symbol? ns-sym) ns-sym (symbol (str ns-sym)))]
+    (-> (if mexpand? (langs/mexpand *ns-sym* form) form)
+      (qual-all-syms) symbol-unique-tag clean-gensym
       (local-symbol-modify (if (first local-sym-modify-f) (first local-sym-modify-f) identity))
       clean-mark condense-default-imports)))
 
+;;;;;;;;;;;;;;;;;;;;;; Tracking where stuff end sup ;;;;;;;;;;;;;;;;;
+; There is no best way to do this!
 
+;;;;;;;; Macro fns ;;;;;;;;
+
+(defn hilite-track [ns-sym code code-with-hilite]
+  "Finds the path on the expanded code of the macro of the 'hilight'."
+  (let [code-ex (pipeline ns-sym code true)
+        code-hx (pipeline ns-sym code-with-hilite true)]
+    (cnav/tree-diff code-ex code-hx)))
+
+(defn macro-expand-path [ns-sym code path]
+  "Where path goes on the macroexpanded code.
+   Not gaurenteed to work in all cases (should return nil when fails)."
+  (let [sy (gensym "Mark")
+        f #(cond (collections/listy? %) (list sy)
+             (vector? %) [sy]
+             (set? %) #{sy}
+             (map? %) {sy sy}
+             (number? %) (Math/random)
+             (symbol? %) sy
+             :else (str sy)) 
+        code-marked (collections/cupdate-in code path f)]
+    (hilite-track ns-sym code code-marked)))
 
 
 

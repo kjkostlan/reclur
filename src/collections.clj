@@ -19,8 +19,8 @@
   "Does pr-str use ()? These all are treated as lists."
   (and (coll? x) (not (vector? x)) (not (map? x)) (not (set? x))))
 
-(defn evens [v] (keep-indexed #(if (even? %1) %2) v)) ; useful for picking apart vectorized lets and maps.
-(defn odds [v] (keep-indexed #(if (odd? %1) %2) v))
+(defn evens [x] (into [] (take-nth 2 x)))
+(defn odds [x] (into [] (take-nth 2 (rest x))))
 
 (defn wtf [x] (if (coll? x) (throw (Exception. (str "Unrecognized collection type:" (type x))))
                   (throw (Exception. "Not a collection."))))
@@ -81,6 +81,9 @@
   (let [delta (/ (- end start) (dec size))]
     (map (fn [n] (+ start (* n delta)))
          (range size))))
+
+(defn third [x] (first (rest (rest x))))
+(defn fourth [x] (first (rest (rest (rest x)))))
 
 ;;;;;;;;;;;;;;;; Generalized functions (wider valid argument set) ;;;;;;;;;;;;;;
 

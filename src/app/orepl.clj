@@ -10,6 +10,7 @@
     [coder.textparse :as textparse]
     [coder.plurality :as plurality]
     [coder.crosslang.langs :as langs]
+    [coder.unerror :as unerror]
     [javac.clipboard :as clipboard] 
     [javac.file :as jfile]
     [layout.colorful :as colorful]
@@ -21,37 +22,6 @@
 (declare interact-fns) ; Possible dependency cycle with the new function being used by some interact fns.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Look and feel ;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn pr-error [e & hide-stack?]
-  (let [e-clj (langs/convert-exception e ["app.orepl/eval" "app.orepl/get_repl_result"] :clojure)
-        ; Complicated get message because of "the syntax error that wasn't".
-        syntax-err-kys #{"EOF while reading" "arguments to if"
-                         "Unmatched delimiter"
-                         "Mismatched argument count"}
-        emsg (:Message e-clj)
-        cmsg (try (str (.getCause e)) (catch Exception eception false))
-        ;_ (println "EMSG:" emsg "CMSG:" cmsg)
-        msg0 (cond (and (not emsg) (not cmsg)) "<no message>"
-               (not emsg) cmsg (not cmsg) emsg
-               (and (string/includes? emsg "Syntax error")
-                 (not (first (filter #(string/includes? cmsg %) syntax-err-kys))))
-               ;(string/includes? cmsg "Unable to resolve symbol") ; more niche cases may be added.
-               (str (-> emsg (string/replace #"Syntax error compiling [a-zA-z ]*at " "")
-                      (string/replace ")." ")")
-                      (string/trim)) " " cmsg)
-               (string/includes? emsg "Syntax error")
-               (str emsg " " cmsg)
-               :else emsg)
-        msg0 (-> msg0 (string/replace "java.lang." "")
-               (string/trim))
-        msg (apply str (interpose "\ncompiling:" (string/split msg0 #", compiling:")))
-        msg1 (apply str msg " (" (subs (str (type e)) 6) ")" "\n"
-               (let [st (if (first hide-stack?) [] (:StackTrace e-clj))]
-                 (interpose "\n" st)))]
-    (-> msg1 
-      (string/replace "(clojure.lang.Compiler$CompilerException)" "")
-      (string/replace "RuntimeException: " "")
-      (string/replace "reading source at" "at"))))
 
 (def colorize-top codebox/colorize)
 
@@ -144,7 +114,7 @@
           (limit-length y))
         (catch Exception e
                 (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
-                  (lim-len (str "Runtime error:\n" (repl-err-msg-tweak (pr-error e))))))))))
+                  (lim-len (str "Runtime error:\n" (repl-err-msg-tweak (unerror/pr-error e))))))))))
 
 (defn set-result [box result]
   (let [pieces (:pieces box)
@@ -265,7 +235,7 @@
       (and (not (find-ns ns-symbol)) (not file-exists?)) {:error false :message "Non-existant namespace with non-existant file, no reloading needed."}
       file-exists?
       (let [maybe-e (_update-simple! ns-symbol false) ;(_update-core! ns-symbol false)
-            report (if maybe-e {:error (pr-error maybe-e true) :message "Compile error"}
+            report (if maybe-e {:error (unerror/pr-error maybe-e true) :message "Compile error"}
                       {:error false :message (str cljfile " saved and updated without error.")})] report)
       :else (do (_update-simple! ns-symbol true) {:error false :message "File no longer exists, deleted ns."}))))
 
@@ -393,7 +363,7 @@
 (defn make-lrepl [sym-qual path-within-code]
   "Start seeing your log immediately (ok with a ctrl+enter)."
   (let [path-within-code (into [] path-within-code)
-        src-piece-str (str (collections/cget-in (:source (langs/var-info sym-qual true)) path-within-code))
+        src-piece-str (str (collections/cget-in (langs/var-source sym-qual) path-within-code))
         hint-str (if (< (count src-piece-str) 32) src-piece-str
                    (str (subs src-piece-str 0 14) "..." (subs src-piece-str (- (count src-piece-str) 14))))
         code-str (str "^:active-logview\n"

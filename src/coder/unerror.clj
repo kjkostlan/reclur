@@ -3,21 +3,15 @@
 
 (ns coder.unerror
   (:require 
-    [clojure.walk :as walk]
     [clojure.set :as set]
-    [clojure.reflect :as reflect]
     [clojure.string :as string]
     [layout.blit :as blit]
     [collections]
-    [clojure.pprint :as pprint]))
+    [coder.crosslang.langs :as langs]))
 
 ;;;;;;;;;;;; Simple helper functions that are fairly generic ;;;;;;;;;;;;
 
 (defn plog [x] (do (println x) x)) ; TMP
-
-;(defn class-exists? [c] 
-;  "https://clojuredocs.org/clojure.reflect/resolve-class"
-;  (reflect/resolve-class (.getContextClassLoader (Thread/currentThread)) c))
 
 (defn sym-to-class [sym]
   (let [maybe-cl (try (eval (symbol sym)) (catch Exception e))]
@@ -29,13 +23,45 @@
 
 (def specials #{'if 'fn 'fn* 'let 'let* 'try 'catch 'throw 'monitor-enter 'monitor-exit 'loop 'recur 'def 'binding '. 'new 'var})
 
-
 (defn _abridged-error [err path where]
   {:msg (str (:msg err) 
           (let [txt (str (first (:path err)))]
             (if (> (count txt) 64)
               (str "\n  This error occured " where (subs txt 0 60) "...")
               (str "\n  This error occured " where txt)))) :path path})
+
+;;;;;;;;;;;; Visually nice errors to make it less annoying ;;;;;;;;;;;;
+
+(defn pr-error [e & hide-stack?]
+  (let [e-clj (langs/convert-exception e ["app.orepl/eval" "app.orepl/get_repl_result"] :clojure)
+        ; Complicated get message because of "the syntax error that wasn't".
+        syntax-err-kys #{"EOF while reading" "arguments to if"
+                         "Unmatched delimiter"
+                         "Mismatched argument count"}
+        emsg (:Message e-clj)
+        cmsg (try (str (.getCause e)) (catch Exception eception false))
+        ;_ (println "EMSG:" emsg "CMSG:" cmsg)
+        msg0 (cond (and (not emsg) (not cmsg)) "<no message>"
+               (not emsg) cmsg (not cmsg) emsg
+               (and (string/includes? emsg "Syntax error")
+                 (not (first (filter #(string/includes? cmsg %) syntax-err-kys))))
+               ;(string/includes? cmsg "Unable to resolve symbol") ; more niche cases may be added.
+               (str (-> emsg (string/replace #"Syntax error compiling [a-zA-z ]*at " "")
+                      (string/replace ")." ")")
+                      (string/trim)) " " cmsg)
+               (string/includes? emsg "Syntax error")
+               (str emsg " " cmsg)
+               :else emsg)
+        msg0 (-> msg0 (string/replace "java.lang." "")
+               (string/trim))
+        msg (apply str (interpose "\ncompiling:" (string/split msg0 #", compiling:")))
+        msg1 (apply str msg " (" (subs (str (type e)) 6) ")" "\n"
+               (let [st (if (first hide-stack?) [] (:StackTrace e-clj))]
+                 (interpose "\n" st)))]
+    (-> msg1 
+      (string/replace "(clojure.lang.Compiler$CompilerException)" "")
+      (string/replace "RuntimeException: " "")
+      (string/replace "reading source at" "at"))))
 
 ;;;;;;;;;;;; Macro expansion-based checking ;;;;;;;;;;;;;
 
@@ -52,17 +78,17 @@
     (if (string/includes? msg-full "did not conform to spec") ; long-winded message.
       (str head macr " used with bad spec") (str head msg-full))))
 
-(defn _on-macroexpand-err-catch [code path]
+(defn _on-macroexpand-err-catch [ns-sym code path]
   "What if the macro gets cranky? This code will show you the minimal part that is bad."
   (if (coll? code)
-    (try (do (pr-str (walk/macroexpand-all code)) nil)
+    (try (do (pr-str (langs/mexpand (symbol (str ns-sym)) code)) nil)
       (catch Exception e
         (if-let [deeper-error
                   (cond 
-                    (map? code) (collections/juice-1 #(_on-macroexpand-err-catch (get code %) (conj path %)) (keys code))
-                    (set? code) (collections/juice-1 #(_on-macroexpand-err-catch % (conj path %)) (keys code))
+                    (map? code) (collections/juice-1 #(_on-macroexpand-err-catch ns-sym (get code %) (conj path %)) (keys code))
+                    (set? code) (collections/juice-1 #(_on-macroexpand-err-catch ns-sym % (conj path %)) (keys code))
                     :else (let [codev (into [] code)]
-                            (collections/juice-1 #(_on-macroexpand-err-catch (nth codev %) (conj path %)) (range (count codev)))))]
+                            (collections/juice-1 #(_on-macroexpand-err-catch ns-sym (nth codev %) (conj path %)) (range (count codev)))))]
           deeper-error {:msg (_msg-merrxpand code e) :path path :b4expand? true})))))
 
 
@@ -294,17 +320,16 @@
           :else (collections/juice-1 #(_compile-err-catch (nth codev %) (add-path [%])) (range (count code))))))))
 
 
-(defn compile-err-catch [code ns]
+(defn compile-err-catch [code ns-sym]
   "Catches macroexpanded or compile-time errors in code,
    returns the path in the macroexpanded code if there is an error and type of error."
-  (binding [*ns* (if ns (if (symbol? ns) (find-ns ns) ns) *ns*)]
-    (let [_err? (atom true)
-          code-or-err (try (let [code-ex (walk/macroexpand-all code)] 
-                             (reset! _err? false) code-ex)
-                        (catch Exception e
-                          (_on-macroexpand-err-catch code [])))]
-      (if @_err? code-or-err
-        (_compile-err-catch code-or-err {})))))
+  (let [_err? (atom true)
+        code-or-err (try (let [code-ex (langs/mexpand ns-sym code)] 
+                           (reset! _err? false) code-ex)
+                      (catch Exception e
+                        (_on-macroexpand-err-catch ns-sym code [])))]
+    (if @_err? code-or-err
+      (_compile-err-catch code-or-err {}))))
 
 (defn flatten-1 [coll]
   "Turns coll into a vector of symbols that prints back to coll."
@@ -321,18 +346,19 @@
 (defn errprint [code err-info]
   "Lets the programmer see it in pprinted code."
   (do (println (str (:msg err-info) " (path in code=" (:path err-info) ")"))
-    (blit/vp (label-code code err-info))))
+    (blit/vpu (label-code code err-info))))
 
 (defn errprint? [code]
   (if-let [err-info (compile-err-catch code *ns*)]
-    (errprint (if (:b4expand? err-info) code (walk/macroexpand-all code))
+    (errprint (if (:b4expand? err-info) code (langs/mexpand code))
        err-info)
-    (do (blit/vp code)
-      (println "No error caught in code.")))
+    (do (blit/vpu code)
+      (println "No error caught in code [shown unqualed above].")))
   (try (do (eval (list 'fn [] code)) 
          (println "No vanilla error"))
     (catch Exception e
-      (println "Compare to vanilla error: " (.getMessage e)))))
+      (println "Compare to vanilla error [code shown unqualed above]: " 
+        (pr-error e)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Testing ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

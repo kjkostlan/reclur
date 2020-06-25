@@ -9,7 +9,8 @@
     [clojure.set :as set]
     [coder.textparse :as textparse]
     [coder.cnav :as cnav]
-    [coder.crosslang.langs :as langs] [coder.sunshine :as sunshine]))
+    [coder.crosslang.langs :as langs] [coder.sunshine :as sunshine]
+    [javac.file :as jfile]))
 
 ;; Simple conversion.
 
@@ -43,7 +44,7 @@
 
 (defn file2codes [fname]
   "Reads the file into a clojure datastructure so long as it is a supported language.
-   Uses the extension.
+   Uses the extension (primarly) to determine language.
    Returns false if it fails, which is different than [].
    For each def, the second element in each of codes if it exists gives the name no matter the language as we read-string that way.
    flatten-classes? flattens java classes and makes each def include the class-name."
@@ -123,11 +124,11 @@
 (defn nonlocal-syms [code ns-sym]
   "Set of external symbols, i.e. symbols that point outside of the code, all qualified."
   (let [syms (cnav/all-syms (sunshine/pipeline ns-sym code false))]
-    (filterv sunshine/qual? syms)))
+    (filterv textparse/qual? syms)))
 
 (defn uses-of [qual-sym]
   "Expensive (TODO: precompute) function that scans through all namespaces looking for qualified syms that use our sym."
-  (let [qual-sym (if (sunshine/qual? qual-sym) qual-sym (textparse/qual 'clojure.core qual-sym))
+  (let [qual-sym (if (textparse/qual? qual-sym) qual-sym (textparse/qual 'clojure.core qual-sym))
         vv (varaverse)
         leaf-sym (textparse/unqual qual-sym)
         
@@ -141,25 +142,24 @@
         usesof (set (mapv #(nth ks %) ixs))]
     (into [] usesof)))
 
-#_(defn cpath-uses-of [qual-sym]
-  "Like uses-of but with the codepaths that dig into each variable. 
-   Can return multible paths per symbol. This function is also expensive to run."
-  (let [syms (uses-of qual-sym)
-        vv (varaverse)
-        source-quals (mapv #(binding [*ns* (find-ns (textparse/sym2ns %))] 
-                              (sunshine/symbol-qual (get vv %))) syms)
-        pathss (mapv #(cnav/paths-of % qual-sym) source-quals)
-        cpathss (mapv #(mapv collections/vcat (repeat [%1]) %2) syms pathss)]
-    (apply collections/vcat cpathss)))
-
 (defn used-by [qual-sym]
-  "What is used by this function."
-  (let [qual-sym (if (sunshine/qual? qual-sym) qual-sym (textparse/qual 'clojure.core qual-sym))
+  "Symbols inside this function that refer to defs/defns in this code-base."
+  (let [qual-sym (if (textparse/qual? qual-sym) qual-sym 
+                   (textparse/qual 'clojure.core qual-sym))
         nms (textparse/sym2ns qual-sym)
-        code-file (langs/ns2file nms)
-        vv-lite (file2codes code-file) ; only need to check a single file.
-        code (get vv-lite qual-sym)]
-    (nonlocal-syms (strip-name code) nms)))
+        code (langs/var-source qual-sym)
+        non-locals (nonlocal-syms (strip-name code) nms)
+        found? #(jfile/exists? (langs/ns2file (textparse/sym2ns %)))]
+    (set (filterv found? non-locals))))
+
+(defn deep-used-by [qual-sym]
+  "Used-by, but returns a series of dependancy plies. Ignores self-dependancies.
+   The zeroth ply is itself. This function can be quite slow."
+  (loop [acc [] ply #{qual-sym} done #{}]
+    (if (= (count ply) 0) acc
+      (let [ply1 (apply set/union (mapv set (mapv used-by ply)))
+            ply1-new (set/difference ply1 done)]
+        (recur (conj acc ply1-new) ply1-new (set/union done ply1))))))
 
 ;;; Startup load everything optional (does this add cost?).
 
