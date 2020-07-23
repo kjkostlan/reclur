@@ -106,7 +106,7 @@
                 (if (and (symbol? x) (not (get locals x)))        
                   (if-let [sq (qual x)] sq x) x))]
     (cnav/locals-walk qualf x #{})))
-
+ 
 (defn symbol-unique-tag [x] 
   "Gives local symbols unique tags in the form of foo -> foo_ix=1234.
    Symbols that shadow other symbols are renamed.
@@ -128,18 +128,16 @@
     (walk/postwalk walk-f x)))
 
 (defn clean-gensym [x]
-  "Gensym doesn't prioritize human readabiliy.
+  "Gensym doesn't prioritize human readabiliy:
    (gensym 'foo) => foo12345.
    #(%) => p1__12345#
-   `a# => a__12345__auto__"
+   `a# => a__12345__auto__.
+   This function cleans it up."
   (let [clean-sym (fn [sym]
                     (if (textparse/qual? sym) sym
                       (let [s0-s1 (split-marked-sym sym) s0 (first s0-s1) s1 (second s0-s1)
                             s0 (string/replace s0 #"__\d\d\d+__auto__" "")
-                            s0 (reduce #(string/replace %1 
-                                          (re-pattern (str "p" %2 "__\\d\\d\\d+__#")) 
-                                          (str "%" %2)) 
-                                 s0 (range 1 20))
+                            s0 (string/replace s0 #"p\d__\d+#" (str "%" (second s0)))
                             s0 (string/replace s0 #"\d\d\d+" "")]
                         (symbol (str s0 s1)))))]
     (walk/postwalk #(if (symbol? %) (clean-sym %) %) x)))
@@ -150,9 +148,19 @@
   (let [mod-sym (fn [sym] 
                   (if (textparse/qual? sym) sym
                     (let [s0-s1 (split-marked-sym sym) s0 (first s0-s1) s1 (second s0-s1)
-                          s0-mod (remove-trailing-nums (f (symbol s0)))] ; Don't end in a number.
+                          s0-mod (f (symbol s0))
+                          trail-num? (Character/isDigit (last (str s0-mod)))
+                          s0-mod (if trail-num? 
+                                   (if (> (count s1) 0) (remove-trailing-nums s0-mod) 
+                                     (symbol (str s0-mod "_"))) s0-mod)] ; Don't end in a number.
                       (symbol (str s0-mod s1)))))]
     (walk/postwalk #(if (symbol? %) (mod-sym %) %) x)))
+
+(def core-counts ; Used in clean-mark
+  (reduce (fn [acc sym] 
+    (let [symu (remove-trailing-nums sym)]
+      (if (get acc symu) (update acc symu inc) (assoc acc symu 1))))
+        {} (keys (ns-map 'clojure.core))))
 
 (defn clean-mark [x]
   "Cleans up the symbol mark, making sure to not leave anything shadowed.
@@ -166,16 +174,10 @@
                             (assoc acc ix target) acc)))
                    {} (range (count paths)))
         locals (filterv identity (distinct (mapv #(get ix2sym %) (range (count paths)))))
-        core-counts (zipmap (mapv unmark-sym locals) (repeat 0))
-        ; Special for clojure.core:
-        core-counts (reduce (fn [acc sym] 
-                              (let [symu (remove-trailing-nums sym)]
-                                (if (get acc symu) (update acc symu inc) acc)))
-                      core-counts (keys (ns-map 'clojure.core)))
         replace-map (loop [ix 0 acc {} counts core-counts]
                       (if (= ix n) acc
                         (let [sym (nth locals ix) symu (unmark-sym sym)
-                              n-uses (get counts symu)
+                              n-uses (get counts symu 0)
                               symu1 (if (= n-uses 0) symu (symbol (str symu n-uses)))]
                           (recur (inc ix) (assoc acc sym symu1)
                             (assoc counts symu (inc n-uses))))))]
@@ -197,10 +199,13 @@
   "The main code de-shadowing and qualification tool.
    Deterministic and doesn't change the name of any uniquely-named symbols if no local-sym-modify-f is supplied.
    If it changes what the code does there is a BUG somewhere!
-   Optional macro-expand-all and symbol modification."
+   Optional macro-expand-all and symbol modification.
+   For the purpose of logging, macroexpanding will run pipeline as a post-processing step as it represents a further standardization of the code."
   (binding [*ns-sym* (if (symbol? ns-sym) ns-sym (symbol (str ns-sym)))]
     (-> (if mexpand? (langs/mexpand *ns-sym* form) form)
-      (qual-all-syms) symbol-unique-tag clean-gensym
+      (qual-all-syms)
+      symbol-unique-tag
+      clean-gensym
       (local-symbol-modify (if (first local-sym-modify-f) (first local-sym-modify-f) identity))
       clean-mark)))
 

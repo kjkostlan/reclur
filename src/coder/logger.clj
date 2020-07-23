@@ -79,14 +79,19 @@
   (let [logs (get-logs) lpath (collections/vcat [sym-qual] path-within-code)]
     (last (filter #(= (:path %) lpath) logs))))
 
+(defn logpath2code [log-path]
+  "The code that was logged in log-path. It may be macroexpanded code."
+  (get-in @globals/one-atom [:log-code-lookup log-path]))
+
 ;;;;;;;;;;;;;;; Runtime ;;;;;;;;;;;;;;;;
 
 (defn log! [x path]
   "Called when the logged code runs." 
   (swap! *log-atom*
-    #(let [log {:path path :time (System/nanoTime) :value x :Thread (format "0x%x" (System/identityHashCode (Thread/currentThread)))
+    #(let [code (get-in @globals/one-atom [:log-code-lookup path])
+           log {:path path :time (System/nanoTime) :value x :Thread (format "0x%x" (System/identityHashCode (Thread/currentThread)))
                 :TraceOb (if *log-stack?* (.getStackTrace ^Thread (Thread/currentThread)))
-                :lang :clojure} ; loggers for other languages will use different lang keywords.
+                :code code :lang :clojure} ; loggers for other languages will use different lang keywords.
            logs (if (:logs %) (:logs %) [])]
       (assoc % :logs (conj logs log)))) x)
 
@@ -123,13 +128,17 @@
   (let [code-f (get-logged-code-and-fn sym-qual paths mexpand?)
         logged-f (if-let [x (second code-f)] x (throw (last code-f)))
         code (symqual2code sym-qual mexpand?)
+        logged-codes (mapv #(collections/cget-in code %) paths)
         loggers (zipmap paths (repeat (count paths) {:mexpand? mexpand? :source code}))]
     (alter-var-root (find-var sym-qual)
       (fn [old-val]
         (collections/keep-meta old-val (fn [_] logged-f))))
     (swap! globals/one-atom
       (fn [world]
-        (let [loggers-old (get-in world [:loggers sym-qual])
+        (let [path+ #(collections/vcat [sym-qual] %)
+              world (update world :log-code-lookup
+                      #(merge % (zipmap (mapv path+ paths) logged-codes)))
+              loggers-old (get-in world [:loggers sym-qual])
               loggers1 (zipmap (keys loggers)
                          (mapv #(merge (get loggers-old % {}) (get loggers %))
                            (keys loggers)))]
@@ -150,18 +159,20 @@
         _ (if (not @good?) (throw maybe-err))]
     (:logs tmp-atom)))
 
-(defn find-bad-logpaths [sym-qual paths mexpand? throw? runtime-args]
+(defn find-bad-logpaths [run-sym log-sym paths mexpand? throw? runtime-args]
   "Finds a minimum error-generating subset of paths and returns them (throw? = false)
-   or throws an error with printing reportingof code (throw? = true).
+   or throws an error with printing reporting of code (throw? = true).
    Makes no changes to the log-paths.
    If runtime-args is non nil, will try to run the code. Else will only report compile errrors."
+  ; TODO: this function was recently modified, needs testing.
   (binding [*err-print-code?* false *log-stack?* false *log-atom* (atom {})]
     (let [paths (into [] (sort paths))
-          old-paths (get-logpaths sym-qual)
-          _ (set-logpaths! sym-qual [] false)
+          _ (mapv #(if (symbol? (first %)) (throw (Exception. "Paths must not start with the log symbol for this function."))) paths)
+          old-paths (get-logpaths log-sym)
+          _ (set-logpaths! log-sym [] false)
           good? (fn [test-paths]
                   (try
-                    (let [code-f-ex (get-logged-code-and-fn sym-qual test-paths mexpand?)
+                    (let [code-f-ex (get-logged-code-and-fn log-sym test-paths mexpand?)
                           compile-err? (last code-f-ex)]
                       (if (and (not compile-err?) runtime-args) (apply (eval (second code-f-ex)) runtime-args))
                       (if compile-err? false true))
@@ -171,14 +182,19 @@
           bad-path (first (remove #(good? [%]) paths)) ; go for a single bad path.
           minbad-paths (if bad-path [bad-path]
                          (throw (Exception. "TODO: write code to handle bad-on-multible-loggers-only paths.")))
-          _ (set-logpaths! sym-qual old-paths (:mexpand? (meta old-paths)))]
-      (if throw?
-        (let [l-cfn (get-logged-code-and-fn sym-qual minbad-paths mexpand?)]
+          _ (set-logpaths! log-sym old-paths (:mexpand? (meta old-paths)))]
+      (if throw? 
+        (let [log-code-fn-err? (get-logged-code-and-fn log-sym minbad-paths mexpand?)
+              run-code-fn-err? (get-logged-code-and-fn run-sym [] false)
+              run-err? (last run-code-fn-err?)
+              log-err? (last log-code-fn-err?)
+              runf (second run-code-fn-err?)
+              log-code (first log-code-fn-err?)]
           (println "Bad code:")
-          (blit/vpu (first l-cfn))
-          (if (not (second l-cfn)) (println (unerror/pr-error (last l-cfn))))
-          (if (and (second l-cfn) runtime-args) (apply (second l-cfn) runtime-args))
-          (if (second l-cfn) (throw (Exception. "The logged-code errors don't seem repeatable, so the above bad code isnt bad enough.")))
+          (blit/vpu log-code)
+          (if log-err? (println (unerror/pr-error log-err?)))
+          (if (and runf runtime-args) (apply runf runtime-args))
+          (if (and (not log-err?) (not run-err?)) (throw (Exception. "The logged-code errors don't seem repeatable, so the above bad code isnt bad enough.")))
           (throw (Exception. "See console for error report.")))
         (set minbad-paths)))))
 
@@ -339,3 +355,19 @@
   (try (apply (find-var sym-qual) args) 
     (catch Exception e nil))
   (mapv :value (get-last-watch-logs sym-qual search-key)))
+
+;;;;;;;;;;;; Profiling ;;;;;;;;;;;;;;;;;;
+
+(defonce _gtime-atom (atom 0.0))
+(defmacro gtime [code]
+  "Global time elapsed, reset once per repl run.
+   Different functions share the same timer.
+   Greater overhead than time but it is hard to quantify."
+  `(let [start# (. System (nanoTime))
+         ret# ~code
+         milis# (/ (double (- (. System (nanoTime)) start#)) 1000000.0)
+         totalmilis# (swap! _gtime-atom (fn [t#] (+ t# milis#)))]
+     (do (prn (str "Elapsed time: " milis# " ms, total time this repl call: " totalmilis# " ms")))
+     ret#))
+
+(defn gtime-reset! [] (reset! _gtime-atom 0.0))

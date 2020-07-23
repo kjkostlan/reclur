@@ -155,8 +155,8 @@
 (defn deep-used-by [qual-sym]
   "Used-by, but returns a series of dependancy plies. Ignores self-dependancies.
    The zeroth ply is itself. This function can be quite slow."
-  (loop [acc [] ply #{qual-sym} done #{}]
-    (if (= (count ply) 0) acc
+  (loop [acc [#{qual-sym}] ply #{qual-sym} done #{}]
+    (if (= (count ply) 0) (if (= (count (last acc)) 0) (into [] (butlast acc)) acc)
       (let [ply1 (apply set/union (mapv set (mapv used-by ply)))
             ply1-new (set/difference ply1 done)]
         (recur (conj acc ply1-new) ply1-new (set/union done ply1))))))

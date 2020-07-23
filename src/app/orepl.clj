@@ -136,6 +136,7 @@
   ; If there is a *gui-atom* in the input we run it locally on a future.
     ; Crashes can leak into here but at least this gives us a way to modify the gui.
     (reset! _state-atom s) ; allow user modifications.
+    (logger/gtime-reset!)
     (let [txt (rtext/rendered-string (get-in s [:components repl-k]))
           new-ns-at (atom r-ns)
           result (get-repl-result s repl-k txt new-ns-at)

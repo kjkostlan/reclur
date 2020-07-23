@@ -74,7 +74,7 @@
     comp1))
 
 (defn search-step [s opts] 
-  "Every time search is called."
+  "Every time search is called, returns the modified state."
   (let [boxk (:boxk opts) comps (:components s)
         compk (:target opts) comp (get comps compk)
         fail (fn [] (siconsole/log s (str "not found: " (pr-str (:key opts)))))] 
@@ -105,11 +105,13 @@
                              (vals (:components s1)))))))
             go-fn (fn [fname ix0 ix1] (afloat (go-fn0 s fname ix0 ix1) fname))
             local-attempt (if cur-box (search-step1-codebox (get comps cur-box) opts false))]
-        (cond (= nf 0) (fail)
-          (not local-attempt)
-          (let [file1 (next-file (fbrowser/devec-file (:path (get comps cur-box))))]
-            (if file1 (apply go-fn file1 (first-match? file1)) (fail)))
-          :else (assoc-in s [:components cur-box] local-attempt))))))
+        (assoc 
+          (cond (= nf 0) (fail)
+            (not local-attempt)
+            (let [file1 (next-file (fbrowser/devec-file (:path (get comps cur-box))))]
+              (if file1 (apply go-fn file1 (first-match? file1)) (fail)))
+            :else (assoc-in s [:components cur-box] local-attempt))
+          :selected-comp-keys #{boxk})))))
 
 (defn pretty [code]
   (with-out-str (clojure.pprint/pprint code)))

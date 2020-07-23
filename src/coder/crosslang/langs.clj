@@ -190,7 +190,8 @@
       :else (errlang "findable-ns?" langkwd))))
 
 (defn var-info [qual-sym source?]
-  "Gets information about a var in the form of clojure datastructures."
+  "Gets information about a var in the form of clojure datastructures.
+   source? means look for the source as well, which can be a little slow."
   (let [langkwd (textparse/ns2langkwd (textparse/sym2ns qual-sym))] 
     (if (not= langkwd :clojure)
       (errlang "var-info" langkwd)))
@@ -199,8 +200,10 @@
         sym2var (ns-map ns-obj)
         var-obj (get sym2var (textparse/unqual qual-sym))
         out (meta var-obj) out (assoc out :ns ns-sym)
-        out (if source? (let [src (get-code-clojure (:file out) (:line out) (:column out) false)] 
-                          (if src (assoc out :source src) out)) out)]
+        out (if (and source? (not (:source var-obj)))
+              (let [src (get-code-clojure (:file out) (:line out) (:column out) false)] 
+                (if src (assoc out :source src) out)) out)
+        out (if source? out (dissoc out :source))] ; consistancy.
     out))
 
 (defn var-source [qual-sym]

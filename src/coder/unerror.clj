@@ -336,6 +336,7 @@
   (/ 0))
 
 (defn label-symbol [sym]
+  "Can also be a string."
   (let [sadface \u2639]
     (symbol (str sadface sadface sadface sym sadface sadface sadface))))
 

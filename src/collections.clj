@@ -31,6 +31,10 @@
 (defn bool2num [x]
   (cond (not x) 0 (= x true) 1 :else x))
 
+(defn reduce-unchecked "Doesn't check if ^clojure.lang.IReduce, which is true for most vector or listy collections." 
+  ([f coll] (.reduce ^clojure.lang.IReduce coll f))
+  ([f val coll] (println "Coll is:" coll) (.reduce ^clojure.lang.IReduceInit coll f val)))
+
 ;;;;;;;;;;;;;;;; Modified functions (an accent on functions we know) ;;;;;;;;;;;;;;
 
 (defn vcat [& cs] ; TODO: would catv be a better name consistency?
@@ -92,9 +96,7 @@
     (not (coll? x)) nil
    :else (get (into [] x) k)))
 
-(defn cget-in [x ks]
-  (if (empty? ks) x
-      (cget-in (cget x (first ks)) (rest ks))))
+(defn cget-in [x ks] (reduce cget x ks))
 
 (defn cassoc [x k v & kvs]
   (let [metax (meta x)]
@@ -374,13 +376,57 @@
    Value is determied by cvals. nil for not found."
   (_find-value-in x v []))
 
-(defn paths [x]
-  "All LEAF paths in a given tree, non-collections return [[]]
-  Sorted by path-order."
-  (let [vp (fn [head v] (collections/vcat [head] v))
-        ppvs (fn [prepends pathss]
-               (apply collections/vcat (mapv (fn [p vs] (mapv #(vp p %) vs)) prepends pathss)))]
-    (cond (not (coll? x)) [[]]
-      (map? x) (ppvs (keys x) (mapv paths (vals x)))
-      (set? x) (ppvs x (mapv paths x))
-      :else (ppvs (range (count x)) (mapv paths x)))))
+
+(defmacro _vc2 [v1 v2] 
+  `(let [n# (count ~v2)]
+     (loop [acc# ~v1 ix# 0]
+       (if (= ix# n#) acc#
+         (recur (conj acc# (nth ~v2 ix#)) (inc ix#))))))
+(defn _paths [x root]
+  (cond 
+    (set? x) (let [n (count x) xv (into [] x)]
+                   (loop [acc [[]] ix 0]
+                     (if (= ix n) acc
+                       (let [chiphs (_paths (nth xv ix) (conj root (nth xv ix)))]
+                         (recur (_vc2 acc chiphs) (inc ix))))))
+    (map? x) (let [n (count x) kys (into [] (keys x))]
+                   (loop [acc [[]] ix 0]
+                     (if (= ix n) acc
+                       (let [chiphs (_paths (get x (nth kys ix)) (conj root (nth kys ix)))]
+                         (recur (_vc2 acc chiphs) (inc ix))))))
+    (coll? x) (let [n (count x) xv (into [] x)]
+                      (loop [acc [[]] ix 0]
+                        (if (= ix n) acc
+                          (let [chiphs (_paths (nth xv ix) (conj root ix))]
+                            (recur (_vc2 acc chiphs) (inc ix))))))
+    :else [root]))
+(defn paths [x] (_paths x []))
+
+;; https://stackoverflow.com/a/33701239
+;; Helper function to have vector's indexes work like for get-in
+(defn- to-indexed-seqs [coll]
+  (if (map? coll)
+    coll
+    (map vector (range) coll)))
+(defn- flatten-path [path step]
+  (if (coll? step)
+    (->> step
+         to-indexed-seqs
+         (map (fn [[k v]] (flatten-path (conj path k) v)))
+         (into {}))
+    [path step]))
+ 
+(defn _pwalk [f ph x]
+  (f ph
+    (cond (map? x)
+      (zipmap (keys x) (mapv #(_pwalk f (conj ph %1) %2) (keys x) (vals x)))
+      (set? x) (set (mapv #(_pwalk f (conj ph %) 1) x))
+      (vector? x) (mapv #(_pwalk f (conj ph %1) %2) (range) x)
+      (coll? x) (apply list (mapv #(_pwalk f (conj ph %1) %2) (range) x))
+      :else x)))
+(defn pwalk [f x] 
+  "Pathed post walk, calls (f path coll). Not lazy."
+  (_pwalk f [] x))
+
+(defn dwalk [f x] "pwalk where f is given the path length (depth)." ; TODO: do we need this fn?
+  (pwalk #(f (count %1) %2) x))
