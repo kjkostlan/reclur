@@ -246,13 +246,14 @@
   "Performs a macroexpand-all on the function, as well as some other minor steps to make
    the code easier to work with." 
   (let [langkwd (textparse/ns2langkwd ns-sym)]
-    (cond (= langkwd :clojure)
-      (walk/postwalk unmacro-static-java1
-        (if-let [ns-obj (find-ns ns-sym)]
-          (binding [*ns* ns-obj] (walk/macroexpand-all code))
-            (walk/macroexpand-all code)))
-      (= langkwd :human) []
-      :else (errlang "mexpand" langkwd))))
+    (#(if (collections/listy? %) (apply list %) %) (fn-pack
+      (cond (= langkwd :clojure)
+        (walk/postwalk unmacro-static-java1
+          (if-let [ns-obj (find-ns ns-sym)]
+            (binding [*ns* ns-obj] (walk/macroexpand-all code))
+              (walk/macroexpand-all code)))
+        (= langkwd :human) []
+        :else (errlang "mexpand" langkwd))))))
 
 ;;;;;;;;;;;;;;;;;;;;;; Functions that need to know which language to use ;;;;;;;;;;;;;;;;;
 

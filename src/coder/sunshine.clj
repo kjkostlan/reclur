@@ -110,7 +110,7 @@
 (defn symbol-unique-tag [x] 
   "Gives local symbols unique tags in the form of foo -> foo_ix=1234.
    Symbols that shadow other symbols are renamed.
-   Uses gensym, so there isn't a need to keep track of locals."
+   Uses gensym, so there isn't a need to keep track of locals; however other functions will be deterministic."
   (let [walk-f (fn [form] (cond (binding-head? form)
                             (let [v (second form) syms0 (collections/evens v)
                                   v1 (binding-unique-tag v)
@@ -174,13 +174,21 @@
                             (assoc acc ix target) acc)))
                    {} (range (count paths)))
         locals (filterv identity (distinct (mapv #(get ix2sym %) (range (count paths)))))
-        replace-map (loop [ix 0 acc {} counts core-counts]
+        unmarked-locals (mapv unmark-sym locals)
+        local-is-marked? (mapv not= locals unmarked-locals)
+        core-counts1 (reduce #(if (nth local-is-marked? %2) %1
+                                (let [k (nth locals %2)]
+                                  (assoc %1 k (inc (get %1 k 0)))))  
+                       core-counts (range n))
+        replace-map (loop [ix 0 acc {} counts core-counts1]
                       (if (= ix n) acc
-                        (let [sym (nth locals ix) symu (unmark-sym sym)
-                              n-uses (get counts symu 0)
-                              symu1 (if (= n-uses 0) symu (symbol (str symu n-uses)))]
-                          (recur (inc ix) (assoc acc sym symu1)
-                            (assoc counts symu (inc n-uses))))))]
+                        (if (nth local-is-marked? ix)
+                          (let [sym (nth locals ix) symu (nth unmarked-locals ix)
+                                n-uses (get counts symu 0)
+                                symu1 (if (= n-uses 0) symu (symbol (str symu n-uses)))]
+                            (recur (inc ix) (assoc acc sym symu1)
+                              (assoc counts symu (inc n-uses))))
+                          (recur (inc ix) (assoc acc (nth locals ix) (nth locals ix)) counts))))]
     (sym-replace x replace-map)))
 
 (defn condense-default-imports [x]

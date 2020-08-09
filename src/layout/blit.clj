@@ -329,7 +329,7 @@
 
 (defn vpsu [code-or-str]
   "Unquals all symbols, which may make it easier to read."
-  (let [uf (fn [x] (if (symbol? x) (symbol (last (string/split (str x) #"\/"))) x))]
+  (let [uf (fn [x] (cond (= x '/) x (symbol? x) (symbol (last (string/split (str x) #"\/"))) :else x))]
     (vps (walk/postwalk uf (to-code code-or-str)))))
 
 (defn vpu [code]

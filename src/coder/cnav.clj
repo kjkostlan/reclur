@@ -234,19 +234,19 @@
         (set? x) (set (mapv #(locals-walk f % locals) x))
         (map? x) (zipmap (keys x) (mapv #(locals-walk f % locals) (vals x)))
         (contains? #{'let `let `let* `loop `loop* 'loop} (first x)) ; Note: (binding [] ...) can't add locals.
-        (let [pairs (into [] (if (coll? (second x)) (second x) [(second x)]))
-              n (count pairs)
-              pairs1b1 (loop [code [] ix 0 locals locals]
-                        (if (>= ix n) [code locals]
-                          (let [locals1 (conj locals (nth pairs ix))
-                                sym (locals-walk f (nth pairs ix) locals1)
-                                val (locals-walk f (get pairs (inc ix) 'nil) locals)]
-                            (recur (conj code sym val) (+ ix 2) locals1))))
-              pairs1 (f (first pairs1b1) locals)
-              locals1 (second pairs1b1)
+        (let [binding-vec (into [] (if (coll? (second x)) (second x) [(second x)]))
+              n (count binding-vec)
+              bvec1l1 (loop [code [] ix 0 locals1 locals]
+                        (if (>= ix n) [code locals1]
+                          (let [locals2 (conj locals1 (nth binding-vec ix))
+                                sym (locals-walk f (nth binding-vec ix) locals2)
+                                val (locals-walk f (get binding-vec (inc ix) 'nil) locals1)]
+                            (recur (conj code sym val) (+ ix 2) locals2))))
+              bvec1 (f (first bvec1l1) locals)
+              locals1 (second bvec1l1)
               tail (rest (rest x))]
-          (apply list (f (first x) locals)
-               pairs1 (mapv #(locals-walk f % locals1) tail)))
+          (apply list (f (first x) locals) ; old locals.
+               bvec1 (mapv #(locals-walk f % locals1) tail)))
         (and (contains? #{'fn `fn `fn*} (first x)) (vector? (second x))) ; unwrapped.
         (let [locals1 (set/union locals (set (second x)))
               head1 (f (first x) locals)]
@@ -255,7 +255,7 @@
         (let [pieces (rest x)
               bindingss (mapv #(set (first %)) pieces)
               head1 (f (first x) locals)
-              pieces1 (mapv #(locals-walk f %1 (set/union %1 %2)) pieces bindingss)]
+              pieces1 (mapv #(locals-walk f %1 (set/union locals %2)) pieces bindingss)]
           (apply list head1 pieces1))
         (contains? #{'defn `defn 'defn- `defn- 'definline `deflinline 'defmacro `defmacro} (first x)) ; only handles basic defn, use macroexpand to handle more stuff.
         (let [bindings (set (first (filter vector? x)))
@@ -281,12 +281,13 @@
     (set/difference @ubs @blacklist)))
 
 (defn unbound-syms [x]
-  "Unbound symbols. Returns a set.
+  "Unbound unqualified symbols. Returns a set.
    Excludes clojure.core qualified symbols."
   (let [ubs (atom #{})
         blacklist (atom specials)
         f (fn [x locals]
             (if (and (symbol? x) (not (contains? locals x))
+                  (not (string/includes? (str x) "/"))
                   (not (string/starts-with? (str x) "clojure.core/")))
               (swap! ubs #(conj % x))) x)
         _ (locals-walk f x #{})] 
