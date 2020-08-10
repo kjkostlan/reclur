@@ -44,13 +44,31 @@
             (merge {:ns (ns-name *ns*) :code code} 
               (langs/convert-exception e "none" :clojure))) (throw e)))))
 
+;;;;;;;;;;;;;;; Runtime ;;;;;;;;;;;;;;;;
+
+(defn log! [x path start-time end-time]
+  "Called when the logged code runs." 
+  (swap! *log-atom*
+    #(let [code (get-in @globals/one-atom [:log-code-lookup path])           
+           log {:path path :start-time start-time :end-time end-time :value x :Thread (format "0x%x" (System/identityHashCode (Thread/currentThread)))
+                :TraceOb (if *log-stack?* (.getStackTrace ^Thread (Thread/currentThread)))
+                :code code :lang :clojure} ; loggers for other languages will use different lang keywords.
+           logs (if (:logs %) (:logs %) [])]
+      (assoc % :logs (conj logs log)))) x)
+
 ;;;;;;;;;;;;; Code processing functions ;;;;;;;;;;;;;;
+
+(defmacro logm! [form path]
+  `(let [t0# (System/nanoTime) ; isolate the actual time to run the code, rather than the overhead. Usual caveats with laziness.
+         result# ~form
+         t1# (System/nanoTime)]
+     (log! result# ~path t0# t1#) result#))
 
 (defn logify-code1 [code log-path path-in-code]
   "Naive logging of the code. Other functions must make sure we don't use a log-path that steps on special forms."
   (let [log-pathq (update log-path 0 #(list 'quote %))]
     (collections/cupdate-in code path-in-code
-      #(list `log! % log-pathq))))
+      #(list `logm! % log-pathq))))
 
 (defn symqual2code [sym-qual mexpand?]
   "Fully macroexpanded, in the local namespace.
@@ -65,7 +83,7 @@
 
 ;;;;;;;;;;; Querying logs and loggers ;;;;;;;;;;;;
 
-(defn get-logs [] (:logs @globals/one-atom)) ; logs are a vector of :path :time :value :Thead.
+(defn get-logs [] (:logs @globals/one-atom)) ; logs are a vector of :path :start-time :end-time :value :Thead.
 (defn get-loggers [] (:loggers @globals/one-atom)) ; loggers are {symbol {path ...}} format.
 (defn clear-logs! [] (do (let [n-log (count (get-logs))] 
                            (if (> n-log 0) (println "Removing all" n-log "logs")
@@ -83,22 +101,11 @@
   "The code that was logged in log-path. It may be macroexpanded code."
   (get-in @globals/one-atom [:log-code-lookup log-path]))
 
-;;;;;;;;;;;;;;; Runtime ;;;;;;;;;;;;;;;;
-
-(defn log! [x path]
-  "Called when the logged code runs." 
-  (swap! *log-atom*
-    #(let [code (get-in @globals/one-atom [:log-code-lookup path])
-           log {:path path :time (System/nanoTime) :value x :Thread (format "0x%x" (System/identityHashCode (Thread/currentThread)))
-                :TraceOb (if *log-stack?* (.getStackTrace ^Thread (Thread/currentThread)))
-                :code code :lang :clojure} ; loggers for other languages will use different lang keywords.
-           logs (if (:logs %) (:logs %) [])]
-      (assoc % :logs (conj logs log)))) x)
-
 ;;;;;;;;;;;;;;; Low-level loggering ;;;;;;;;;;;;;;;;
 
 (defn get-logpaths [sym-qual]
-  "Not efficient if there are tonnes of loggers, but so far this hasn't been a problem."
+  "Not efficient if there are tonnes of loggers, but so far this hasn't been a problem.
+   Also, :mexpand? in the meta of the output set."
   (let [loggers-for-sym (get (get-loggers) sym-qual {})
         mexpand? (:mexpand? (first (vals loggers-for-sym)))]
     (with-meta (set (keys loggers-for-sym)) {:mexpand? (boolean mexpand?)})))
@@ -146,82 +153,7 @@
             (update world :loggers #(dissoc % sym-qual))
             (assoc-in world [:loggers sym-qual] loggers1)))))))
 
-(defn with-log-paths [sym-qual paths mexpand? & args]
-  "Runs sym-qual with a given set of paths and the supplied & args and returns all logs related to that.
-   Makes no permanent changes to paths, even if it ends up throwing an error."
-  (let [old-paths (get-logpaths sym-qual)
-        tmp-atom (atom {}) good? (atom false)
-        maybe-err (try (do (set-logpaths! sym-qual paths mexpand?)
-                         (binding [*log-atom* tmp-atom] (apply (eval sym-qual) args))
-                         (reset! good? true))
-                    (catch Exception e e))
-        _ (set-logpaths! sym-qual old-paths (:mexpand? (meta old-paths)))
-        _ (if (not @good?) (throw maybe-err))]
-    (:logs tmp-atom)))
-
-(defn find-bad-logpaths [run-sym log-sym paths mexpand? throw? runtime-args]
-  "Finds a minimum error-generating subset of paths and returns them (throw? = false)
-   or throws an error with printing reporting of code (throw? = true).
-   Makes no changes to the log-paths.
-   If runtime-args is non nil, will try to run the code. Else will only report compile errrors."
-  ; TODO: this function was recently modified, needs testing.
-  (binding [*err-print-code?* false *log-stack?* false *log-atom* (atom {})]
-    (let [paths (into [] (sort paths))
-          _ (mapv #(if (symbol? (first %)) (throw (Exception. "Paths must not start with the log symbol for this function."))) paths)
-          old-paths (get-logpaths log-sym)
-          _ (set-logpaths! log-sym [] false)
-          good? (fn [test-paths]
-                  (try
-                    (let [code-f-ex (get-logged-code-and-fn log-sym test-paths mexpand?)
-                          compile-err? (last code-f-ex)]
-                      (if (and (not compile-err?) runtime-args) (apply (eval (second code-f-ex)) runtime-args))
-                      (if compile-err? false true))
-                    (catch Exception e false)))
-          _ (if (good? paths)
-              (throw (Exception. "The logging doesn't generate an error, no bad set of paths can be found.")))
-          bad-path (first (remove #(good? [%]) paths)) ; go for a single bad path.
-          minbad-paths (if bad-path [bad-path]
-                         (throw (Exception. "TODO: write code to handle bad-on-multible-loggers-only paths.")))
-          _ (set-logpaths! log-sym old-paths (:mexpand? (meta old-paths)))]
-      (if throw? 
-        (let [log-code-fn-err? (get-logged-code-and-fn log-sym minbad-paths mexpand?)
-              run-code-fn-err? (get-logged-code-and-fn run-sym [] false)
-              run-err? (last run-code-fn-err?)
-              log-err? (last log-code-fn-err?)
-              runf (second run-code-fn-err?)
-              log-code (first log-code-fn-err?)]
-          (println "Bad code:")
-          (blit/vpu log-code)
-          (if log-err? (println (unerror/pr-error log-err?)))
-          (if (and runf runtime-args) (apply runf runtime-args))
-          (if (and (not log-err?) (not run-err?)) (throw (Exception. "The logged-code errors don't seem repeatable, so the above bad code isnt bad enough.")))
-          (throw (Exception. "See console for error report.")))
-        (set minbad-paths)))))
-
-(defn reload-tryto-keep-loggers! [ns-sym & quiet?]
-  "Reloads the namespace, attempts keeping all loggers we need.
-   Even if no code changes it will wipe the loggers so we need to re-add them."
-  (let [_ (binding [*ns* _junk-ns]
-            (require ns-sym :reload))
-        syms (keys (ns-interns ns-sym))
-        sym-quals (set (mapv #(langs/resolved ns-sym %) syms))
-        loggers (:loggers @globals/one-atom)
-        sym-logged (set (keys loggers))
-        need-logged (set/intersection sym-quals sym-logged)]
-    (mapv
-      (fn [sym-qual]
-        (let [loggers-for-sym (get loggers sym-qual)
-              paths (keys loggers-for-sym)
-              mexpand? (:mexpand? (first (vals loggers-for-sym)))
-              old-code (:source (get loggers-for-sym (first (keys loggers-for-sym))))
-              code (symqual2code sym-qual mexpand?)
-              paths1 (set (filterv identity 
-                            (mapv #(cnav/drag-path old-code code %) paths)))
-              _ (if (not (first quiet?)) 
-                  (println "Reloading logged symbol:" ns-sym (count paths1) "of" (count (keys loggers-for-sym)) "kept."))] ; this may get annoying.
-           (set-logpaths! sym-qual paths1 mexpand?))) need-logged)))
-
-;;;;;;;;;;;;;;; High-level loggering ;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;; Mid-level loggering ;;;;;;;;;;;;;;;;
 
 (defn add-logger! [sym-qual path mexpand? & messages]
   "mexpand? should be false for individual logging requests, but true for deep mass-logging"
@@ -272,8 +204,88 @@
   "Returns true for add, false for remove."
   (let [add? (not (logged? sym-qual path))]
     (if add? (add-logger! sym-qual path mexpand?)
-      (remove-logger! sym-qual path))
-    add?))
+      (remove-logger! sym-qual path)) add?))
+
+;;;;;;;;;;;;;;; High-level loggering ;;;;;;;;;;;;;;;;
+
+(defn with-log-paths [sym2paths sym2mexpand? f & args]
+  "Runs f with temporarly adjusted log paths and returns the logs.
+   The function's result is in :result in the metadata."
+  (let [syms (keys sym2paths)
+        sym2mexpand? (if (map? sym2mexpand?) sym2mexpand?
+                       (zipmap syms (repeat (boolean sym2mexpand?))))
+        _ (if (not (map? sym2paths)) (throw (Exception. "Sym2paths must be a map.")))
+        sym2old-paths (zipmap syms (mapv get-logpaths syms))
+        sym2old-mexpand? (zipmap (keys sym2old-paths) (mapv #(:mexpand? (meta %)) (vals sym2old-paths)))
+        _ (mapv set-logpaths! syms (mapv #(get sym2paths %) syms) (mapv #(get sym2mexpand? %) syms))
+        tmp-atom (atom {})
+        result (binding [*log-atom* tmp-atom]
+                 (apply f args))
+        our-logs (:logs @tmp-atom)
+        _ (mapv set-logpaths! syms (mapv #(get sym2old-paths %) syms) (mapv #(get sym2old-mexpand? %) syms))]
+    (with-meta our-logs {:result result})))
+
+(defn find-bad-logpaths [run-sym log-sym paths mexpand? throw? runtime-args]
+  "Finds a minimum error-generating subset of paths and returns them (throw? = false)
+   or throws an error with printing reporting of code (throw? = true).
+   Makes no changes to the log-paths.
+   If runtime-args is non nil, will try to run the code. Else will only report compile errrors."
+  (binding [*err-print-code?* false *log-stack?* false *log-atom* (atom {})]
+    (let [paths (into [] (sort paths))
+          _ (mapv #(if (symbol? (first %)) (throw (Exception. "Paths must not start with the log symbol for this function."))) paths)
+          old-paths (get-logpaths log-sym)
+          _ (set-logpaths! log-sym [] false)
+          good? (fn [test-paths]
+                  (try
+                    (let [code-f-ex (get-logged-code-and-fn log-sym test-paths mexpand?)
+                          compile-err? (last code-f-ex)]
+                      (if (and (not compile-err?) runtime-args) (apply (eval (second code-f-ex)) runtime-args))
+                      (if compile-err? false true))
+                    (catch Exception e false)))
+          _ (if (good? paths)
+              (throw (Exception. "The logging doesn't generate an error, no bad set of paths can be found.")))
+          bad-path (first (remove #(good? [%]) paths)) ; go for a single bad path.
+          minbad-paths (if bad-path [bad-path]
+                         (throw (Exception. "TODO: write code to handle bad-on-multible-loggers-only paths.")))
+          _ (set-logpaths! log-sym old-paths (:mexpand? (meta old-paths)))]
+      (if throw? 
+        (let [_ (println "A minimum set of bad logpaths:" (set minbad-paths))
+              log-code-fn-err? (get-logged-code-and-fn log-sym minbad-paths mexpand?)
+              run-code-fn-err? (get-logged-code-and-fn run-sym [] false)
+              run-err? (last run-code-fn-err?)
+              log-err? (last log-code-fn-err?)
+              runf (second run-code-fn-err?)
+              log-code (first log-code-fn-err?)]
+          (println "Bad logified code:")
+          (blit/vpu log-code)
+          (if log-err? (println (unerror/pr-error log-err?)))
+          (if (and runf runtime-args) (apply runf runtime-args))
+          (if (and (not log-err?) (not run-err?)) (throw (Exception. "The logged-code errors don't seem repeatable, so the above bad code isnt bad enough.")))
+          (throw (Exception. "See console for error report.")))
+        (set minbad-paths)))))
+
+(defn reload-tryto-keep-loggers! [ns-sym & quiet?]
+  "Reloads the namespace, attempts keeping all loggers we need.
+   Even if no code changes it will wipe the loggers so we need to re-add them."
+  (let [_ (binding [*ns* _junk-ns]
+            (require ns-sym :reload))
+        syms (keys (ns-interns ns-sym))
+        sym-quals (set (mapv #(langs/resolved ns-sym %) syms))
+        loggers (:loggers @globals/one-atom)
+        sym-logged (set (keys loggers))
+        need-logged (set/intersection sym-quals sym-logged)]
+    (mapv
+      (fn [sym-qual]
+        (let [loggers-for-sym (get loggers sym-qual)
+              paths (keys loggers-for-sym)
+              mexpand? (:mexpand? (first (vals loggers-for-sym)))
+              old-code (:source (get loggers-for-sym (first (keys loggers-for-sym))))
+              code (symqual2code sym-qual mexpand?)
+              paths1 (set (filterv identity 
+                            (mapv #(cnav/drag-path old-code code %) paths)))
+              _ (if (not (first quiet?)) 
+                  (println "Reloading logged symbol:" ns-sym (count paths1) "of" (count (keys loggers-for-sym)) "kept."))] ; this may get annoying.
+           (set-logpaths! sym-qual paths1 mexpand?))) need-logged)))
 
 ;;;;;;;;;;;; Debugger system based on key-symbols instead of logging paths ;;;;;;;;;;;;;;;;;;
 

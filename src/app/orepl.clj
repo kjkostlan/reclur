@@ -10,11 +10,13 @@
     [coder.textparse :as textparse]
     [coder.plurality :as plurality]
     [coder.crosslang.langs :as langs]
+    [coder.sunshine :as sunshine]
     [coder.unerror :as unerror]
     [javac.clipboard :as clipboard] 
     [javac.file :as jfile]
     [layout.colorful :as colorful]
-    [layout.keybind :as kb]))
+    [layout.keybind :as kb]
+    [layout.blit :as blit]))
 
 ; The rtext has three pieces: 
 ; The first is the text entered. The second is a newline. The last is the repl's output.
@@ -395,3 +397,30 @@
               s))
           (do (println "Must select something in a codebox to use this function") s)) 
         (do (println "Must select something (in a codebox) to use this function") s)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;; Useful user-to-type-in fns ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn cmdunzip [& opts]
+  "Converts concise command-line like options into a flat map.
+   Keywords are keys; if no value it becomes true."
+  (let [opts (if (coll? (first opts)) (into [] (apply concat opts)) opts)
+        opts (into [] opts) n (count opts)]
+    (loop [acc {} ix 0]
+      (if (>= ix n) acc
+        (let [k (nth opts ix) k-or-v (get opts (inc ix))
+              v (if (or (= ix (dec n)) (keyword? k-or-v)) true k-or-v)]
+          (recur (assoc acc k v)
+            (if (keyword? k-or-v) (inc ix) (+ ix 2))))))))
+
+(defn cview [code & opts]
+  "Code viewing tool with optional options to adjust the view."
+  (let [opts (apply cmdunzip opts)
+        defaults {:pipeline? true :expand? true :console? false
+                  :unqual? true}
+        ns-sym (symbol (str *ns*))
+        opts (merge defaults opts)
+        code (cond (or (:pipeline? opts) (:sunshine? opts)) (sunshine/pipeline ns-sym code (:expand? opts))
+               (or (:expand? opts) (:mexpand? opts) (:macroexpand? opts) (:macro-expand? opts)) (langs/mexpand ns-sym code) 
+               :else code)
+        report (if (:unqual? code) (blit/vps code) (blit/vpsu code))]
+    (if (:console? opts) (println report) report)))
