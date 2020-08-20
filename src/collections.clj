@@ -418,15 +418,23 @@
  
 (defn _pwalk [f ph x]
   (f ph
-    (cond (map? x)
-      (zipmap (keys x) (mapv #(_pwalk f (conj ph %1) %2) (keys x) (vals x)))
-      (set? x) (set (mapv #(_pwalk f (conj ph %) 1) x))
+    (cond (map? x) (zipmap (keys x) (mapv #(_pwalk f (conj ph %1) %2) (keys x) (vals x)))
+      (set? x) (set (mapv #(_pwalk f (conj ph %) %) x))
       (vector? x) (mapv #(_pwalk f (conj ph %1) %2) (range) x)
       (coll? x) (apply list (mapv #(_pwalk f (conj ph %1) %2) (range) x))
       :else x)))
 (defn pwalk [f x] 
-  "Pathed post walk, calls (f path coll). Not lazy."
+  "Pathed post walk, calls (f path subform). Not lazy."
   (_pwalk f [] x))
 
-(defn dwalk [f x] "pwalk where f is given the path length (depth)." ; TODO: do we need this fn?
-  (pwalk #(f (count %1) %2) x))
+(defn _dpwalk [f ph x max-depth]
+  (f ph
+    (cond (<= max-depth 0) x
+      (map? x) (zipmap (keys x) (mapv #(_dpwalk f (conj ph %1) %2 (dec max-depth)) (keys x) (vals x)))
+      (set? x) (set (mapv #(_dpwalk f (conj ph %) % (dec max-depth)) x))
+      (vector? x) (mapv #(_dpwalk f (conj ph %1) %2 (dec max-depth)) (range) x)
+      (coll? x) (apply list (mapv #(_dpwalk f (conj ph %1) %2 (dec max-depth)) (range) x))
+      :else x)))
+(defn dpwalk [f x max-depth] "Depth-limited pathwalk that applies (f path subform). 
+                              Max-depth zero means just applying f to [] the entire collection."
+  (_dpwalk f [] x max-depth))

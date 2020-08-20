@@ -6,6 +6,7 @@
     [coder.refactor :as refactor]
     [coder.crosslang.langs :as langs]
     [coder.unerror :as unerror]
+    [coder.cbase :as cbase]
     [coder.cnav :as cnav]
     [coder.textparse :as textparse]
     [coder.sunshine :as sunshine]
@@ -21,8 +22,8 @@
 (def _junk-ns (create-ns 'logger-ns))
 
 (def ^:dynamic *log-atom* globals/one-atom)
-(def ^:dynamic *err-print-code?* true) ; It is expensive.
-(def ^:dynamic *log-stack?* true) ; Is it expensive?
+(def ^:dynamic *err-print-code?* false) ; It is expensive.
+(def ^:dynamic *log-stack?* false) ; Is it expensive?
 
 
 ;;;;; Error reporting ;;;;
@@ -111,16 +112,19 @@
     (with-meta (set (keys loggers-for-sym)) {:mexpand? (boolean mexpand?)})))
 
 (defn get-logged-code-and-fn [sym-qual paths mexpand?]
-  "[logged code, fn (nil if error), exception (nill if no err)]"
+  "[logged code, fn (nil if error), exception (nil if no err)]"
   (let [paths (set paths) ; remove dupes.
         ns-obj (find-ns (textparse/sym2ns sym-qual))
         code (symqual2code sym-qual mexpand?)
         s-fn #(+ (* (double (count %)) 1.0e8)
                 (if (number? (last %)) (last %) 0.0))
         paths-sort (into [] (reverse (sort-by s-fn paths))) ; must be added long to short, later to earlier (for things like logging fn args).
-        _ (if (and (last paths-sort) (or (< (count (last paths-sort)) 1) ; earliest path.
-                                       (not (coll? (collections/cget code (first (last paths-sort))))))) 
-            (throw (Exception. "The logpaths must be inside the function part of a defn."))) 
+        _ (let [firstph (last paths-sort)]
+            (if (and firstph
+                  (or (< (count firstph) 1)
+                    (not (coll? (collections/cget code (first firstph))))))
+              (throw (Exception. 
+                       (str "All logpaths must be inside the function part of a defn, but " firstph " isn't")))))
         logged-code (reduce #(logify-code1 %1 (collections/vcat [sym-qual] %2) %2) code paths-sort)
         logged-fn-code (if mexpand? (last logged-code)
                          (apply list 'fn (collections/cget logged-code 2) (subvec (into [] logged-code) 3)))
@@ -208,9 +212,42 @@
 
 ;;;;;;;;;;;;;;; High-level loggering ;;;;;;;;;;;;;;;;
 
+(defn fnresult-logpaths [code]
+  "Log paths to the function's result. One path per each arity. Flexible to macroexpanding vs not and other formatting."
+  (let [cl (last code) cl0 (if (coll? cl) (first cl))
+        explicit-fn? (contains? #{'fn* `fn 'fn} cl0) ; Is it (def ... (fn ...))
+        prepend (if explicit-fn? [(dec (count code))] [])
+        fcode (collections/cget-in code prepend)
+        packed? (not (first (filter vector? fcode))); (fn ([a b] ...)) vs (fn [a b] ...)
+        paths-in-fcode (if packed? (mapv #(vector % (dec (count (collections/cget fcode %))))
+                                     (filterv #(collections/listy? (collections/cget fcode %)) (range (count fcode))))
+                         [[(dec (count fcode))]])]
+    (mapv #(collections/vcat prepend %) paths-in-fcode)))
+
+(defonce _core-stuff (set (keys (ns-map (find-ns 'clojure.core)))))
+(defn fncall-logpaths [code & ns-sym]
+  "Log paths to forms that call external, non clojure core functions.
+   It will be tricked by some bad coding styles such as functions that shadow clojure.core.
+   The path takes us to the whole function call, i.e (foo/bar 1 2 3)."
+  (let [path-atom (atom []) ns-sym (first ns-sym)
+        ns-ob (cond (not ns-sym) (find-ns 'clojure.core) 
+                (symbol? ns-sym) (find-ns ns-sym) :else ns-sym)
+        walk-fn (fn [path x]
+                  (if (collections/listy? x)
+                    (let [x0 (first x)]
+                      (cond (not (symbol? x0)) "Not a symbol"
+                        (string/includes? (str x0) "clojure.core/") "We ignore the core namespace"
+                        (textparse/qual? x0) (swap! path-atom #(conj % path))
+                        (let [symr (ns-resolve ns-ob x0)] 
+                          (or (not symr) (string/includes? (str symr) "clojure.core/"))) "Local sym OR clojure.core sym" 
+                        :else (swap! path-atom #(conj % path)))
+                      x) x))]
+    (collections/pwalk walk-fn code)
+    @path-atom))
+
 (defn with-log-paths [sym2paths sym2mexpand? f & args]
   "Runs f with temporarly adjusted log paths and returns the logs.
-   The function's result is in :result in the metadata."
+   The function's result is in :result in the metadata, and may be an Exception."
   (let [syms (keys sym2paths)
         sym2mexpand? (if (map? sym2mexpand?) sym2mexpand?
                        (zipmap syms (repeat (boolean sym2mexpand?))))
@@ -220,8 +257,8 @@
         _ (mapv set-logpaths! syms (mapv #(get sym2paths %) syms) (mapv #(get sym2mexpand? %) syms))
         tmp-atom (atom {})
         result (binding [*log-atom* tmp-atom]
-                 (apply f args))
-        our-logs (:logs @tmp-atom)
+                 (try (apply f args) (catch Exception e e)))
+        our-logs (get @tmp-atom :logs [])
         _ (mapv set-logpaths! syms (mapv #(get sym2old-paths %) syms) (mapv #(get sym2old-mexpand? %) syms))]
     (with-meta our-logs {:result result})))
 
@@ -383,3 +420,29 @@
      ret#))
 
 (defn gtime-reset! [] (reset! _gtime-atom 0.0))
+
+(defn ftime [fn-syms print? f & args]
+  "Runs apply f args logging fn-syms. Calculates # runs and the total ms in each function.
+   Total time includes subfunctions (TODO: an option to exclude this?)
+   Can print? or return a datastructure."
+  (let [vv (cbase/varaverse)
+        fn-syms (mapv (fn [sym] (if-let [x (first (filter #(string/includes? (str %) (str sym)) 
+                                                    (keys vv)))] x sym)) fn-syms)
+        _ (println "Fn syms:" fn-syms)
+        sym2paths (zipmap fn-syms (mapv #(fnresult-logpaths (get vv %)) fn-syms))
+        sym2mexpand? false ; fnresult-logpaths needs no mexpand.
+        logs (apply with-log-paths sym2paths sym2mexpand? f args)
+        log-syms (mapv #(first (:path %)) logs)
+        start-times (mapv :start-time logs)
+        end-times (mapv :end-time logs)
+        nanos (mapv - end-times start-times)
+        sym2count (reduce (fn [acc ls]
+                            (assoc acc ls (inc (get acc ls 0))))
+                    {} log-syms)
+        sym2time (reduce (fn [acc lst]
+                            (assoc acc (first lst) (+ (/ (second lst) 1.0e6) (get acc (first lst) 0))))
+                    {} (mapv vector log-syms nanos))]
+    (if print? 
+      (do (println "Symbol" "Number-of-fn-calls" "Total-runtime-ms")
+        (mapv #(println % (get sym2count %) (get sym2time %)) (keys sym2count))))
+      [sym2count sym2time]))
