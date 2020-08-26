@@ -137,7 +137,6 @@
       (let [ns-ob (find-ns ns-sym)
             _ (if (not ns-ob) (throw (Exception. (str "Namespace: " (pr-str ns-sym) " not found."))))
             var-ob (ns-resolve ns-ob (symbol code-sym))]
-        ;(println "langs/resolved:" ns-sym code-sym var-ob)
         (if var-ob (symbol (subs (str var-ob) 2))))
       (= langkwd :human) (symbol (str :human (textparse/rm-lang code-sym)))
       :else (errlang "resolved" langkwd))))

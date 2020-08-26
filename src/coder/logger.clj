@@ -9,7 +9,6 @@
     [coder.cbase :as cbase]
     [coder.cnav :as cnav]
     [coder.textparse :as textparse]
-    [coder.sunshine :as sunshine]
     [app.rtext :as rtext]
     [clojure.walk :as walk]
     [clojure.test :as test]
@@ -75,7 +74,7 @@
   "Fully macroexpanded, in the local namespace.
    Maybe this code should go in cbase instead?"
   (let [code (langs/var-source sym-qual)]
-    (if mexpand? (sunshine/pipeline (textparse/sym2ns sym-qual) code true) code)))
+    (if mexpand? (langs/mexpand (textparse/sym2ns sym-qual) code) code)))
 
 (defn log-error-report [bad-code]
   "Should be in the target namespace."
