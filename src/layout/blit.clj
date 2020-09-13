@@ -4,10 +4,11 @@
 ; This isn't designed to be bulletproof in terms of printing and reading; possible edge-cases; it is mostly for human consumption.
 (ns layout.blit
   (:require [coder.crosslang.langs :as langs] [coder.cbase :as cbase]
+    [coder.textparse :as textparse]
     [clojure.string :as string]
-    [collections]
     [clojure.walk :as walk]
-    [clojure.pprint :as pprint]))
+    [clojure.pprint :as pprint]
+    [collections]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Basic functions ;;;;;;;;;;;;;;;;;
  
@@ -329,8 +330,7 @@
 
 (defn vpsu [code-or-str]
   "Unquals all symbols, which may make it easier to read."
-  (let [uf (fn [x] (cond (= x '/) x (symbol? x) (symbol (last (string/split (str x) #"\/"))) :else x))]
-    (vps (walk/postwalk uf (to-code code-or-str)))))
+  (vps (walk/postwalk #(if (symbol? %) (textparse/unqual %) %) (to-code code-or-str))))
 
 (defn vpu [code]
   "Unquals all symbols, which may make it easier to read."

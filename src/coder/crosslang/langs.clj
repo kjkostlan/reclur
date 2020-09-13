@@ -79,17 +79,19 @@
 
 (defn unpacked-fn? [form]
   "Functions without packed arguments. Making all arguments packed can make things easier but changes the path."
-  (if (and (collections/listy? form) (contains? #{`fn `fn*} (first form)))
+  (if (and (collections/listy? form) (contains? #{`fn `fn* 'fn} (first form)))
     (cond (vector? (second form)) 1 (vector? (collections/third form)) 2 :else false)))
 
+(defn fn-pack1 [code]
+  "Like fn-pack but only one level."
+  (if-let [upk (unpacked-fn? code)] 
+    (if (= upk 1) (list (first code) (rest code)) 
+      (list (first code) (second code) (rest code))) code))
 (defn fn-pack [code]
   "Makes single-arity functions packed like multi-arity fns.
    This reduces the number of cases.
    Clojure's inline functions don't pack up properly even though (fn) does."
-  (walk/postwalk #(if-let [upk (unpacked-fn? %)] 
-                    (if (= upk 1) (list (first %) (rest %)) 
-                      (list (first %) (second %) (rest %))) %) 
-    code))
+  (walk/postwalk fn-pack1 code))
 
 ;;;;;;;;;;;;;;;;;;;;;; Language specific fns of medium size ;;;;;;;;;;;;;
 ; Small = inline. Large = put in dedicated files in coder.crosslang.langparsers.
@@ -199,7 +201,7 @@
         sym2var (ns-map ns-obj)
         var-obj (get sym2var (textparse/unqual qual-sym))
         out (meta var-obj) out (assoc out :ns ns-sym)
-        out (if (and source? (not (:source var-obj)))
+        out (if (and source? (not (:source out)))
               (let [src (get-code-clojure (:file out) (:line out) (:column out) false)] 
                 (if src (assoc out :source src) out)) out)
         out (if source? out (dissoc out :source))] ; consistancy.

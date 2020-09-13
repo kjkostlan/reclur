@@ -225,7 +225,7 @@
 
 (defonce _core-stuff (set (keys (ns-map (find-ns 'clojure.core)))))
 (defn fncall-logpaths [code & ns-sym]
-  "Log paths to forms that call external, non clojure core functions.
+  "Log paths to forms that call external, non clojure core and non java Math functions.
    It will be tricked by some bad coding styles such as functions that shadow clojure.core.
    The path takes us to the whole function call, i.e (foo/bar 1 2 3)."
   (let [path-atom (atom []) ns-sym (first ns-sym)
@@ -236,13 +236,14 @@
                     (let [x0 (first x)]
                       (cond (not (symbol? x0)) "Not a symbol"
                         (string/includes? (str x0) "clojure.core/") "We ignore the core namespace"
+                        (or (string/starts-with? (str x0) "Math/") 
+                          (string/starts-with? (str x0) "java.lang.Math/")) "We ignore java.lang/Math"
                         (textparse/qual? x0) (swap! path-atom #(conj % path))
                         (let [symr (ns-resolve ns-ob x0)] 
                           (or (not symr) (string/includes? (str symr) "clojure.core/"))) "Local sym OR clojure.core sym" 
                         :else (swap! path-atom #(conj % path)))
                       x) x))]
-    (collections/pwalk walk-fn code)
-    @path-atom))
+    (collections/pwalk walk-fn code) @path-atom))
 
 (defn with-log-paths [sym2paths sym2mexpand? f & args]
   "Runs f with temporarly adjusted log paths and returns the logs.

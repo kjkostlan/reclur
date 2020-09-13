@@ -205,12 +205,12 @@
   "If it already is quald it will double-qual"
   (symbol (str ns-sym "/" code-sym)))
 
-(defn qual? [sym] (> (count (string/split (str sym) #"/")) 1))
+(defn qual? [sym] (or (= sym 'clojure.core//) (> (count (string/split (str sym) #"/")) 1)))
 
 (defn unqual [sym-qual]
   "The part after the /"
-  (if (= sym-qual 'clojure.core//) '/ 
-   (symbol (last (string/split (str sym-qual) #"\/")))))
+  (cond (not (qual? sym-qual)) sym-qual (= sym-qual 'clojure.core//) '/ 
+   :else (symbol (last (string/split (str sym-qual) #"\/")))))
 
 (defn rm-lang [sym]
   "Removes the ! part at the start of sym (which can be a qualed or unqualled sym), if any is present."

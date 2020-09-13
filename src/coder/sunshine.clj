@@ -30,6 +30,7 @@
   (let [lo (symbol "(") lc (symbol ")") vo (symbol "[") vc (symbol "]")
         mo (symbol "{") mc (symbol "}") so (symbol "#{") sc (symbol "}")
         let-set #{'let `let 'let*} fn-set #{'fn 'fn* `fn 'defn `defn}
+        confuse-set (conj (set/union let-set fn-set) 'loop 'loop* 'recur 'recur* 'binding 'binding*)
         vassoc (fn [v ix k] (if (>= ix (count v)) (conj v k) (assoc v ix k)))]
     (if (coll? code) ; non-collections don't really do much.
       (loop [toks [] ; flat tokens. 
@@ -70,7 +71,7 @@
                                (= p1 1))) ; bound as function name.
                   bind? (if (or let-bind? fn-bind?) subv false)
                   new-leafish (get (get subvforms (dec lev)) (inc p1))]
-              (if (and bind? (or (contains? let-set subv) (contains? fn-set subv)))
+              (if (and bind? (contains? confuse-set subv))
                 (throw (Exception. (str "A symbol is bound to: " subv " which is super-confusing!"))))
               (recur (conj toks subv) (conj bind?s (if bind? bind? false)) lev (assoc pathv (dec lev) (inc p1))
                 (assoc subvforms lev (_tovec new-leafish))
