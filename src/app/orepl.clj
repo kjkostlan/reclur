@@ -15,7 +15,7 @@
     [javac.clipboard :as clipboard] 
     [javac.file :as jfile]
     [layout.colorful :as colorful]
-    [layout.keybind :as kb]
+    [layout.keyanal :as ka]
     [layout.blit :as blit]))
 
 ; The rtext has three pieces: 
@@ -179,9 +179,9 @@
 
 (defn key-press [key-evt box]
   (ensure-two-pieces
-    (cond (kb/emacs-hit? "S-ret" key-evt) box ; this was handled in the heavy dispatch.
-      (kb/emacs-hit? "S-^^" key-evt) (old-cmd-search box -1)
-      (kb/emacs-hit? "S-vv" key-evt) (old-cmd-search box 1)
+    (cond (ka/emacs-hit? "S-ret" key-evt) box ; this was handled in the heavy dispatch.
+      (ka/emacs-hit? "S-^^" key-evt) (old-cmd-search box -1)
+      (ka/emacs-hit? "S-vv" key-evt) (old-cmd-search box 1)
       :else
       (codebox/key-press key-evt (codebox/set-precompute box)))))
 
@@ -295,7 +295,7 @@
 
 (defn dispatch-heavy [evt s s1 k]
   "Running the repl may affect s, depending on the command. Running is agnostic to which repl is focused, i.e the k value."
-  (cond (and (= (:type evt) :keyPressed) (kb/emacs-hit? "S-ret" evt))
+  (cond (and (= (:type evt) :keyPressed) (ka/emacs-hit? "S-ret" evt))
     (reduce #(if (= (:type (get (:components %1) %2)) :orepl)
                (run-repl %1 %2) %1) s1 (:selected-comp-keys s1)) 
     (and (= (:type evt) :mousePressed)
@@ -342,7 +342,8 @@
         s target)))
 
 (defn dispatch-warm-repls [s evt-c selected+- single-comp-dispatch-fn]
-  "Warm repls have events, but not mose moved or every frame events."
+  "Warm repls have events, but not mose moved or every frame events.
+   Events are added by adding a key, such as :MousePressed to the repl."
   (let [warms (set (:warm-repls s))
         sel (set (:selected-comp-keys s))
         target (cond (= selected+- 0) warms (> selected+- 0) (set/intersection warms sel)

@@ -21,7 +21,7 @@
 (def ^:dynamic *drop-frames-queue-length-threshold* 3)
 (def ^:dynamic *mac-keyboard-kludge?* false) ; A huuuuuuge bug with typing involving accents stealing focus. 
 (def ^:dynamic *add-keyl-to-frame?* true) ; tab only works on the frame. False goes to panel.
- 
+
 ;;;;;;;;;;;;;;;;;;;;; Other Support functions ;;;;;;;;;;;;;;;;;;;;;
 
 (defonce _ (println "If you are on a mac don't forget:   defaults write -g ApplePressAndHoldEnabled -bool false"))
@@ -33,7 +33,7 @@
   "Black background and monospaced font, added to the beginning of graphics."
   (into [] (concat [[:java (fn [g] (.setFont g (java.awt.Font. "Monospaced" 0 10)))]
              [:fillRect [0 0 3000 3000] {:Color [0.01 0 0 1]}]] gr)))
-
+ 
 ;;;;;;;;;;;;;;;;;;;;; Queing ;;;;;;;;;;;;;;;;;;;;;
 
 (defn update-external-state [e-clj kwd old-extern]

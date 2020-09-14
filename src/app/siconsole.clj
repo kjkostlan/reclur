@@ -2,7 +2,6 @@
 (ns app.siconsole
  (:require [app.rtext :as rtext] [app.orepl :as orepl]
    [layout.colorful :as colorful]
-   [layout.keybind :as kb]
    [coder.plurality :as plurality]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;;;;;;;;;;;;

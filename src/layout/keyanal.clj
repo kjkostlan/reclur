@@ -1,11 +1,8 @@
-; Key modifiers. 
-; TODO: this isn't really layout related as it provides functionality rather than parameters.
-(ns layout.keybind
+; Simple functions that analyze key events. 
+(ns layout.keyanal
   (:require [clojure.string :as string]))
 
 (defn b= [a b] (or (and a b) (and (not a) (not b))))
-
-;;;;;;;;;;;;;;;;;; Simple key processings ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn c? [kevt] (boolean (or (:MetaDown kevt) (:ControlDown kevt)))) ; had subtle trouble with java's booleans in the past, thus the maybe-unnecessary cast.
 (defn a? [kevt] (boolean (:AltDown kevt)))
@@ -33,7 +30,7 @@
           (and (= c 38) (or (= l "^^") (= l "55")))
           (and (= c 40) (or (= l "VV") (= l "vv"))))))
 
-;;;;;;;;;;;;;;;;;; Combinations ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;; Key combinations ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn match-letter-or-phrase? [kevt txt]
   (let [txtl (.toLowerCase ^String txt)]
@@ -46,7 +43,8 @@
       (and (backspace? kevt) (= txtl "bsp")))))
 
 (defn emacs-hit? [txt kevt & ix]
-  "C-x C-v is the txt, and ix = 0 or 1 points to the x and v; the key events are fed bit by bit."
+  "Do we match the next hotkey in the hotkey list.
+  Example: txt is 'C-x C-v', ix = 1. Is kevt a C-v?"
   (let [ix (if (first ix) (first ix) 0)
         pieces (string/split txt #"\s")
         piece (.toLowerCase ^String (str (get pieces ix)))]
@@ -59,4 +57,4 @@
               l=? (match-letter-or-phrase? kevt (last subpieces))]
           (and c=? a=? s=? l=?)))))
 
-(defn emacs-count [txt] (count (string/split txt #"\s")))
+(defn emacs-count [txt] "Length of sequence in an emacs-like hotkey string" (count (string/split txt #"\s")))

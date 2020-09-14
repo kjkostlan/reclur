@@ -21,89 +21,30 @@
     [app.orepl :as orepl]
     [app.fbrowser :as fbrowser] 
     [app.codebox :as codebox]
-    [app.hintbox :as hintbox]
     [app.siconsole :as siconsole]
-    [app.graphbox :as graphbox]
     [app.multicomp :as multicomp] 
     [app.multisync :as multisync] 
     [app.iteration :as iteration]
-    [navigate.strfind :as strfind]
-    [navigate.funcjump :as funcjump]
-    [layout.keybind :as kb]
+    [layout.keyanal :as ka]
+    [layout.hotkey :as hk]
     [layout.selectmovesize :as selectmovesize]
     [layout.xform :as xform]
     [layout.layoutcore :as layoutcore]
-    [coder.logger :as logger]
     [coder.cnav :as cnav]
     [coder.cbase :as cbase]
     [coder.unerror :as unerror]))
 
 (declare launch-main-app!) ; avoids a circular dependency with launch main app depending on earlier fns.
 
+(def ^:dynamic *comp-k*) ; The key of the component the current event is triggered on.
+
 ;;;;;;;;;;;;;;;; Library of commands ;;;;;;;;;;;;;;;;;;;;;
-
-(defn close [s]
-  "Closes the active window if there is an active window.
-   Recursivly contracts children."
-  (selectmovesize/clear-selecion (assoc (reduce #(multicomp/close-component %1 %2) s (:selected-comp-keys s)) :selected-comp-keys #{})))
-
-(defn toggle-typing [s] (update s :typing-mode? not))
 
 (declare get-tools) ; avoids a circular dependency with get-tools bieng used by the other fns.
 (defn use-tool [s tool-kwd] 
   (let [tool (first (filter #(= (:name %) tool-kwd) (get-tools)))]
     (if tool (assoc s :active-tool tool)
       (throw (Exception. (str "no tool with :name " tool-kwd))))))
-
-(defn store-state! [s]
-  "stores the state in our own buffer atom, to be retrieved later. 
-   More sophisticated undo system TODO."
-  (swap! cpanel/one-atom
-         assoc
-         :reclur.state-snapshot
-         s
-         #_ (dissoc s :reclur.state-snapshot) ;; this version prevents chaining
-         ) s)
-
-(defn retrieve-state! []
-  (assoc-in (:reclur.state-snapshot @cpanel/one-atom)
-            [:precompute :desync-supersafe-mod?]
-            true))
-
-;;;;;;;;;;;;;;;; Keyboard interaction with hotkeys ;;;;;;;;;;;;;;;;;;;;;
-
-(defn hotkeys [] ; fn [s] => s, where s is the state.
-  {"C-w" close ; all these are (fn [s]).
-   "esc" toggle-typing
-   "C-S-r" #(if (or (globals/are-we-child?) (warnbox/yes-no? "Relaunch app, losing any unsaved work? Does not affect the child app." false)) 
-                            (do (future (launch-main-app!)) (throw (Exception. "This iteration is dead, reloading."))) %)
-   "C-l" (fn [s] (layouts/next-layout s)) 
-   "C-S-l" (fn [s] (layouts/prev-layout s))
-   "C-`" selectmovesize/swap-on-top 
-   "C-f" (fn [s] (strfind/add-search-box s)) 
-   "C-p p" (fn [s] (orepl/log-and-toggle-viewlogbox s))
-   "C-p x" (fn [s] (do (logger/remove-all-loggers!) ; clear loggers
-                      #_(println "Cleared all loggers") s))
-   "C-p C-x" (fn [s] (do (logger/clear-logs!) ; clear logs
-                       #_(println "Cleared all logs") s))
-   "C-p ^^" (fn [s] (funcjump/try-to-go-ups s false true))
-   ; The saving system: 
-   ; ctrl+s = save onto child generation.
-   ; ctrl+shift+s = pull child onto ourselves (TODO: do this when we quit as well).
-   ; The child is viewed as the most up-to-date at all times, and it is occasionally copied back to us.
-   "C-s" (fn [s] (iteration/save-state-to-disk!! s)) ; save to the child, rapid iteration.
-   "C-S s" (fn [s] ; copy from child to us if we are the parent
-                           (if (and (globals/can-child?) (not (globals/are-we-child?)))
-                             (let [s1 (iteration/ensure-childapp-folder-init!! s)]
-                               (iteration/copy-child-to-us!! s1) s1) s))
-   "C-S-h" (fn [s] (hintbox/try-to-toggle-hint-box s))
-   "C-S-g" (fn [s] (graphbox/try-to-toggle-graph-box s))
-   "C-S c" store-state!
-   "C-S z" (fn [_] (retrieve-state!))
-   "C-^^" (fn [s] (funcjump/try-to-go-ups s true false))
-   "C-S-^^" (fn [s] (funcjump/try-to-go-ups s false false))
-   "C-vv" (fn [s] (funcjump/try-to-go-into s))
-   "C-S-M-n ^^ ^^ vv vv << >> << >> b a" (fn [s] (println "We hope you enjoy this sandbox-genre game!") s)})
 
 ;;;;;;;;;;;;;;;; Mid level control flow ;;;;;;;;;;;;;;;;;;;;;
 
@@ -135,7 +76,7 @@
 (defn single-comp-dispatches [evt-c s]
   (let [sel (set/intersection (apply hash-set (keys (:components s))) (apply hash-set (:selected-comp-keys s)))] ; normalize this.
     (reduce 
-      (fn [s k] (single-comp-dispatch evt-c s k)) 
+      (fn [s k] (binding [*comp-k* k] (single-comp-dispatch evt-c s k))) 
          (assoc s :selected-comp-keys sel) sel)))
 
 ; The maybe-x fns return the effects of doing x if the task is triggered, else s.
@@ -170,19 +111,20 @@
 (defn hotkey-cycle [evt-g evt-c s k]
   "The emacs-like command's counter (per-command) gets incremented for multi-key commands. 
    Any commands that are triggered reset all counters."
-  (if (and (= k :keyPressed) (or (kb/normal? evt-g) (kb/escape? evt-g) (kb/backspace? evt-g) (kb/enter? evt-g)))
-    (let [hotkey-map (hotkeys) hotlist (keys hotkey-map)
-          n-vals (zipmap hotlist (mapv kb/emacs-count hotlist))
-          hot-ix (if-let [x (:hotkey-index s)] x {})
-          hot-ix (reduce #(if (get %1 %2) %1 (assoc %1 %2 0)) hot-ix (keys hotkey-map))
-          next-ix (fn [ix txt] (if (kb/emacs-hit? txt evt-g ix) (inc ix) 0)) ; reset if we fail.
+  (if (and (= k :keyPressed) (or (ka/normal? evt-g) (ka/escape? evt-g) (ka/backspace? evt-g) (ka/enter? evt-g)))
+    (let [hotkey-map (hk/hotkeys) hotlist (keys hotkey-map)
+          lengths (zipmap hotlist (mapv ka/emacs-count hotlist))
+          hot-ix (if-let [x (:hotkey-indexes s)] x {})
+          hot-ix (reduce #(if (get %1 %2) %1 (assoc %1 %2 0)) hot-ix hotlist)
+          next-ix (fn [ix txt] (if (ka/emacs-hit? txt evt-g ix) (inc ix) 0)) ; reset if we fail.
           hot-ix1 (zipmap hotlist (mapv #(next-ix (get hot-ix %) %) hotlist))
-          matches (filterv #(= (get hot-ix1 %) (get n-vals %)) hotlist)
-          matches? (> (count matches) 0)
-          hot-ix2 (if matches? (reduce #(assoc %1 %2 0) hot-ix1 (keys hot-ix1)) hot-ix1)
-          s1 (reduce #((get hotkey-map %2) %1) s matches)]
-      (assoc s1 :hotkey-index hot-ix2 :tmp-hotkey-triggered? matches?))
-    (assoc s :tmp-hotkey-triggered? false)))
+          triggers (filterv #(= (get hot-ix1 %) (get lengths %)) hotlist)
+          triggered? (> (count triggers) 0)
+          active? (or triggered? (first (filter #(> % 0) (vals hot-ix1))))
+          hot-ix2 (if triggered? (reduce #(assoc %1 %2 0) hot-ix1 (keys hot-ix1)) hot-ix1)
+          s1 (reduce #((get hotkey-map %2) %1) s triggers)]
+      (assoc s1 :hotkey-indexes hot-ix2 :tmp-hotkey-block? (or active? triggered?)))
+    (assoc s :tmp-hotkey-block? false)))
 
 (defn maybe-use-tool [evt-c s tool]
   (let [k (:type evt-c)] (if (not tool) (throw (Exception. "nil tool.")))
@@ -208,7 +150,7 @@
       (= ek :mouseReleased) (ut sms)
       (and click-target ctrl? double?) (ut ech)
       (and click-target double?) (ut ofl)
-      (or (and (= ek :keyPressed) (kb/emacs-hit? "C-1" evt-c))
+      (or (and (= ek :keyPressed) (ka/emacs-hit? "C-1" evt-c))
         (= ek :mouseWheelMoved) (and (or (= ek :mousePressed) (= ek :mouseDragged)) (or meta? ctrl?))) (ut cam)
       :else (ut sms))))
 
@@ -248,8 +190,8 @@
           s (orepl/dispatch-warm-repls s evt-c -1 single-comp-dispatch) ; dispatch unselected so they get events.
           
           s (diff-checkpoint s #(hotkey-cycle evt-g evt-c % k))
-          hk? (boolean (:tmp-hotkey-triggered? s)) ; a recognized hotkey.
-          s (dissoc s :tmp-hotkey-triggered?)]
+          hk? (boolean (:tmp-hotkey-block? s)) ; a recognized hotkey.
+          s (dissoc s :tmp-hotkey-block?)]
       (orepl/update-warmhot-repls 
         (if hk? s ; hotkeys block other actions.
         (let [; Typing mode forces single component use.
@@ -399,8 +341,8 @@
 
 (defn undo-wrapped-listener [evt-g s]
   (let [ty (:type evt-g)
-        undo? (and (= ty :keyPressed) (kb/emacs-hit? "C-z" evt-g))
-        redo? (and (= ty :keyPressed) (kb/emacs-hit? "C-S-z" evt-g))]
+        undo? (and (= ty :keyPressed) (ka/emacs-hit? "C-z" evt-g))
+        redo? (and (= ty :keyPressed) (ka/emacs-hit? "C-S-z" evt-g))]
     (cond undo? (undo/undo!) redo? (undo/redo!)
       :else (let [s1 (logged-function-run #(dispatch-listener %2 %1) s evt-g)]
               (undo/maybe-report! evt-g s s1) s1))))
@@ -422,7 +364,6 @@
 ; Instead we do this on the exit-if-close function.
 ; TODO: get this working so cmd+q doesn't quit.
 (defn on-shutdown [] ())
-
 
 (defn -main [& args] (launch-main-app!)
   (try (do (require 'startup) ((eval 'startup/startup-core)))
