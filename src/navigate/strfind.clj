@@ -1,6 +1,6 @@
 ; String-based search tools, the most basic kind of searching.
 (ns navigate.strfind
-  (:require [clojure.string :as string] [clojure.set :as set] [clojure.pprint]
+  (:require [clojure.string :as string] [clojure.set :as set] [clojure.pprint] [clojure.walk :as walk]
             [javac.file :as jfile]
             [layout.layoutcore :as layoutcore]
             [app.rtext :as rtext]
@@ -40,7 +40,7 @@
 (defn find1 [txt opts ix wrap?]
   "Finds the previous or next instance from ix (depending on the sign of dir).
    ky can be a string or regexp. Returns [start ix, end ix] or nil."
-  (let [ky (:key opts) case? (:case opts) dir (if (:reverse? opts) -1 1)
+  (let [ky (:key opts) case? (:case? opts) dir (if (:reverse? opts) -1 1)
         all-pairs (boring-find txt ky case?)] ; don't know of a better way than just running the whole string.
     (if (< dir 0)
       (let [last-b4 (last (filterv #(<= (last %) ix) all-pairs))]
@@ -120,15 +120,21 @@
   (let [ckys (:selected-comp-keys s)]
     (if (= (count ckys) 0) (siconsole/log s "Must select a component to search within.")
       (let [boxk (keyword (gensym 'searchbox))
-            m0 {:key "" :case? false :reverse? false :dumb-text? false}
+            m0 {:key "" :case? false :reverse? false :dumb-text? false :boxk 'core/*comp-k*}
             
             blit #(if (symbol? %) (symbol (str "'" %)) %)
             cky (first ckys)
-            m (assoc m0 :target (blit cky) :boxk (blit boxk))
-            code (list 'navigate.strfind/search-step 's m)
-            code (pretty code)
-            cursor-ix0 (+ (first (first (boring-find code ":key \"\"" false))) 6)
-            new-comp (orepl/filled-repl 's code cursor-ix0)
+            m (assoc m0 :target (blit cky))
+            code '(do (swap! globals/one-atom
+                    (fn [x]
+                     (let [s (:app-state x)
+                           s1 (navigate.strfind/search-step s m)]
+                       (assoc x :app-state s1)))) "See console")
+            code (walk/postwalk #(if (= % 'm) m %) code)
+            
+            code-string (layout.blit/vps code)
+            cursor-ix0 (+ (first (first (boring-find code-string ":key \"\"" false))) 6)
+            new-comp (assoc (orepl/new-repl code-string) :cursor-ix cursor-ix0)
             s1 (assoc s :selected-comp-keys #{boxk} :typing-mode? true)
             s2 (if (> (count ckys) 1) (siconsole/log s1 "Multible components selected, only selecting the first one.") s1)]
         ((:add-component (:layout s2)) s2 new-comp boxk)))))

@@ -5,6 +5,7 @@
     [clojure.set :as set]
     [app.codebox :as codebox]
     [app.rtext :as rtext]
+    [globals]
     [navigate.funcjump :as funcjump]
     [coder.logger :as logger]
     [coder.textparse :as textparse]
@@ -53,25 +54,11 @@
    :cmd-history [] :cmd-history-viewix 1e100
    :interact-fns (interact-fns) :path "repl" :show-line-nums? false :colorize-fn colorize))
 
-(defn filled-repl [app-state-symbol code cursor-ix0]
-  "Generates a fresh repl that is set up to run command code applied to the overall state, encoded as app-state-symbol.
-   Code should be a pprinted string since we care about cursor index."
-  (let [b4 (str "(let [" app-state-symbol " @_state-atom\n"
-                       "result\n")
-        afr "] \n (reset! _state-atom result) [])"
-        cursor-ix (+ (count b4) cursor-ix0)
-        code (str b4 code afr)]
-    (assoc (new-repl) :cursor-ix cursor-ix
-      :pieces [{:text code} {:text ""}])))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;; Low repl running ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
 (def r-ns *ns*) ; default ns for the repls.
 
-(defonce _state-atom (atom {})) ; only used locally for the mutation-free run-standard-repl function.
-(defn set-world! [s-new] "No effect outside of repl." (reset! _state-atom s-new))
-(defn swap-world! [f] "No effect outside of repl." (swap! _state-atom f))
 (def ^:dynamic *this-k* nil) ; so we know who we are.
 (def ^:dynamic *world* nil) ; access to the (almost?) entire application's state.
 
@@ -127,6 +114,7 @@
     (assoc box :pieces pieces1)))
 
 (defn run-repl [s repl-k]
+  "This returns the modified s, which will include any alteration of s in @globals/one-atom"
   ; TODO: put repls on another process with it's own threads.
   ; The other process has no windows (headless).
   ; Sync our namespace variables with that process.
@@ -137,18 +125,20 @@
     ; Have two servers open at once for insta-switch.
   ; If there is a *gui-atom* in the input we run it locally on a future.
     ; Crashes can leak into here but at least this gives us a way to modify the gui.
-    (reset! _state-atom s) ; allow user modifications.
     (logger/gtime-reset!)
-    (let [txt (rtext/rendered-string (get-in s [:components repl-k]))
+    (let [_ (swap! globals/one-atom #(assoc % :app-state s))
+          txt (rtext/rendered-string (get-in s [:components repl-k]))
           new-ns-at (atom r-ns)
-          result (get-repl-result s repl-k txt new-ns-at)
-          ;_ (println "result:" result)
-          state1 @_state-atom
-          repl1 (-> (get-in state1 [:components repl-k]) (set-result result)
-                  (assoc :*ns* (textparse/sym2ns @new-ns-at))
-                  (update :num-run-times inc)
-                  (update :cmd-history #(conj % txt)))]
-      (assoc-in @_state-atom [:components repl-k] repl1)))
+          result (get-repl-result s repl-k txt new-ns-at) ; DONT put the repl into a swap. Swap may call more than once.
+          s1 (:app-state @globals/one-atom) ; s1 not= s for more complex repl-as-application cases.
+          repl1 (get-in s1 [:components repl-k])]
+      (if (map? repl1) ; Our repl is still there.
+        (let [repl2 (-> repl1 (set-result result)
+                      (assoc :*ns* (textparse/sym2ns @new-ns-at))
+                      (update :num-run-times inc)
+                      (update :cmd-history #(conj % txt)))]
+          (assoc-in s1 [:components repl-k] repl2))
+        s1)))
 
 (defn old-cmd-search [box delta]
    "Select a region of text to narrow-down old cmds."
