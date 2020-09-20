@@ -326,14 +326,11 @@
         all-clj-files (filterv jfile/clj? (jfile/all-files-inside "./src"))
         src-ns-syms (set (mapv file2ns all-clj-files))
         needed-ns-syms (set/difference src-ns-syms loaded-ns-syms)
-        _ (println "# namespaces loaded:" (count loaded-ns-syms) 
-            "# namespaces in src" (count src-ns-syms)
-             " # namespaces need to load for coder/cbase:" 
-            (count needed-ns-syms))
         _ (binding [*ns* (create-ns (gensym 'tmploadnscbase))]
             (mapv #(try (require %)
                      (catch Exception e
                        (println "Failed to load ns (bad clj file?):" %)))
               needed-ns-syms))
         t1 (System/nanoTime)]
-    (println "Elapsed time (s) to make sure all files in ./src are loaded:" (/ (- t1 t0) 1.0e9))))
+    (println "Langs/ensure-src-ns-loaded! Loaded: " (count loaded-ns-syms) 
+      "Elapsed time (s):" (/ (- t1 t0) 1.0e9))))

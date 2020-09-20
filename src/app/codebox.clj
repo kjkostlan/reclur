@@ -112,7 +112,7 @@
     (mapv #(nth cols (if (>= % 0) % 0)) levels)))
 
 (defn new-codebox []
-  (assoc rtext/empty-text :interact-fns (interact-fns) :outline-color [0.8 0 0 1] :path [] :head "" :foot ""
+  (assoc (merge rtext/empty-text (interact-fns)) :outline-color [0.8 0 0 1] :path [] :head "" :foot ""
     :type :codebox :langkwd :clojure :precompute {:levels [] :inter-levels [0]} :colorize-fn (fn [& args] (apply colorize args))))
 
 (defn code-fold-toggle [cur-pieceix folding? ixs complement? box]

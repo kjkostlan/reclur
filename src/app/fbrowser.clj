@@ -162,11 +162,10 @@
 
 (defn new-fbrowser [pieces]
   ; leave pieces empty for an empty file browser.
-  (assoc rtext/empty-text :outline-color [0.8 0.5 0.3 1] :show-line-nums? false 
+  (assoc (merge rtext/empty-text (interact-fns)) :outline-color [0.8 0.5 0.3 1] :show-line-nums? false 
     :colorize-fn colorize-file-vs-folder
     :partial-grab-fn partial-grab-fn :insert-fn insert-fn :delete-fn delete-fn
-    :type :fbrowser :pieces pieces :path [] ; don't forget to update the path.
-    :interact-fns (interact-fns)))
+    :type :fbrowser :pieces pieces :path [])) ; don't forget to update the path.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Disk file and pathing ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

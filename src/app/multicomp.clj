@@ -109,13 +109,12 @@
 (defn expand-child [k-parent k-child mevt-c s]
   "Expands a child if possible."
   (let [comp0 (get (:components s) k-parent) comp (dissoc comp0 :position)
-        int-fns (:interact-fns comp)
         s (assoc-in s [:precompute :desync-safe-mod?] true)
 
-        expandable? (:expandable? int-fns)
+        expandable? (:expandable? comp)
         mevt (xform/xevt (xform/x-1 (xform/pos-xform (:position comp0))) mevt-c)
         x (if (expandable? mevt comp) 
-            ((:expand-child int-fns) mevt comp))]
+            ((:expand-child comp) mevt comp))]
     (if x 
       (let [new-parent (first x) new-child (second x)
             comps (:components s)
@@ -125,7 +124,7 @@
         s2) s)))
 
 (defn contract-child [parent child]
-  (assoc ((:contract-child (:interact-fns parent)) (dissoc parent :position) (dissoc child :position)) :position (:position parent)))
+  (assoc ((:contract-child parent) (dissoc parent :position) (dissoc child :position)) :position (:position parent)))
 
 (defn contract-child1 [comps parent-k child-k]
   "Like contract child but if the component is a codebox, also contracts into the twins and adjusts the numbers of remaining children."

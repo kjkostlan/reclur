@@ -18,7 +18,7 @@
     (mapv (fn [ix] (nth cols ix)) piece-ixs)))
 
 (defn new-graphbox []
-  (assoc rtext/empty-text :interact-fns (interact-fns) :pieces [{:text ""} {:text ""} {:text ""}]
+  (assoc (merge rtext/empty-text (interact-fns)) :pieces [{:text ""} {:text ""} {:text ""}]
     :outline-color [0 0.5 0.75 1] :path "" :type :graphbox :colorize-fn colorize
     :subtype false))
 

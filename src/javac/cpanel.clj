@@ -91,9 +91,10 @@
   (let [x @one-atom 
         udgfx (:update-gfx-fn x)]
     (if udgfx
-      (let [gfx-updated-app-state (try (udgfx (:app-state x)) (catch Exception e (do (println "gfx update error:" e) (:app-state x))))
-            new-gfx (try ((:render-fn x) gfx-updated-app-state) (catch Exception e (do (println "gfx render error.") {})))]
-        (if-let [panel (:JPanel x)] (gfx/update-graphics! panel (:last-drawn-gfx x) new-gfx))
+      (let [gfx-updated-app-state (try (udgfx (:app-state x)) (catch Exception e (do (println "app gfx update error:" e) (:app-state x))))
+            new-gfx (try ((:render-fn x) gfx-updated-app-state) (catch Exception e (do (println "gfx render error." e) {})))]
+        (if-let [panel (:JPanel x)] (try (gfx/update-graphics! panel (:last-drawn-gfx x) new-gfx)
+                                      (catch Exception e (println "gfx/update-graphics! error:" e))))
         (swap! one-atom #(assoc % :last-drawn-gfx new-gfx :app-state gfx-updated-app-state :needs-gfx-update? false))))))
 
 (defn dispatch-loop! []
@@ -118,7 +119,7 @@
 (defonce _frame-counter (atom -1)) ; Only used locally, to reduce locking concerns setting the main atom.
 (if (not @_polling?)
   (future 
-    (loop [last-millis -1e100] ; Loop is never left.
+    (loop [last-millis -1e100] ; This loop runs until the application is quit.
         (let [elapsed-millis (max 0 (- (System/currentTimeMillis) last-millis))
               sleep-time (- *frame-time-ms* elapsed-millis)]
           (if (> sleep-time 0) (Thread/sleep *frame-time-ms*)))

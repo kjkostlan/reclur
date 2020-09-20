@@ -47,12 +47,13 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;; Creating a repl box ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn new-repl [& code]
-  (assoc rtext/empty-text :type :orepl :langkwd :clojure :pieces [{:text (if (first code) (first code) "(+ 1 2)")}
+  (assoc (merge rtext/empty-text (interact-fns))
+    :type :orepl :langkwd :clojure :pieces [{:text (if (first code) (first code) "(+ 1 2)")}
                                                                   {:text "\n3"}] 
    :num-run-times 0
    :outline-color [0.2 0.2 1 1]
    :cmd-history [] :cmd-history-viewix 1e100
-   :interact-fns (interact-fns) :path "repl" :show-line-nums? false :colorize-fn colorize))
+   :path "repl" :show-line-nums? false :colorize-fn colorize))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Low repl running ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -276,8 +277,6 @@
     (if file-ixs
       (rm-sel (apply (:goto (:layout s)) s file-ixs)) s1)))
 
-(defn render+ [box & show-cursor?] (apply rtext/render box show-cursor?))
-
 ; No child UI is planned in the near future.
 (defn expandable? [mouse-evt box] false)
 (defn expand-child [mouse-evt box] (throw (Exception. "No plans to implement orepl child-UI.")))
@@ -314,7 +313,7 @@
   (updaty-fns
   {:dispatch dispatch 
    :dispatch-heavy dispatch-heavy
-   :render (allow-append render+ :render)
+   :render rtext/render
    :expandable? expandable?
    :is-child? (fn [box] false)
    :expand-child expand-child :contract-child contract-child}))

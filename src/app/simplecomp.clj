@@ -8,7 +8,7 @@
 (declare interact-fns) ; Possible dependency cycle with the new function being used by some interact fns.
 
 (defn new-test []
-  (assoc (assoc rtext/empty-text :pieces [{:text "helloWorld"}]) :interact-fns (interact-fns) 
+  (assoc (merge rtext/empty-text (interact-fns)) :pieces [{:text "helloWorld"}]
    :outline-color [0.5 0.3 0.2 1] :position [0 0] :size [100 100] :path "test" :type :simplecomp :show-line-nums? false))
 
 ;;;;;;;;;;;;;;;;;;;;; Child UI functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

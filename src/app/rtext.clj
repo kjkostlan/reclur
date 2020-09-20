@@ -791,8 +791,10 @@
   [[:fillRect [0 0 (first (:size box)) (second (:size box))] {:Color (:background-color box)}]])
 
 (defn render [box & show-cursor?]
+  (render-text box)
   (if (nil? box) (throw (Exception. "Somewhere in the guts of the render loop the box got lost.")))
-  (let [box (v box)]
-    (concat (render-background box) (render-border box)
-      (render-scroll box) (render-selection box) (render-text box) (render-path box)
-        (if (= (first show-cursor?) false) [] (render-cursor box)))))
+  (let [box (v box)
+        linies (concat (render-background box) (render-border box) (render-scroll box))
+        texties (concat (render-selection box) (render-path box) (render-text box))
+        blinkies (if (= (first show-cursor?) false) [] (render-cursor box))]
+    (into [] (concat linies texties blinkies))))

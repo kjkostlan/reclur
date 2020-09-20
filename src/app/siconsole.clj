@@ -17,7 +17,7 @@
     (mapv #(nth cols %) piece-ixs)))
 
 (defn new-console []
-  (assoc rtext/empty-text :interact-fns (interact-fns) :pieces [{:text "\n"}]
+  (assoc (merge rtext/empty-text (interact-fns)) :pieces [{:text "\n"}]
   :outline-color [0 0.75 0 1] :path "console" :type :siconsole :show-line-nums? false :colorize-fn colorize))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;

@@ -22,7 +22,7 @@
     (mapv (fn [ix] (nth cols ix)) piece-ixs)))
 
 (defn new-hintbox []
-  (assoc rtext/empty-text :interact-fns (interact-fns) :pieces [{:text "\n"}]
+  (assoc (merge rtext/empty-text (interact-fns)) :pieces [{:text "\n"}]
     :outline-color [0 0.75 0 1] :path "" :type :hintbox :colorize-fn colorize
     :subtype false))
 

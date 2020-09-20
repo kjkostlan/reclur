@@ -66,10 +66,10 @@
   (let [comp (get-in s [:components comp-k])
         evt (xform/xevt (xform/x-1 (xform/pos-xform (:position comp))) evt-c)
         comp (get-in s [:components comp-k])
-        comp1 (let [ifn (get (:interact-fns comp) :dispatch)]
+        comp1 (let [ifn (get comp :dispatch)]
                 (if ifn (ifn evt comp) comp))
         s1 (assoc-in s [:components comp-k] comp1)
-        s2 (let [ifn-heavy (get (:interact-fns comp) :dispatch-heavy)] ; allows modifying s itself.
+        s2 (let [ifn-heavy (get comp :dispatch-heavy)] ; allows modifying s itself.
             (if ifn-heavy (ifn-heavy evt s s1 comp-k) s1))]
     s2))
 
@@ -253,11 +253,9 @@
 (defn globalize-gfx [comps cam local-comp-renders selected-comp-keys tool-sprite sel-move-sz-sprite typing?]
   "Takes the local gfx of components as well as tool information to make the global gfx"
   (let [sel-keys (apply hash-set selected-comp-keys)
-        
         comp-sprites (zipmap (keys comps) 
                        (mapv (fn [k] 
                                (let [c (get comps k)
-
                                      cam1 (xform/xx cam (xform/pos-xform (:position c)))]
                                  {:bitmap-cache? true :camera cam1 :gfx (get local-comp-renders k) :z (:z c)}))
                              (keys comps)))
@@ -275,8 +273,7 @@
 (defn draw-component-l [comp focused?]
   (if (nil? comp) (throw (Exception. "nil component")))
   (if (not (map? comp)) (throw (Exception. "Non-map component")))
-  (let [ifns (:interact-fns comp) 
-        gfx (try ((:render ifns) (dissoc comp :position) focused?)
+  (let [gfx (try ((:render comp) (dissoc comp :position) focused?)
               (catch Exception e 
                 (let [pieces (string/split (unerror/pr-error e) #"\n")]
                   (mapv #(vector :drawString [%1 10 (+ 10 (* %2 10))] {:Color [1 1 1 1]}) pieces (range)))))] 
@@ -296,7 +293,6 @@
                                 (if (and (:pure-gfx? (:optimize c)) (= (dissoc c0 :position) (dissoc c :position)))
                                   g0 (draw-component-l c true))))
         gfx-comps-l (zipmap (keys comps) (mapv draw-or-reuse (keys comps)))
-        
         precompute1 (assoc precompute :comps-at-render comps :comp-renders gfx-comps-l)
         s1 (assoc-in s [:precompute :gfx] precompute1)
         
@@ -327,7 +323,7 @@
   [{:name :no-tool}])
 
 (defn logged-function-run [f s & args]
-  "(apply f s args), logging printlns within f as well as exceptions to s.
+  "(apply f s args), logging to siconsole printlns within f as well as exceptions to s.
    f returns the new value of s. If f throws an exception s isn't changed apart from logging."
   (let [outs clojurize/*our-out*
         s1-or-ex (binding [*out* outs] (try (apply f s args) (catch Exception e e)))
@@ -358,7 +354,7 @@
         s4 (update s3 :components #(multisync/update-keytags {} %))]
     (cpanel/launch-app! s4 undo-wrapped-listener
       (fn [s] (logged-function-run update-gfx s))
-      app-render))) ; keep app-render minimal, no logging is allowed here.
+      app-render))) ; keep app-render minimal, no siconsole logging is allowed here.
 
 ; DONT call save-file, we can't run swing stuff from shutdown hooks reliably.
 ; Instead we do this on the exit-if-close function.
