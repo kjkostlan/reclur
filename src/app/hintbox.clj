@@ -2,7 +2,6 @@
 
 (ns app.hintbox
   (:require [app.rtext :as rtext]
-    [coder.plurality :as plurality]
     [coder.cbase :as cbase] [coder.crosslang.langs :as langs]
     [coder.textparse :as textparse]
     [coder.cnav :as cnav]
@@ -154,21 +153,15 @@
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def dispatch 
-  (plurality/->simple-multi-fn
-    {:mousePressed rtext/mouse-press
-     :mouseDragged rtext/mouse-drag
-     :mouseWheelMoved rtext/mouse-wheel
-     :keyPressed key-press
-     :keyReleased rtext/key-release}
-     (fn [e-clj comp] comp)
-     (fn [e-clj comp] (:type e-clj))))
+  {:mousePressed rtext/mouse-press
+   :mouseDragged rtext/mouse-drag
+   :mouseWheelMoved rtext/mouse-wheel
+   :keyPressed key-press
+   :keyReleased rtext/key-release})
 
-(defmacro updaty-fns [code] 
-  (let [a1 (gensym 'args)] 
-    (zipmap (keys code) (mapv #(list `fn ['& a1] (list `apply % a1)) (vals code)))))
-(defn interact-fns [] (updaty-fns
+(defn interact-fns []
   {:dispatch dispatch
    :render rtext/render
    :expandable? expandable?
    :expand-child expand-child :contract-child contract-child
-   :is-child? (fn [box] false)}))
+   :is-child? (fn [box] false)})

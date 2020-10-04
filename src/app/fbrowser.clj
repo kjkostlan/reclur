@@ -5,7 +5,6 @@
    [app.rtext :as rtext]
    [clojure.string :as string]
    [app.stringdiff :as stringdiff]
-   [coder.plurality :as plurality]
    [globals]))
 
 ; Each :piece of the our app.gaui.rtext contains:
@@ -492,25 +491,19 @@
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def dispatch 
-  (plurality/->simple-multi-fn
-    {:mousePressed mouse-press
+  {:mousePressed mouse-press
      :mouseDragged rtext/mouse-drag
      :keyPressed key-press
      :keyReleased rtext/key-release
      :mouseWheelMoved rtext/mouse-wheel
-     :mouseReleased (fn [m-evt comp] (selection-snap comp))}
-     (fn [e-clj comp] comp)
-     (fn [e-clj comp] (:type e-clj))))
+     :mouseReleased (fn [m-evt comp] (selection-snap comp))})
 
-(defmacro updaty-fns [code] 
-  (let [a1 (gensym 'args)] 
-    (zipmap (keys code) (mapv #(list `fn ['& a1] (list `apply % a1)) (vals code)))))
-(defn interact-fns [] (updaty-fns
+(defn interact-fns []
   {:dispatch dispatch
    :render rtext/render
    :expandable? expandable?
    :expand-child expand-child :contract-child contract-child
-   :is-child? (fn [box] (> (count (vec-file (:path box))) 1))}))
+   :is-child? (fn [box] (> (count (vec-file (:path box))) 1))})
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Nonstandard interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

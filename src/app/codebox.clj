@@ -7,7 +7,6 @@
    [javac.file :as jfile]
    [clojure.string :as string]
    [coder.crosslang.langs :as langs]
-   [coder.plurality :as plurality]
    [coder.cnav :as cnav]
    [layout.colorful :as colorful]
    [coder.cbase :as cbase]))
@@ -474,19 +473,13 @@
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def dispatch 
-  (plurality/->simple-multi-fn
-    {:mousePressed mouse-press
+  {:mousePressed mouse-press
      :keyPressed key-press
      :keyReleased rtext/key-release
      :mouseDragged rtext/mouse-drag
-     :mouseWheelMoved rtext/mouse-wheel}
-     (fn [e-clj comp] comp)
-     (fn [e-clj comp] (:type e-clj))))
+     :mouseWheelMoved rtext/mouse-wheel})
 
-(defmacro updaty-fns [code] 
-  (let [a1 (gensym 'args)] 
-    (zipmap (keys code) (mapv #(list `fn ['& a1] (list `apply % a1)) (vals code)))))
-(defn interact-fns [] (updaty-fns
+(defn interact-fns []
   {:dispatch dispatch
    :render (fn [box & show-cursor?] 
              (let [head (get box :head "") foot (get box :foot "")
@@ -496,4 +489,4 @@
                (apply rtext/render (assoc box :path title) show-cursor?)))
    :expandable? expandable?
    :expand-child expand-child :contract-child contract-child
-   :is-child? (fn [box] false)})) 
+   :is-child? (fn [box] false)}) 

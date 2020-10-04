@@ -32,7 +32,8 @@
     [layout.layoutcore :as layoutcore]
     [coder.cnav :as cnav]
     [coder.cbase :as cbase]
-    [coder.unerror :as unerror]))
+    [coder.unerror :as unerror]
+    [coder.plurality :as plurality]))
 
 (declare launch-main-app!) ; avoids a circular dependency with launch main app depending on earlier fns.
 
@@ -47,6 +48,26 @@
       (throw (Exception. (str "no tool with :name " tool-kwd))))))
 
 ;;;;;;;;;;;;;;;; Mid level control flow ;;;;;;;;;;;;;;;;;;;;;
+
+(defn to-f [f-or-code]
+  "If code, evals into functions. Code can be syntax-quoted for a portable, serializable function."
+  (if (fn? f-or-code) f-or-code
+    (let [f (eval f-or-code)]
+      (if (fn? f) f
+        (throw (Exception. (str "This code doesn't eval into an fn:" f-or-code)))))))
+
+(defn call [f-or-code & args]
+  "Calls f on args. But f can be code, which makes serialization easier."
+  (apply (to-f f-or-code) args))
+
+(defn simple-dispatch-call [f-or-map evt box] 
+  "Applies dispatch multi-methods."
+  (let [f-or-map (if (map? f-or-map) (zipmap (keys f-or-map) (mapv to-f (vals f-or-map)))
+                   (to-f f-or-map))
+        f (if (map? f-or-map) (plurality/->simple-multi-fn f-or-map
+                                (fn [e-clj box] box)
+                                (fn [e-clj box] (:type e-clj))) f-or-map)]
+    (f evt box)))
 
 (defn diff-checkpoint [s f] 
   "Runs f on s, syncing the components unless f doesn't change the components or flags [:precompute :desync-safe-mod?] to true.
@@ -67,10 +88,10 @@
         evt (xform/xevt (xform/x-1 (xform/pos-xform (:position comp))) evt-c)
         comp (get-in s [:components comp-k])
         comp1 (let [ifn (get comp :dispatch)]
-                (if ifn (ifn evt comp) comp))
+                (if ifn (simple-dispatch-call ifn evt comp) comp))
         s1 (assoc-in s [:components comp-k] comp1)
         s2 (let [ifn-heavy (get comp :dispatch-heavy)] ; allows modifying s itself.
-            (if ifn-heavy (ifn-heavy evt s s1 comp-k) s1))]
+            (if ifn-heavy (call ifn-heavy evt s s1 comp-k) s1))]
     s2))
 
 (defn single-comp-dispatches [evt-c s]
@@ -78,6 +99,22 @@
     (reduce 
       (fn [s k] (binding [*comp-k* k] (single-comp-dispatch evt-c s k))) 
          (assoc s :selected-comp-keys sel) sel)))
+
+(defn dispatch-hot-events [s evt-c]
+  "Mouse move evts and everyFrame evts are ignored, as they cost CPU battery life.
+   But what if you are using the repl as a video game? They should let you do anything. We store the hot repl list."
+  (reduce (fn [s k] (single-comp-dispatch evt-c s k)) s (:hot-boxes s)))
+
+(defn update-hot-boxes [s]
+  "Sets :hot-boxes to anything with :mouseMoved or :everyFrame events.
+   These events trigger even if the boxes aren't selected."
+  (let [hot-fns #{:everyFrame :mouseMoved}
+        boxes (:components s)
+        has-dispatch-fn? (fn [box-k fn-k] 
+                            (let [dispatch (get-in boxes [box-k :dispatch])] 
+                              (and (map? dispatch) (contains? dispatch fn-k))))
+        hot? (fn [box-k] (boolean (first (filter #(has-dispatch-fn? box-k %) hot-fns))))]
+   (assoc s :hot-boxes (set (filterv hot? (keys boxes))))))
 
 ; The maybe-x fns return the effects of doing x if the task is triggered, else s.
 (defn maybe-open-file [evt-c s compk]
@@ -170,11 +207,12 @@
    Only certain changes to f need diff checking."
   (cond 
     (= (:type evt-g) :everyFrame)
-    (if (> (count (:hot-repls s)) 0) (orepl/dispatch-hot-repls s evt-g 0 single-comp-dispatch) s)
-    (= (:type evt-g) :mouseMoved) ; don't let mouse moves eat up CPU time, but still update the mouse itself.
+    (if (> (count (:hot-boxes s)) 0) (let [evt-c evt-g] (dispatch-hot-events s evt-c)) s)
+    (= (:type evt-g) :mouseMoved)
     (let [evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g)
           s1 (update-mouse evt-g evt-c s :mouseMoved)]
-      (if (> (count (:hot-repls s)) 0) (orepl/dispatch-hot-repls s1 evt-c 0 single-comp-dispatch)) s1)
+      (if (> (count (:hot-boxes s)) 0) ; Only dispatch any mouse-moves if there are hot repls.
+        (dispatch-hot-events s evt-c) s1))
     (= (:type evt-g) :quit)
     (on-quit-attempt evt-g s)
     :else
@@ -187,20 +225,18 @@
                     (throw (Exception. (str "Eval of: " txt "\n Produced this error: " (.getMessage e)))))))) 
           s (if x (siconsole/log s (str "Parent command result:\n" x)) s)
           s (update-mouse evt-g evt-c s k)
-          s (orepl/dispatch-warm-repls s evt-c -1 single-comp-dispatch) ; dispatch unselected so they get events.
-          
           s (diff-checkpoint s #(hotkey-cycle evt-g evt-c % k))
           hk? (boolean (:tmp-hotkey-block? s)) ; a recognized hotkey.
           s (dissoc s :tmp-hotkey-block?)]
-      (orepl/update-warmhot-repls 
+      (update-hot-boxes
         (if hk? s ; hotkeys block other actions.
-        (let [; Typing mode forces single component use.
-              s (if (and (:typing-mode? s) (= k :mousePressed)) (single-select evt-c s) s)
-              s (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c))) 
-                  (maybe-use-tool evt-c s (selectmovesize/get-camera-tool))
-                  (:typing-mode? s) (diff-checkpoint s #(single-comp-dispatches evt-c %))
-                  :else (diff-checkpoint s #(maybe-common-tools evt-c %)))        
-              ] s))))))
+            (let [; Typing mode forces single component use.
+                  s (if (and (:typing-mode? s) (= k :mousePressed)) (single-select evt-c s) s)
+                  s (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c))) 
+                      (maybe-use-tool evt-c s (selectmovesize/get-camera-tool))
+                      (:typing-mode? s) (diff-checkpoint s #(single-comp-dispatches evt-c %))
+                      :else (diff-checkpoint s #(maybe-common-tools evt-c %)))        
+                  ] s))))))
 
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
 

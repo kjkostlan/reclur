@@ -9,7 +9,6 @@
     [navigate.funcjump :as funcjump]
     [coder.logger :as logger]
     [coder.textparse :as textparse]
-    [coder.plurality :as plurality]
     [coder.crosslang.langs :as langs]
     [coder.sunshine :as sunshine]
     [coder.unerror :as unerror]
@@ -251,24 +250,6 @@
         (merge comp (select-keys cbox1 ckys)))
       (rtext/mouse-press m-evt comp))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;; Event switchyard with defaults ;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn allow-override-fns [fn-map bubble?]
-  "Lets the user override what happens. With bubble? we always apply the true function;
-   minimize the risk of getting locked out."
-  (zipmap (keys fn-map)
-    (mapv (fn [k f]
-            (fn [evt box]
-              (let [the-f (get box k)
-                    box1 (if (and bubble? (not (:unselected? evt))) (f evt box) box)]
-                (if-let [the-f (get box k)] (the-f evt box1) box1))))
-      (keys fn-map) (vals fn-map))))
-
-(defn allow-append [f k]
-  "For functions that return a vector (i.e. rendering), lets the user append onto it"
-  (fn [box & args]
-    (into [] (concat (apply f box args) (if-let [g (get box k)] (apply g box args) [])))))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;; Component interface ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn dispatch-heavy-doubleclick [s s1 k]
@@ -293,63 +274,20 @@
     :else s1))
 
 (def dispatch 
-  (plurality/->simple-multi-fn
-    (allow-override-fns
-      {:mousePressed mouse-press
-       :mouseReleased (fn [_ box] box)
-       :mouseDragged rtext/mouse-drag
-       :mouseWheelMoved rtext/mouse-wheel
-       :keyPressed key-press
-       :keyReleased rtext/key-release
-       :mouseMoved (fn [_ box] box) ; These are normally ignored for idle CPU, orepls are an exception.
-       :everyFrame (fn [_ box] box)} true)
-    (fn [e-clj comp] comp)
-    (fn [e-clj comp] (:type e-clj))))
+  {:mousePressed mouse-press
+   :mouseReleased (fn [_ box] box)
+   :mouseDragged rtext/mouse-drag
+   :mouseWheelMoved rtext/mouse-wheel
+   :keyPressed key-press
+   :keyReleased rtext/key-release})
 
-(defmacro updaty-fns [code] 
-  (let [a1 (gensym 'args)] 
-    (zipmap (keys code) (mapv #(list `fn ['& a1] (list `apply % a1)) (vals code)))))
 (defn interact-fns []
-  (updaty-fns
   {:dispatch dispatch 
    :dispatch-heavy dispatch-heavy
    :render rtext/render
    :expandable? expandable?
    :is-child? (fn [box] false)
-   :expand-child expand-child :contract-child contract-child}))
-
-;;;;;;;;;;;;;;;;;;;;;;;;; High level repl dispatching ;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn dispatch-hot-repls [s evt-c selected+- single-comp-dispatch-fn]
-  "Mouse move evts and everyFrame evts are ignored, as they cost CPU battery life.
-   But what if you are using the repl as a video game? They should let you do anything. We store the hot repl list."
-  (let [hots (:hot-repls s)
-        sel (set (:selected-comp-keys s))
-        target (cond (= selected+- 0) hots (> selected+- 0) (set/intersection hots sel)
-                 (< selected+- 0) (set/difference hots sel))]
-    (reduce (fn [s k] (single-comp-dispatch-fn evt-c s k)) 
-        s target)))
-
-(defn dispatch-warm-repls [s evt-c selected+- single-comp-dispatch-fn]
-  "Warm repls have events, but not mose moved or every frame events.
-   Events are added by adding a key, such as :MousePressed to the repl."
-  (let [warms (set (:warm-repls s))
-        sel (set (:selected-comp-keys s))
-        target (cond (= selected+- 0) warms (> selected+- 0) (set/intersection warms sel)
-                 (< selected+- 0) (set/difference warms sel))]
-    (reduce (fn [s k] (single-comp-dispatch-fn (assoc evt-c :unselected? (not (contains? sel k))) s k)) 
-        s target)))
-
-(defn update-warmhot-repls [s]
-  "Which repls have user-customized events?
-   :warm-repls = have events besides :mouseMoved and :everyFrame. :hot-repls = have :mouseMoved or :everyFrame events."
-  (let [warm-fns #{:mousePressed :mouseReleased :keyPressed :keyReleased :mouseDragged}
-        hot-fns #{:mouseMoved :everyFrame}
-        comps (:components s)
-        repl-kys (filterv #(= (:type (get comps %)) :orepl) (keys comps))
-        warm-kys (filterv #(> (count (set/intersection (set (keys (get comps %))) warm-fns)) 0) repl-kys)
-        hot-kys (filterv #(> (count (set/intersection (set (keys (get comps %))) hot-fns)) 0) repl-kys)]
-   (assoc s :warm-repls warm-kys :hot-repls hot-kys)))
+   :expand-child expand-child :contract-child contract-child})
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Interacting with the logger ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
