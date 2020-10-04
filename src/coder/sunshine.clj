@@ -188,7 +188,7 @@
                   formv (get nested-forms (dec lev))
                   formx (cond (= open lo) (apply list formv)
                           (= open vo) formv
-                          (= open mo) (into {} formv)
+                          (= open mo) (apply hash-map formv)
                           (= open so) (set formv))]
               (recur (assoc (assoc nested-forms (dec lev) []) (- lev 2) 
                        (conj (get nested-forms (- lev 2)) formx))
