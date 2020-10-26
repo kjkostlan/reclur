@@ -34,7 +34,7 @@
 (defn close [s]
   "Closes the active window if there is an active window.
    Recursivly contracts children."
-  (selectmovesize/clear-selecion (assoc (reduce #(multicomp/close-component %1 %2) s (:selected-comp-keys s)) :selected-comp-keys #{})))
+  (selectmovesize/clear-selection (assoc (reduce #(multicomp/close-component %1 %2) s (:selected-comp-keys s)) :selected-comp-keys #{})))
 
 (defn toggle-typing [s] (update s :typing-mode? not))
 

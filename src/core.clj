@@ -139,8 +139,8 @@
                    (diff-checkpoint s #(maybe-open-file mevt-c % (first (:selected-comp-keys s)))))})
 
 (defn single-select [mevt-c s] 
-  (let [mp (:mousePressed (selectmovesize/get-tool))
-        s1 (selectmovesize/clear-selecion s)]
+  (let [mp (:mousePressed (selectmovesize/get-selection-tool))
+        s1 (selectmovesize/clear-selection s)]
     (mp mevt-c s1)))
 
 ;;;;;;;;;;;;;;;; High level control flow ;;;;;;;;;;;;;;;;;;;;;
@@ -173,7 +173,7 @@
   (let [ek (:type evt-c)
         ech (expand-child-tool)
         ofl (open-file-tool)
-        sms (selectmovesize/get-tool)
+        sms (selectmovesize/get-selection-tool)
         cam (selectmovesize/get-camera-tool)
         ut #(maybe-use-tool evt-c s %)
         
@@ -337,7 +337,7 @@
         tool-sprite {:camera cam :gfx (if-let [rf (:render tool)] (rf s) [])}
         
         sel-move-sz-sprite (if (:typing-mode? s) {:camera [0 0 1 1] :gfx []} 
-                             {:camera cam :gfx ((:render (selectmovesize/get-tool)) s) :z 1e10})
+                             {:camera cam :gfx ((:render (selectmovesize/get-selection-tool)) s) :z 1e10})
         ;tool-hud-sprite {:camera [0 0 1 1] :z 1e100
         ;                 :gfx (multicomp/which-tool-hud s)}
         global-gfx (globalize-gfx (:components s) (:camera s) gfx-comps-l (:selected-comp-keys s) tool-sprite sel-move-sz-sprite
