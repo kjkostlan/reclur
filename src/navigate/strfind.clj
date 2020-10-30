@@ -30,7 +30,7 @@
         s (if case? s (string/lower-case s))
         intervals (mapv count (string/split s re))
         lengths (mapv count (re-seq re s))
-        n (count lengths)]
+        n (min (count intervals) (count lengths))]
     (loop [acc [] nb4 0 ix 0]
       (if (= ix n) acc
           (let [ni (nth intervals ix) nl (nth lengths ix)]
