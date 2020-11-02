@@ -20,6 +20,17 @@
         (symbol? (second code)))
     (apply list (first code) [] (nthrest code 2)) code))
 
+;;; Ensure everything is loaded ;;;
+
+(def ^:dynamic *load-all-ns-on-startup?* false)
+(def ^:dynamic *load-all-ns-on-uses-of?* true) ; is this helpful?
+
+(defonce ns-load-atom-startup (atom false))
+
+(if (and *load-all-ns-on-startup?* (not @ns-load-atom-startup))
+  (future (do (Thread/sleep 3000) (langs/ensure-src-ns-loaded!)
+            (reset! ns-load-atom-startup true))))
+
 ;;;;;;;;;; Files and texts ;;;;;;
 
 (defn tokenize [txt langkwd]
@@ -128,6 +139,7 @@
 
 (defn uses-of [qual-sym]
   "Expensive (TODO: precompute) function that scans through all namespaces looking for qualified syms that use our sym."
+  (if *load-all-ns-on-uses-of?* (langs/ensure-src-ns-loaded!))
   (let [qual-sym (if (textparse/qual? qual-sym) qual-sym (textparse/qual 'clojure.core qual-sym))
         vv (varaverse)
         leaf-sym (textparse/unqual qual-sym)
@@ -160,14 +172,4 @@
       (let [ply1 (apply set/union (mapv set (mapv used-by ply)))
             ply1-new (set/difference ply1 done)]
         (recur (conj acc ply1-new) ply1-new (set/union done ply1))))))
-
-;;; Startup load everything optional (does this add cost?).
-
-(def ^:dynamic *load-all-ns?* true)
-
-(defonce ns-load-atom (atom false))
-
-(if (and *load-all-ns?* (not @ns-load-atom))
-  (future (do (Thread/sleep 3000) (langs/ensure-src-ns-loaded!)
-            (reset! ns-load-atom true))))
 

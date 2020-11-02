@@ -48,12 +48,16 @@
   (and (< (xxyy-big 0) (xxyy-small 0)) (> (xxyy-big 1) (xxyy-small 1))
     (< (xxyy-big 2) (xxyy-small 2)) (> (xxyy-big 3) (xxyy-small 3))))
 
+(defn xxyy-union [& xxyys]
+  "Similar to bounding boxes of compund objects in physics engines."
+  [(apply min (mapv #(nth % 0) xxyys))
+   (apply max (mapv #(nth % 1) xxyys))
+   (apply min (mapv #(nth % 2) xxyys))
+   (apply max (mapv #(nth % 3) xxyys))])
+
 (defn bounding-xxyy [comps]
   (if (= (count comps) 0) [-1e100 -1e100 -1e100 -1e100]
-    [(apply min (mapv #(first (:position %)) comps)) 
-     (apply max (mapv #(+ (first (:position %)) (first (:size %))) comps))
-     (apply min (mapv #(second (:position %)) comps)) 
-     (apply max (mapv #(+ (second (:position %)) (second (:size %))) comps))]))
+    (apply xxyy-union (mapv comp-xxyy comps))))
 
 (defn click? [x y comp]
   (if (or (nil? x) (nil? y)) (throw (Exception. "Nil coords")))
@@ -209,11 +213,14 @@
             sel (:selected-comp-keys s)]
         (sts s (assoc ts :copied-comps (zipmap sel (map #(get (:components s) %) sel))
                  :copy-mx mx :copy-my my))) 
-      (and (or (:ControlDown k-evt) (:MetaDown k-evt)) (= (str (:KeyChar k-evt)) (str "v")))
+      (and (or (:ControlDown k-evt) (:MetaDown k-evt)) (= (str (:KeyChar k-evt)) (str "v"))) ; paste.
       (let [ts (gts s) dx (- mx (:copy-mx ts))
             dy (- my (:copy-my ts))
-            comp-kys (mapv derive-key (keys (:copied-comps ts))) 
-            comp-vals (mapv (fn [c] (update c :position #(vector (+ (first %) dx) (+ (second %) dy))))
+            raise-z (inc (- (apply max (mapv :z (vals (:components s))))
+                            (apply min (mapv :z (vals (:copied-comps ts))))))
+            comp-kys (mapv derive-key (keys (:copied-comps ts)))
+            comp-vals (mapv (fn [c] (update (update c :position #(vector (+ (first %) dx) (+ (second %) dy)))
+                                      :z #(+ % raise-z)))
                         (vals (:copied-comps ts)))]
         (sts (update s :components
             #(merge % (zipmap comp-kys comp-vals)))
@@ -266,7 +273,56 @@
                             xf [(* mX (- 1 rzoom)) (* mY (- 1 rzoom)) rzoom rzoom]]
                         (update s :camera #(xform/xx % xf))))
 
+(defn insta-zoom-region [target-xxyy comp-xxyys]
+  "Heuristic that tries to match target-xxyy, but will move or zoom out slightly 
+   if it would avoid clipping off stuff.
+   Returns the target xxyy."
+  (let [dx (- (second target-xxyy) (first target-xxyy))
+        dy (- (nth target-xxyy 3) (nth target-xxyy 2))
+        r (* 0.5 (+ (- (nth target-xxyy 3) (nth target-xxyy 2)) (- (nth target-xxyy 1) (nth target-xxyy 0))))
+        tol 0.333
+        if< #(if (< %1 %2) %1 0.0)
+        pull (fn [sxxyy cxxyy tol-pix] ; returns [dx dx dy dy]
+               (let [-x (max 0 (- (nth sxxyy 0) (nth cxxyy 0)))
+                     +x (max 0 (- (nth cxxyy 1) (nth sxxyy 1)))
+                     -y (max 0 (- (nth sxxyy 2) (nth cxxyy 2)))
+                     +y (max 0 (- (nth cxxyy 3) (nth sxxyy 3)))]
+                 [(- (if< -x tol-pix)) (+ (if< +x tol-pix))
+                  (- (if< -y tol-pix)) (+ (if< +y tol-pix))]))
+        max-pull (fn [sxxyy tol-pix]
+                   (let [pulls (mapv #(pull sxxyy % tol-pix) comp-xxyys)]
+                     (apply xxyy-union pulls)))
+        
+        the-pull (max-pull target-xxyy (* tol r))
+        enclosing (mapv + target-xxyy the-pull [-1 1 -1 1])
+        xxyys-hot (filterv #(engulfs? enclosing %) comp-xxyys)]
+    (if (> (count xxyys-hot) 0) (apply xxyy-union xxyys-hot)
+      target-xxyy)))
+
+(defn xxyy2camera [xxyy screen-sz]
+  "screen-sz = (layoutcore/screen-pixels) usually.
+   Scales square so xxyy is the included bounds."
+  (let [scale-x (/ (first screen-sz) (- (nth xxyy 1) (nth xxyy 0)))
+        scale-y (/ (second screen-sz) (- (nth xxyy 3) (nth xxyy 2)))
+        sc (min scale-x scale-y)
+        sc-xform [0.0 0.0 sc sc]
+        mv-xform [(- (nth xxyy 0)) (- (nth xxyy 2)) 1.0 1.0]]
+    (xform/xx sc-xform mv-xform)))
+
 (defn insta-zoom [k-evt s]
+  (let [screen-sz (layoutcore/screen-pixels) 
+        srx (* (first screen-sz) 0.5) sry (* (second screen-sz) 0.5)
+        target [(first (:mouse-pos-world s)) (second (:mouse-pos-world s))]
+        target-xxyy [(- (target 0) (* 0.5 (first screen-sz))) 
+                     (+ (target 0) (* 0.5 (first screen-sz))) 
+                     (- (target 1) (* 0.5 (second screen-sz))) 
+                     (+ (target 1) (* 0.5 (second screen-sz)))]
+        comp-xxyys (mapv comp-xxyy (vals (:components s)))
+        zoom-xxyy (insta-zoom-region target-xxyy comp-xxyys)
+        cam (xxyy2camera zoom-xxyy screen-sz)]
+    (assoc s :camera cam)))
+
+#_(defn insta-zoom [k-evt s]
   (let [radius-range 1.75 ; for counting as "nearby".
         screen-sz (layoutcore/screen-pixels) 
         srx (* (first screen-sz) 0.5) sry (* (second screen-sz) 0.5)

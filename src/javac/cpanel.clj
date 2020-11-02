@@ -159,7 +159,7 @@
 (defn add-key-listeners! [x]
   (.addKeyListener x
     (proxy [KeyAdapter] []
-      (keyPressed [e] (event-queue! e :keyPressed))
+      (keyPressed [e] (do (store-window-size! ^JFrame (:JFrame @one-atom)) (event-queue! e :keyPressed)))
       (keyReleased [e] (event-queue! e :keyReleased)))))
 
 (defn add-resize-listener! [^JFrame frame]
