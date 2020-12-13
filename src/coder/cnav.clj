@@ -215,12 +215,12 @@
 
 ;;;;;;;;;;;;;;;;; Recursive functions ;;;;;;;;;;;;;;;;
 
-(defn all-syms [x]
+(defn symbols-in [x]
   "Acts recursivly, returns a set. Does not include special forms or map keys."
   (cond (contains? specials x) #{}
     (symbol? x) #{x}
-    (map? x) (set/union #_(all-syms (keys x)) (all-syms (vals x)))
-    (coll? x) (apply set/union (mapv all-syms x))
+    (map? x) (set/union #_(symbols-in (keys x)) (symbols-in (vals x)))
+    (coll? x) (apply set/union (mapv symbols-in x))
     :else #{}))
 
 (defn locals-walk [f x locals]

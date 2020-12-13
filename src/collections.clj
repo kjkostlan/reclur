@@ -89,6 +89,11 @@
 (defn third [x] (first (rest (rest x))))
 (defn fourth [x] (first (rest (rest (rest x)))))
 
+(defn filter-kv [pred map]
+  "Selects the keys in map for which (pred k v) is true. Returns a map."
+  (reduce #(let [v (get map %2)] 
+             (if (pred %2 v) (assoc %1 %2 v) %1)) {} (keys map)))
+
 ;;;;;;;;;;;;;;;; Generalized functions (wider valid argument set) ;;;;;;;;;;;;;;
 
 (defn cget [x k]
@@ -400,7 +405,9 @@
                           (let [chiphs (_paths (nth xv ix) (conj root ix))]
                             (recur (_vc2 acc chiphs) (inc ix))))))
     :else [root]))
-(defn paths [x] (_paths x []))
+(defn paths [x]
+  "Paths to elements in x. Returns [[]] for non-collections"
+  (_paths x []))
 
 ;; https://stackoverflow.com/a/33701239
 ;; Helper function to have vector's indexes work like for get-in

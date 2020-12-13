@@ -69,7 +69,9 @@
   (let [txt (jfile/open fname)
         _ (if (or (not txt) (not (string? txt))) (throw (Exception. (str "Can't load file:" fname)))) 
         langkwd (file2langkwd fname)
-        codes (langs/reads-string txt langkwd)
+        codes (try (langs/reads-string txt langkwd)
+                (catch Exception e
+                  (do (println "Parsing failed for" fname " see thrown error") (throw e))))
         defpaths (cnav/all-defpaths codes)
         ns-sym (langs/file2ns fname)
         def-syms (mapv #(second (collections/cget-in codes %)) defpaths)
@@ -132,9 +134,15 @@
         nms1 (mapv #(nth nms %) good-ixs)]
     (apply merge (mapv #(file2defmap (langs/ns2file %)) nms1))))
 
+(defn symaverse []
+  "All qualified syms in loaded namespaces builtin and user. About 8 times faster than (set (keys (varaverse)))"
+  (let [nms (into [] (langs/get-all-loaded-ns))]
+    (set (apply concat (mapv (fn [ns-sym] 
+                               (mapv #(textparse/qual ns-sym %) (keys (ns-interns (find-ns ns-sym))))) nms)))))
+
 (defn nonlocal-syms [code ns-sym]
   "Set of external symbols, i.e. symbols that point outside of the code, all qualified."
-  (let [syms (cnav/all-syms (sunshine/pipeline ns-sym code false))]
+  (let [syms (cnav/symbols-in (sunshine/pipeline ns-sym code false))]
     (filterv textparse/qual? syms)))
 
 (defn uses-of [qual-sym]

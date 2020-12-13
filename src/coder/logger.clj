@@ -245,9 +245,10 @@
                       x) x))]
     (collections/pwalk walk-fn code) @path-atom))
 
-(defn with-log-paths [sym2paths sym2mexpand? f & args]
-  "Runs f with temporarly adjusted log paths and returns the logs.
-   The function's result is in :result in the metadata, and may be an Exception."
+(defn with-log-paths [sym2paths sym2mexpand? var-obj & args]
+  "Runs var-obj with temporarly adjusted log paths and returns the logs.
+   var-obj can be a function, but a direct reference to a var will NOT get it's log-paths.
+   The result is in :result in the metadata, and is an Exception object if running it throws an error."
   (let [syms (keys sym2paths)
         sym2mexpand? (if (map? sym2mexpand?) sym2mexpand?
                        (zipmap syms (repeat (boolean sym2mexpand?))))
@@ -257,7 +258,7 @@
         _ (mapv set-logpaths! syms (mapv #(get sym2paths %) syms) (mapv #(get sym2mexpand? %) syms))
         tmp-atom (atom {})
         result (binding [*log-atom* tmp-atom]
-                 (try (apply f args) (catch Exception e e)))
+                 (try (apply var-obj args) (catch Exception e e)))
         our-logs (get @tmp-atom :logs [])
         _ (mapv set-logpaths! syms (mapv #(get sym2old-paths %) syms) (mapv #(get sym2old-mexpand? %) syms))]
     (with-meta our-logs {:result result})))

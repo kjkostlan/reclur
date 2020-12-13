@@ -6,6 +6,7 @@
     [app.orepl :as orepl]
     [app.hintbox :as hintbox]
     [app.graphbox :as graphbox]
+    [app.codebox :as codebox]
     [app.iteration :as iteration]
     [app.multicomp :as multicomp]
     [javac.cpanel :as cpanel]
@@ -38,11 +39,19 @@
 
 (defn toggle-typing [s] (update s :typing-mode? not))
 
+(defn qual-cursor-sym [s]
+  "Don't worry about having to type the whole symbol."
+  (let [sel-k (first (:selected-comp-keys s)) box (get (:components s) sel-k)] ; How common is this line of code?
+    (if (contains? #{:codebox :orepl :siconsole} (:type box))
+        (assoc-in s [:components sel-k] (codebox/hint-sym-qual box))
+        s)))
+
 ;;;;; The hotkeys themselves ;;;;;
 
 (defn hotkeys [] ; fn [s] => s, where s is the state.
   {"C-w" close ; all these are (fn [s]).
    "esc" toggle-typing
+   "C-r" qual-cursor-sym
    "C-S-r r r" #(if (or (globals/are-we-child?) (warnbox/yes-no? "Relaunch app, losing any unsaved work? Does not affect the child app." false)) 
                   (do (future (eval 'core.launch-main-app!)) (throw (Exception. "This iteration is dead, reloading."))) %)
    "C-l" (fn [s] (layouts/next-layout s)) 

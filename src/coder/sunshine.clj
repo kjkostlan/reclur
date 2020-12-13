@@ -216,7 +216,7 @@
 (defn pretty-condense [x]
   "Condenses down clojure.core and java.lang, both of which are imported by default.
    Used for visualization not for metaprogramming."
-  (let [all-quals (filterv textparse/qual? (cnav/all-syms x))
+  (let [all-quals (filterv textparse/qual? (cnav/symbols-in x))
         java-replace #(symbol (string/replace (str %) "java.lang.Math/" "Math/"))
         clojure-replace #(symbol (string/replace (str %) "clojure.core/" ""))
         replace-map (zipmap all-quals 

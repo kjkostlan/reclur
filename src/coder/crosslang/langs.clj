@@ -137,7 +137,7 @@
   (let [langkwd (textparse/ns2langkwd ns-sym)]
     (cond (= langkwd :clojure)
       (let [ns-ob (find-ns ns-sym)
-            _ (if (not ns-ob) (throw (Exception. (str "Namespace: " (pr-str ns-sym) " not found."))))
+            _ (if (not ns-ob) (throw (Exception. (str "Namespace: " (pr-str ns-sym) " not found; the clj file must first be compiled at least once."))))
             var-ob (ns-resolve ns-ob (symbol code-sym))]
         (if var-ob (symbol (subs (str var-ob) 2))))
       (= langkwd :human) (symbol (str :human (textparse/rm-lang code-sym)))
@@ -210,6 +210,12 @@
 (defn var-source [qual-sym]
   "Source-code of qual-sym, no macro expansion or symbol qualification."
   (:source (var-info qual-sym true)))
+
+(defn var-source-qual [qual-sym]
+  "Source-code of qual-sym. Symbol qualifiation but no macro expansion."
+  (let [ns-sym (textparse/sym2ns qual-sym)
+        unqualed (var-source qual-sym)]
+    (walk/postwalk #(if (symbol? %) (if-let [r (resolved ns-sym %)] r %) %) unqualed)))
 
 (defn defs [ns-sym]
   "Not qualified."

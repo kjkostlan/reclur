@@ -1,4 +1,4 @@
-; TODO: this makes heavy use of clojure-only functions. They should be refactored to langs.
+; Higher level logging functions.
 
 (ns coder.profiler
   (:require 
@@ -231,8 +231,8 @@
           {} logs))
 
 (defn deep-profiles [sym-qual runs]
-  "Runs f-sym on each of runs. Each run is a vector of arguments to the fn bound to sym-qual.
-   Returns map from log-paths to a vector of values. Log-paths are [sym-qual, ~@path-within-code].
+  "Runs sym-qual on each of runs. Each run is a vector of arguments to the fn bound to sym-qual.
+   Returns map from log-paths to a vector of values. Log-paths are [sym-qual, ~path-within-code].
    Includes the dependent symbols of f, and gives logs in chronological order.
    Macroexpands the code first!
    Clears all logs in runs.

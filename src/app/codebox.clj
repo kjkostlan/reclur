@@ -251,6 +251,24 @@
 ;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Interactions beyond the uasual rtext interactions.
 
+(defn hint-sym-qual [box]
+  "Most useful in the repl, where a symbol gets qualed."
+  (let [box1 (select-twofour-click box false)
+        sel0 (:selection-start box1)
+        sel1 (:selection-end box1)]
+    (if (> sel1 sel0)
+      (let [sel-str (subs (rtext/rendered-string box) sel0 sel1)
+            sym? (not (re-find #"[\[\]{}\(\) ]" sel-str))]
+        (if sym? 
+          (let [strs (sort (mapv str (cbase/symaverse)))
+                matches (filterv #(string/includes? % sel-str) strs)]
+            (if (= (count matches) 0) 
+              (do (println "No matching fully qualified symbols [in loaded namespaces] to" sel-str) box)
+              (do (if (> (count matches) 1) (println "Multible matches to" sel-str "taking fist one."))
+                (rtext/edit box1 sel0 sel1 (first matches) []))))
+          (do (println "The selection at+ the cursor is not a symbol.") box)))
+      (do (println "No selection can be made from cursor's location.") box))))
+
 (defn key-press [key-evt box]
   "Key-based interaction 101. Tab indents (shift-tab dedents) rather than whoops where did the block of code go.
    For now just indent the hilighted lines (and any lines in the children), not consious of the code itself.
