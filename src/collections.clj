@@ -97,13 +97,17 @@
 ;;;;;;;;;;;;;;;; Generalized functions (wider valid argument set) ;;;;;;;;;;;;;;
 
 (defn cget [x k]
+  "Like get but works for listy collections as well."
   (cond (or (map? x) (set? x) (vector? x)) (get x k)
     (not (coll? x)) nil
    :else (get (into [] x) k)))
 
-(defn cget-in [x ks] (reduce cget x ks))
+(defn cget-in [x ks]
+  "Like get-in but works for listy collections as well."
+  (reduce cget x ks))
 
 (defn cassoc [x k v & kvs]
+  "Like assoc but works for listy collections as well."
   (let [metax (meta x)]
     (with-meta
       (cond
@@ -120,6 +124,7 @@
        :else (wtf x)) metax)))
 
 (defn cupdate [x k f & args]
+  "Like update but works for listy collections as well."
   (let [v (apply f (cget x k) args)]
     (cassoc x k v)))
 
@@ -320,6 +325,12 @@
 
 (defn cfilter-1 [f x] "Only one element gets returned." (first (cfilter f x)))
 
+(defn wfilterv [f x-test x-target]
+  "With-filter: if x-test satisifies f include the cooreponding element from x-target.
+   Returns a vector."
+  (let [pairs (map vector x-test x-target)]
+    (mapv second (filterv #(f (first %)) pairs))))
+
 (defn juice-1 [pred coll]
   "Returns the first result of pred applied to coll.
    Contrast with cfilter-1 which returns the first *element*
@@ -381,8 +392,14 @@
    Value is determied by cvals. nil for not found."
   (_find-value-in x v []))
 
+(defn _leaves [x]
+  (if (not (coll? x)) [x]
+    (apply concat (map _leaves (if (map? x) (vals x) x)))))
+(defn leaves [x]
+    "Leaf elements of x, walked depth-first."
+  (into [] (_leaves x)))
 
-(defmacro _vc2 [v1 v2] 
+(defmacro _vc2 [v1 v2] ; Inlined vector concatenate of two vector.
   `(let [n# (count ~v2)]
      (loop [acc# ~v1 ix# 0]
        (if (= ix# n#) acc#
@@ -390,17 +407,17 @@
 (defn _paths [x root]
   (cond 
     (set? x) (let [n (count x) xv (into [] x)]
-                   (loop [acc [[]] ix 0]
+                   (loop [acc [root] ix 0]
                      (if (= ix n) acc
                        (let [chiphs (_paths (nth xv ix) (conj root (nth xv ix)))]
                          (recur (_vc2 acc chiphs) (inc ix))))))
     (map? x) (let [n (count x) kys (into [] (keys x))]
-                   (loop [acc [[]] ix 0]
+                   (loop [acc [root] ix 0]
                      (if (= ix n) acc
                        (let [chiphs (_paths (get x (nth kys ix)) (conj root (nth kys ix)))]
                          (recur (_vc2 acc chiphs) (inc ix))))))
     (coll? x) (let [n (count x) xv (into [] x)]
-                      (loop [acc [[]] ix 0]
+                      (loop [acc [root] ix 0]
                         (if (= ix n) acc
                           (let [chiphs (_paths (nth xv ix) (conj root ix))]
                             (recur (_vc2 acc chiphs) (inc ix))))))
@@ -408,6 +425,21 @@
 (defn paths [x]
   "Paths to elements in x. Returns [[]] for non-collections"
   (_paths x []))
+
+(defn path-order-compare [p1 p2]
+  "Compares two paths using 'sign(p1-p2)' which is approximatly <. 
+   If neither path is before as in hash-maps the other returns zero.
+   Note: Hash maps or sets with integer keys WILL confuse it.
+   [1 2] is before [1 2 0]."
+  (let [p1 (into [] p1) p2 (into [] p2) 
+        n1 (count p1) n2 (count p2)
+        n (max n1 n2)]
+    (loop [ix 0]
+      (cond (= ix n) 0 (= ix n1) -1 (= ix n2) 1
+        :else (let [a (nth p1 ix) b (nth p2 ix)]
+                (cond (= a b) (recur (inc ix))
+                  (or (not (int? a)) (not (int? b))) 0
+                  (< a b) -1 (> a b) 1 :else "Oops"))))))
 
 ;; https://stackoverflow.com/a/33701239
 ;; Helper function to have vector's indexes work like for get-in
@@ -445,3 +477,27 @@
 (defn dpwalk [f x max-depth] "Depth-limited pathwalk that applies (f path subform). 
                               Max-depth zero means just applying f to [] the entire collection."
   (_dpwalk f [] x max-depth))
+
+(defn m-postwalk [f form]
+  "Preserves metadata when possible, unless f destroys metadata."
+  (let [reset-meta #(with-meta % (meta form))
+        walk-f #(m-postwalk f %)]
+    (cond (map? form) (f (reset-meta (zipmap (mapv walk-f (keys form)) (mapv walk-f (vals form)))))
+      (coll? form) (let [form1 (mapv walk-f form)
+                         form2 (cond (vector? form) (into [] form1)
+                                 (set? form) (set form1) :else (apply list form1))]
+                     (f (reset-meta form2)))
+      :else (f form))))
+
+(defn _pmwalk [f ph x]
+  (f ph
+    (#(if (meta x) (with-meta % (meta x)) x)
+      (cond (map? x) (zipmap (keys x) (mapv #(_pwalk f (conj ph %1) %2) (keys x) (vals x)))
+        (set? x) (set (mapv #(_pwalk f (conj ph %) %) x))
+        (vector? x) (mapv #(_pwalk f (conj ph %1) %2) (range) x)
+        (coll? x) (apply list (mapv #(_pwalk f (conj ph %1) %2) (range) x))
+        :else x))))
+(defn pm-postwalk [f x] 
+  "Pathed post walk, calls (f path subform). Not lazy.
+   Preserves metadata, unless f destroys metadata."
+  (_pmwalk f [] x))

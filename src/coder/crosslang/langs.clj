@@ -65,7 +65,6 @@
             [coder.crosslang.langparsers.human :as human]
             [collections]
             [clojure.string :as string]
-            [coder.cnav :as cnav]
             [javac.file :as jfile]
             [clojure.set :as set]
             [clojure.main :as main]
@@ -83,7 +82,7 @@
     (cond (vector? (second form)) 1 (vector? (collections/third form)) 2 :else false)))
 
 (defn fn-pack1 [code]
-  "Like fn-pack but only one level."
+  "Like fn-pack but doesn't act recursively."
   (if-let [upk (unpacked-fn? code)] 
     (if (= upk 1) (list (first code) (rest code)) 
       (list (first code) (second code) (rest code))) code))
@@ -138,7 +137,7 @@
     (cond (= langkwd :clojure)
       (let [ns-ob (find-ns ns-sym)
             _ (if (not ns-ob) (throw (Exception. (str "Namespace: " (pr-str ns-sym) " not found; the clj file must first be compiled at least once."))))
-            var-ob (ns-resolve ns-ob (symbol code-sym))]
+            var-ob (ns-resolve ns-ob (symbol (str code-sym)))]
         (if var-ob (symbol (subs (str var-ob) 2))))
       (= langkwd :human) (symbol (str :human (textparse/rm-lang code-sym)))
       :else (errlang "resolved" langkwd))))
@@ -193,7 +192,8 @@
 (defn var-info [qual-sym source?]
   "Gets information about a var in the form of clojure datastructures.
    source? means look for the source as well, which can be a little slow."
-  (let [langkwd (textparse/ns2langkwd (textparse/sym2ns qual-sym))] 
+  (let [langkwd (textparse/ns2langkwd (textparse/sym2ns qual-sym))]
+    (if (not (symbol? qual-sym)) (throw (Exception. (str "Qual-sym must be a symbol not a " (type qual-sym))))) 
     (if (not= langkwd :clojure)
       (errlang "var-info" langkwd)))
   (let [ns-sym (textparse/sym2ns qual-sym) ns-obj (find-ns ns-sym)
@@ -210,12 +210,6 @@
 (defn var-source [qual-sym]
   "Source-code of qual-sym, no macro expansion or symbol qualification."
   (:source (var-info qual-sym true)))
-
-(defn var-source-qual [qual-sym]
-  "Source-code of qual-sym. Symbol qualifiation but no macro expansion."
-  (let [ns-sym (textparse/sym2ns qual-sym)
-        unqualed (var-source qual-sym)]
-    (walk/postwalk #(if (symbol? %) (if-let [r (resolved ns-sym %)] r %) %) unqualed)))
 
 (defn defs [ns-sym]
   "Not qualified."

@@ -8,11 +8,13 @@
     [coder.textparse :as textparse]
     [collections]))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;; Support functions ;;;;;;;;;;;;;;;;;;;;;;;
+
 (defn let-swap [code]
   "Binding symbols should be bound once they are defined.
    But let statement's arent: (let [a a] a) the second a isn't bound.
    If we switch even/odd, now ODD symbols will be bound-on-declaration: (let [1 a] a).
-   Call this function again to restor the original code."
+   Call this function again to restore the original code."
   (let [walkf (fn [form]
                 (if (and (collections/listy? form) 
                       (contains? #{'let `let 'let*} (first form)))
@@ -119,6 +121,7 @@
             (string/includes? "0123456789" (str (last (str sym))))
             (str sym "_" n-uses) :else (str sym n-uses))))
 
+(def core-syms (set (keys (ns-map 'clojure.core))))
 (def core-clean2count ; A count of sorts for clojure.core symbols 
   ; We also don't allow shadowing core symbols (more an asthetic choice).
   ; In other words, (deshadow-sym (clean x) n) must not equal core symbols over all possible x and n.
@@ -197,21 +200,65 @@
             (recur (assoc nested-forms (dec lev) (conj (get nested-forms (dec lev)) tok))
               lev opening-toks (inc ix))))))))
 
-;;;;;;;;;;;;;;;;;;;;; A processing pipeline ;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;; Main API functions ;;;;;;;;;;;;;;;;;;;;
 
-(defn pipeline [ns-sym code mexpand? & local-sym-modify-f]
-  "The main code de-shadowing and qualification tool.
-   Deterministic even with gensym, etc in the code. Only does local symbol substitution (apart from mexpand?)
-   If it changes what the code does there is a BUG somewhere!
-   mexpand? must be true for some cases such as more complex let statments."
-  (let [code (if mexpand? (langs/mexpand ns-sym code) code)
+(defn deshadow-qual [ns-sym code & local-sym-modify-f]
+  "Deshadows and qualifies the symbols in the code.
+   local-sym-modify-f is an optinal function that modifies local symbols."
+  (let [ns-sym (if (symbol? ns-sym) ns-sym (symbol (str ns-sym)))
         form-swap (let-swap code)
-        ns-sym (if (symbol? ns-sym) ns-sym (symbol (str ns-sym)))
         tb (flat-tokenize-mark form-swap) tokens (first tb) bind?s (second tb)
         unbind?s (unbinds tokens bind?s)
         tokens1 (sym-replace ns-sym tokens bind?s unbind?s (first local-sym-modify-f))
         form-swap1 (unflat tokens1)]
     (let-swap form-swap1)))
+
+(defn simple-qual [ns-sym code & assert-deshadowed?]
+  "Qualifies all non-local symbols in the code." 
+  (let [ns-sym (if (symbol? ns-sym) ns-sym (symbol (str ns-sym)))
+        form-swap (let-swap code)
+        tb (flat-tokenize-mark form-swap) tokens (first tb) bind?s (second tb)
+        unbind?s (unbinds tokens bind?s)
+        n (count unbind?s)
+        tokens1 (loop [acc [] ix 0 bound #{}]
+                  (if (= ix n) acc
+                    (let [t (nth tokens ix) b? (nth bind?s ix)
+                          ubs (if (nth unbind?s ix) (set (nth unbind?s ix)) #{})]
+                      (recur (conj acc 
+                               (cond (re-matches #"[\{\}\[\]\(\)]" (str t)) t
+                                 (contains? bound t) t
+                                 :else (if-let [tq (langs/resolved ns-sym t)] tq t)))
+                        (inc ix)
+                        (set/difference (if b? (conj bound b?) bound) ubs)))))
+        form-swap1 (unflat tokens1)]
+    (let-swap form-swap1)))
+
+(defn var-source-qual [qual-sym]
+  "Takes the source-code of qual-sym and qualifies it."
+  (let [ns-sym (textparse/sym2ns qual-sym)
+        unqualed-code (langs/var-source qual-sym)]
+    (simple-qual ns-sym unqualed-code)))
+
+(defn local-syms [code]
+  "Returns a vector of local symbols in the order that they are defined.
+   If there are duplicate local syms the vector will contain duplicates."
+  (let [form-swap (let-swap code)
+        tb (flat-tokenize-mark form-swap) tokens (first tb) bind?s (second tb)
+        ixs (filterv #(nth bind?s %) (range (count bind?s)))]
+   (mapv #(nth tokens %) ixs)))
+
+(defn unique-locals? [code & assert?]
+  "Are all local symbols unique?"
+  (let [dups (fn [seq] ;https://stackoverflow.com/questions/8056645/returning-duplicates-in-a-sequence
+               (for [[id freq] (frequencies seq)
+                :when (> freq 1)] id))
+        dupes (dups (local-syms code))
+        ndupe (count dupes)]
+    (cond (> ndupe 10) (if assert? (throw (Exception. (str ndupe "duplicated locals, including " (first dupes)))) false)
+      (> ndupe 0) (if assert? (throw (Exception. (str "duplicated locals:" dupes))) false)
+      :else true)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;; Visulization functions ;;;;;;;;;;;;;;;;;;;;
 
 (defn pretty-condense [x]
   "Condenses down clojure.core and java.lang, both of which are imported by default.
@@ -222,30 +269,3 @@
         replace-map (zipmap all-quals 
                       (mapv #(java-replace (clojure-replace %)) all-quals))]
     (walk/postwalk #(if (symbol? %) (get replace-map % %) %) x)))
-
-(defn ppipeline [ns-sym form mexpand? & local-sym-modify-f]
-  "This version is more beautiful as it removes clojure.core and java.lang qualifiers that 99% of the time aren't human-useful."
-  (pretty-condense (pipeline ns-sym form mexpand? (first local-sym-modify-f))))
-
-;;;;;;;;;;;;;;;;;;;;;; Tracking where stuff end sup ;;;;;;;;;;;;;;;;;
-; There is no best way to do this!
-
-(defn hilite-track [ns-sym code code-with-hilite]
-  "Finds the path on the expanded code of the macro of the 'hilight'."
-  (let [code-ex (pipeline ns-sym code true)
-        code-hx (pipeline ns-sym code-with-hilite true)]
-    (cnav/tree-diff code-ex code-hx)))
-
-(defn macro-expand-path [ns-sym code path]
-  "Where path goes on the macroexpanded code.
-   Not gaurenteed to work in all cases (should return nil when fails)."
-  (let [sy (gensym "Mark")
-        f #(cond (collections/listy? %) (list sy)
-             (vector? %) [sy]
-             (set? %) #{sy}
-             (map? %) {sy sy}
-             (number? %) (Math/random)
-             (symbol? %) sy
-             :else (str sy)) 
-        code-marked (collections/cupdate-in code path f)]
-    (hilite-track ns-sym code code-marked)))

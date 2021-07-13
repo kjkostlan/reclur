@@ -80,7 +80,7 @@
                         (apply collections/vcat
                           (mapv (fn [sq] (let [source (:source (langs/var-info sq true))
                                                ns-sym (textparse/sym2ns sq)
-                                               source-qual (sunshine/pipeline ns-sym source false)
+                                               source-qual (sunshine/deshadow-qual ns-sym source)
                                                subdefpaths (cnav/paths-of source-qual x false)]
                                            (mapv #(cbase/subdefpath-fstr-ixs sq %) subdefpaths)))
                             syms-qual))

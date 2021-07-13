@@ -9,10 +9,10 @@
     [coder.cnav :as cnav]
     [coder.cbase :as cbase]
     [coder.crosslang.langs :as langs]
-    [coder.sunshine :as sunshine]
     [coder.textparse :as textparse]
     [coder.logger :as logger]
-    [coder.unerror :as unerror]))
+    [coder.unerror :as unerror]
+    [coder.pathedmexp :as pathedmexp]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Support functions that want to be in collections ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -105,6 +105,11 @@
         nm (.getClassName s3)]
     (symbol (main/demunge nm))))
 
+(defn _path-remap [code paths-on-code-ex]
+  "Paths on non expanded code, where the code is expanded using pathedmexp/pmexpand."
+  (let [inv-pm (pathedmexp/inv-path-map code)]
+    (set (filterv identity (mapv #(get inv-pm %) paths-on-code-ex)))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Reflection stuff ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defmacro with-err-str ;tupelo.core
@@ -123,10 +128,20 @@
                     (eval fn-code)))]
     (if (> (count err-str) 3) err-str "no reflection")))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Runtime recording;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Paths in the code;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn interest-paths [defn-code-ex]
+  "Not the first element of lists."
+  (let [phs (collections/paths defn-code-ex)
+        phs1 (filterv #(let [x0 (collections/cget defn-code-ex (first %))
+                             ;inside-outer-fn? (and (coll? x0) (= (first x0) 'fn*))
+                             x (collections/cget-in defn-code-ex (butlast %))
+                             not-first-list? (or (not (collections/listy? x)) (not= (last %) 0))]
+                        (and #_inside-outer-fn? not-first-list?)) phs)] phs1))
 
 (defn forbidden-paths [code-ex]
-  "Paths that can't be logged. For example, the [foo bar] in (fn [foo bar])."
+  "Paths that can't be logged. For example, the [foo bar] in (fn [foo bar]).
+   Convention: Assume 'fn isn't overloaded."
   (let [prepends (fn [k phs] (mapv #(collections/vcat [k] %) phs))
         vmapv (fn [f & args] (apply collections/vcat (apply mapv f args)))]
     (into [] (sort
@@ -139,24 +154,26 @@
           (coll? code-ex)
           (let [c0 (first code-ex) c1 (second code-ex)
                 forbid1 (forbidden-paths (into [] code-ex))
-                forbid  (cond (and (contains? #{`fn 'fn*} c0) (vector? c1)) ; (fn [a b] ...)
-                          (prepends 1 (mapv vector (range (count c1))))
-                          (contains? #{`fn 'fn*} c0) ; (fn ([a] ...) ([a b] ...))
-                          (apply collections/vcat
+                forbid  (cond 
+                          (contains? #{'def} c0) [[] [0] [1]] ; (def x ...)
+                          (and (contains? #{`fn 'fn 'fn*} c0) (vector? c1)) ; (fn [a b] ...)
+                          (conj (prepends 1 (mapv vector (range (count c1)))) [1])
+                          (contains? #{`fn 'fn* 'fn} c0) ; (fn ([a] ...) ([a b] ...))
+                          (apply collections/vcat [[1]]
                             (mapv #(conj (prepends %2 (prepends 0 (mapv vector (range (count (first %1))))))
                                      [%2 0])
                               (rest code-ex) (range 1 1e100)))
                           (contains? #{`binding 'binding*} c0)
                           (prepends 1 (mapv vector (range (count c1))))
                           (contains? #{`let 'let* `loop 'loop*} c0)
-                          (prepends 1 (mapv vector (range 0 (count c1) 2)))
+                          (conj (prepends 1 (mapv vector (range 0 (count c1) 2))) [1])
                           (contains? #{`def 'def*} c0)
                           [[1]]
                           (contains? #{'recur} c0)
                           (into [] (mapv vector (range 1 (count code-ex)))) ; the [0] path is covered by special check.
                           :else [])]
             (collections/vcat forbid1 forbid))
-          (contains? cnav/specials code-ex) [[]]
+          (or (contains? cnav/specials code-ex) (= code-ex 'fn)) [[]]
           (and (symbol? code-ex) (string/starts-with? (str code-ex) "java.lang"
                                    )) [[]] ; Doesn't cover all java fns, but Math is the main one.
           :else [])))))
@@ -191,32 +208,41 @@
     (select-keys bad2good
       (filterv #(get bad2good %) forbidden))))
 
-(defn _log-pathss-with-debug! [log-syms log-pathss log-atom sym-qual runs]
-  "Throws and reports various types of errors. Always mexpands.
+(defn path-anal [code & include-code-ex?]
+  "Combines various path functions."
+  (let [code-ex (pathedmexp/pmexpand code)
+        ipaths (set (interest-paths code-ex))
+        no-paths-ex (set (forbidden-paths code-ex))
+        log-paths-ex (set/difference ipaths no-paths-ex)
+        log-paths (_path-remap code log-paths-ex)
+        _ (if (empty? (set/difference log-paths (set (collections/paths code)))) "Good" 
+            (throw (Exception. "Log-paths point to non-existant code paths.")))
+        _ftmp #(if include-code-ex? (assoc % :code-ex code-ex) %)
+        apaths (alternative-paths code-ex no-paths-ex)]
+    (_ftmp {:ipaths-ex ipaths :notpaths-ex no-paths-ex
+            :lpaths log-paths :lpaths-ex log-paths-ex
+            :bad2good apaths
+            :good2bad (set/map-invert apaths)})))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Runtime recording;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn _logss-with-debug! [log-syms log-pathss sym-qual runs]
+  "Throws and reports various types of errors. No macroexpansion is performed.
    With no errors, it will run runs logging to to log-atom.
    Sets log paths (they should later be removed unless mutation is desired)."
-  (binding [logger/*log-atom* log-atom logger/*err-print-code?* false logger/*log-stack?* false]
+  (binding [logger/*err-print-code?* true logger/*log-stack?* false]
     (println "Setting log paths for these symbols:" log-syms)
     (let [fn-to-run (eval sym-qual)
-          logss (mapv #(apply logger/with-log-paths (zipmap log-syms log-pathss) true fn-to-run %) runs)
+          logss (mapv #(apply logger/with-log-paths (zipmap log-syms log-pathss) false fn-to-run %) runs)
           results (mapv #(:results (meta %)) logss)
           is-exception? #(instance? java.lang.Exception %)
           err?s (mapv is-exception? results)]
       (mapv (fn [err? lsym lphs] ; Throws an exception if there is an error.
               ; TODO: this only checks runtime exceptions!
               (if err? (println "Warning! we only will detect compile time bad log paths!"))
-              (if err? (logger/find-bad-logpaths sym-qual lsym lphs true true nil))) 
-        err?s log-syms log-pathss))))
-
-(defn interesting-paths [def-code-ex]
-  "Paths that go inside the function of a def AND not the first element of lists."
-  (let [phs (collections/paths def-code-ex)]
-    (filterv #(let [x0 (collections/cget def-code-ex (first %))
-                    inside-outer-fn? (and (coll? x0) (= (first x0) 'fn*))
-                    x (collections/cget-in def-code-ex (butlast %))
-                    not-first-list? (or (not (collections/listy? x))
-                                      (not= (last %) 0))]
-                (and inside-outer-fn? not-first-list?)) phs)))
+              (if err? (logger/find-bad-logpaths sym-qual lsym lphs false true nil))) 
+        err?s log-syms log-pathss)
+      logss)))
 
 (defn _log-organize [logs good2bad-pathss]
   "Returns map from log path to vector of log :values with said path. good2bad-pathss can be empty.
@@ -234,7 +260,6 @@
   "Runs sym-qual on each of runs. Each run is a vector of arguments to the fn bound to sym-qual.
    Returns map from log-paths to a vector of values. Log-paths are [sym-qual, ~path-within-code].
    Includes the dependent symbols of f, and gives logs in chronological order.
-   Macroexpands the code first!
    Clears all logs in runs.
    Warning: slow! Use on tiny examples!"
   (let [the-fn (eval sym-qual)
@@ -247,19 +272,17 @@
                       (unerror/pr-error e))))]
     (if (string? vanilla) vanilla
       (let [;_ (println "Deep profile covering:" (mapv textparse/unqual log-syms))
-            sym2code-ex #(sunshine/pipeline (textparse/sym2ns %) 
-                           (langs/var-source %) true)
-            code-exs (mapv sym2code-ex log-syms)
-            pathss (mapv set (mapv interesting-paths code-exs))
-
-            bad-pathss (mapv set (mapv forbidden-paths code-exs))
-            log-pathss (mapv set (mapv set/difference pathss bad-pathss))            
-            log-atom (atom {})
+            codes (mapv langs/var-source log-syms)
+            anals (mapv path-anal codes)
             
-            profile (apply collections/vcat (_log-pathss-with-debug! log-syms log-pathss log-atom sym-qual runs))
-            good2bad-pathss (zipmap log-syms 
-                              (mapv set/map-invert (mapv alternative-paths code-exs bad-pathss)))]
-        (_log-organize (:logs @log-atom) good2bad-pathss)))))
+            pathss-ex (mapv :ipaths-ex anals)
+            bad-pathss-ex (mapv :notpaths-ex anals)
+            log-pathss-ex (mapv :lpaths-ex anals)
+            log-pathss (mapv :lpaths anals) ; Log the UNexpanded code.          
+            
+            logs (apply collections/vcat (_logss-with-debug! log-syms log-pathss sym-qual runs))
+            good2bad-pathss (zipmap log-syms (mapv :good2bad anals))]
+        (_log-organize logs good2bad-pathss)))))
 
 (defn food-profiles [sym-qual runs]
   "{fn-sym}[chronological][which-arg-ix] => value of argument.
@@ -270,7 +293,7 @@
         log-ns-objs (mapv #(find-ns (textparse/sym2ns %)) log-syms)
         codes (mapv langs/var-source log-syms)
        
-        fncall-pathss (mapv #(logger/fncall-logpaths %1 (textparse/sym2ns %2)) codes log-syms) ; [sym][whihc path][path]
+        fncall-pathss (mapv #(logger/fncall-logpaths %1 (textparse/sym2ns %2)) codes log-syms) ; [sym][which path][path]
 
         log-pathsss (mapv (fn [code fncall-paths] 
                             (mapv (fn [fn-path]

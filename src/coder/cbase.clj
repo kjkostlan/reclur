@@ -142,7 +142,7 @@
 
 (defn nonlocal-syms [code ns-sym]
   "Set of external symbols, i.e. symbols that point outside of the code, all qualified."
-  (let [syms (cnav/symbols-in (sunshine/pipeline ns-sym code false))]
+  (let [syms (cnav/symbols-in (sunshine/deshadow-qual ns-sym code))]
     (filterv textparse/qual? syms)))
 
 (defn uses-of [qual-sym]

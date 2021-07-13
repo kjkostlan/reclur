@@ -68,9 +68,9 @@
         (if (first (filter #(path-of % search-key true) (keys code))) [] false)
         :else false))))
 
-(defn paths-of [code search-key include-map-keys?]
+(defn paths-of [code search-key & include-map-keys?]
   "Paths that lead to search-key in code."
-  (let [stop (if search-key false true)]
+  (let [stop (if search-key false true) include-map-keys? (first include-map-keys?)]
     (loop [x code out []]
       (let [ph1 (path-of x search-key include-map-keys?)]
         (if (= ph1 (last out)) (throw (Exception. "Something is not working.")))

@@ -30,8 +30,6 @@
 (defn error [& args] "Debug"
   (throw (Exception. (apply str args))))
 
-#_(def ^:dynamic *debug-shorten-code?* false)
-
 (defonce eval-lasterr (atom ""))
 
 (defn eval+ [code]
@@ -56,6 +54,12 @@
            logs (if (:logs %) (:logs %) [])]
       (assoc % :logs (conj logs log)))) x)
 
+(defn pr-report [local-vars x]
+  "Prints information as to what local vars are. Then prints x. Returns x."
+  (println "Report:::")
+  (mapv #(println %1 "=" %2) (keys local-vars) (vals local-vars))
+  (println "Result =" x) x)
+
 ;;;;;;;;;;;;; Code processing functions ;;;;;;;;;;;;;;
 
 (defmacro logm! [form path]
@@ -63,6 +67,12 @@
          result# ~form
          t1# (System/nanoTime)]
      (log! result# ~path t0# t1#) result#))
+
+(defmacro pr-reportm [form]
+  "Useful for debugging. Recommended to bind to a hotkey such as ctrl+p."
+  (let [locals (mapv symbol (keys &env))
+        loc-map (zipmap (mapv str locals) locals)]
+    `(pr-report ~loc-map ~form)))
 
 (defn logify-code1 [code log-path path-in-code]
   "Naive logging of the code. Other functions must make sure we don't use a log-path that steps on special forms."
@@ -111,19 +121,27 @@
     (with-meta (set (keys loggers-for-sym)) {:mexpand? (boolean mexpand?)})))
 
 (defn get-logged-code-and-fn [sym-qual paths mexpand?]
-  "[logged code, fn (nil if error), exception (nil if no err)]"
+  "Returns [logged code, fn (nil if error), exception (nil if no err)].
+   Code should be defn."
   (let [paths (set paths) ; remove dupes.
         ns-obj (find-ns (textparse/sym2ns sym-qual))
         code (symqual2code sym-qual mexpand?)
+        c0 (first code)
+        _ (if (not (contains? #{'def 'defn `defn 'definline `definline} c0))
+            (throw (Exception. (str "Logging only tested on def, defn, or definline codes, which " sym-qual " isn't. Not sure what will happen..."))))
         s-fn #(+ (* (double (count %)) 1.0e8)
                 (if (number? (last %)) (last %) 0.0))
         paths-sort (into [] (reverse (sort-by s-fn paths))) ; must be added long to short, later to earlier (for things like logging fn args).
-        _ (let [firstph (last paths-sort)]
+        _ (let [firstph (last paths-sort)
+                def? (contains? #{'def} c0)]
             (if (and firstph
                   (or (< (count firstph) 1)
-                    (not (coll? (collections/cget code (first firstph))))))
+                    (and def? (< (first firstph) (dec (count code))))
+                    (and (not def?)
+                      (let [cx (collections/cget code (first firstph))]
+                        (and (not (coll? cx)) (not (string? cx)))))))
               (throw (Exception. 
-                       (str "All logpaths must be inside the function part of a defn, but " firstph " isn't")))))
+                       (str "All logpaths must be inside the function part of a defn, but " firstph " isn't for: " sym-qual)))))
         logged-code (reduce #(logify-code1 %1 (collections/vcat [sym-qual] %2) %2) code paths-sort)
         logged-fn-code (if mexpand? (last logged-code)
                          (apply list 'fn (collections/cget logged-code 2) (subvec (into [] logged-code) 3)))

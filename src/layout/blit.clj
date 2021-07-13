@@ -5,10 +5,11 @@
 (ns layout.blit
   (:require [coder.crosslang.langs :as langs] [coder.cbase :as cbase]
     [coder.textparse :as textparse]
+    [collections]
     [clojure.string :as string]
     [clojure.walk :as walk]
     [clojure.pprint :as pprint]
-    [collections]))
+    [clojure.set :as set]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Basic functions ;;;;;;;;;;;;;;;;;
  
@@ -50,6 +51,29 @@
   (if *allow-structural-unmacro*
     (throw (Exception. "Structural unmacroing not implemented TODO. Note we need a function that changes paths as well!")))
   (walk/prewalk leaf-unmacro code))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Other cleanup functions ;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn sym-nicknames [sym-quals & make-unqual?]
+  "Makes a map from symbol to it's nickname, nicknames are unique.
+   Qualified symbol can be quite long.
+   This function is currently not used here but TODO may be useful."
+  (let [sym-quals (set sym-quals)
+        stub (fn [sq k]
+               (let [pieces (string/split (str sq) #"\/") n (count pieces)
+                     pieces (if (> n k) (subvec pieces (- n k) n) pieces)]
+                 (apply str (interpose (if (first make-unqual?) "_" "/") pieces))))]
+    (loop [acc {} need sym-quals n 1]
+      (if (= (count need) 0) acc
+        (let [need-stubs (mapv #(stub % n) need)
+              need2stub (zipmap need need-stubs)
+              freqs (frequencies need-stubs)
+              unique-stubs (set (filterv #(= (get freqs %) 1) (keys freqs)))
+              stub2need (zipmap need-stubs need)
+              uneed2stub (zipmap (mapv #(get stub2need %) unique-stubs) unique-stubs)
+              acc1 (merge acc uneed2stub)]
+          (recur acc1
+            (set/difference need (set (keys uneed2stub))) (inc n)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Code to decide where we should indent and blitting to a nice format ;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -198,12 +222,13 @@
                 (if (< ix ntok) 
                   (let [ty (nth tok-types ix) max1 (if (> lev max-lev) lev max-lev)]
                     (if (= ty 4) (do (aset-int delta-syntaxs ix 1) 
-                                   (recur (inc ix) (inc lev) max1))
+                                   (recur (inc ix) (inc lev) (inc max1)))
                       (if (= ty 5)
                         (do (aset-int delta-syntaxs ix -1)
                           (recur (inc ix) (dec lev) max1))
                         (recur (inc ix) lev max-lev))))
                   max-lev))
+        
         ;^ints token-lengths (make-array Integer/TYPE ntok)
         ;_ (loop [ix (int 0)]
         ;    (if (< ix ntok)
@@ -302,6 +327,7 @@
 
 (defn _vps-core [code-or-str]
   (let [code (to-code code-or-str)
+        _ (try (pr-str code) (catch Exception e (throw (Exception. "Badly formatted code.")))) ; does this ever happen?
         tok-str+types (lean-tokenize code)
         tok-strs (first tok-str+types)
         tok-types (second tok-str+types)
@@ -322,7 +348,8 @@
 (defn vps [code-or-str]
   "Very Prettyprint to String."
   (let [code (to-code code-or-str)]
-    (if (coll? code) (apply ez-blit (_vps-core code-or-str)) (pr-str code))))
+    (if (coll? code) (apply ez-blit (_vps-core code-or-str)) 
+      (binding [*print-meta* true] (pr-str code)))))
 
 (defn vp [code-or-str]
   "Very Prettyprint"

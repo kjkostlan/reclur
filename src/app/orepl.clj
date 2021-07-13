@@ -347,8 +347,13 @@
                   :unqual? true}
         ns-sym (symbol (str *ns*))
         opts (merge defaults opts)
-        code (cond (or (:pipeline? opts) (:sunshine? opts)) (sunshine/pipeline ns-sym code (:expand? opts))
-               (or (:expand? opts) (:mexpand? opts) (:macroexpand? opts) (:macro-expand? opts)) (langs/mexpand ns-sym code) 
-               :else code)
-        report (if (:unqual? code) (blit/vps code) (blit/vpsu code))]
+        code (if (or (:expand? opts) (:mexpand? opts) (:macroexpand? opts) (:macro-expand? opts)) (langs/mexpand ns-sym code) code)
+        code (if (or (:pipeline? opts) (:sunshine? opts)) (sunshine/deshadow-qual ns-sym code) code)
+        report (if (:unqual? opts) (blit/vps code) (blit/vpsu code))]
     (if (:console? opts) (println report) report)))
+
+(defn lines [x & k]
+  "Long vector? Make one (or more) element each line."
+  (let [k (if (first k) (first k) 1)
+        s (map #(if (= (mod (inc %) k) 0) "\n" " ") (range))]
+    (apply str (interleave x s))))

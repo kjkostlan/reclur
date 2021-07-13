@@ -9,7 +9,8 @@
    [coder.crosslang.langs :as langs]
    [coder.cnav :as cnav]
    [layout.colorful :as colorful]
-   [coder.cbase :as cbase]))
+   [coder.cbase :as cbase]
+   [coder.textparse :as textparse]))
 
 ; The global rtext contains a language protocol in :langkwd that is used for text coloring and 
 ; contraction/expansion, etc.
@@ -253,21 +254,24 @@
 
 (defn hint-sym-qual [box]
   "Most useful in the repl, where a symbol gets qualed."
-  (let [box1 (select-twofour-click box false)
-        sel0 (:selection-start box1)
-        sel1 (:selection-end box1)]
-    (if (> sel1 sel0)
-      (let [sel-str (subs (rtext/rendered-string box) sel0 sel1)
-            sym? (not (re-find #"[\[\]{}\(\) ]" sel-str))]
-        (if sym? 
-          (let [strs (sort (mapv str (cbase/symaverse)))
-                matches (filterv #(string/includes? % sel-str) strs)]
-            (if (= (count matches) 0) 
-              (do (println "No matching fully qualified symbols [in loaded namespaces] to" sel-str) box)
-              (do (if (> (count matches) 1) (println "Multible matches to" sel-str "taking fist one."))
-                (rtext/edit box1 sel0 sel1 (first matches) []))))
-          (do (println "The selection at+ the cursor is not a symbol.") box)))
-      (do (println "No selection can be made from cursor's location.") box))))
+  (let [boxes [(select-twofour-click box false) (select-twofour-click (update box :cursor-ix inc) false) box]
+        sel0s (mapv :selection-start boxes)
+        sel1s (mapv :selection-end boxes)
+        sel-strs (mapv #(subs (rtext/rendered-string %1) %2 %3) boxes sel0s sel1s)
+        sym-ix (first (filter (fn [ix] (let [txt (nth sel-strs ix)]
+                                         (and (> (count txt) 0) (not (re-find #"[\[\]{}\(\) ]" txt))))) 
+                        (range (count sel-strs))))]
+    (if sym-ix 
+      (let [sym-str (nth sel-strs sym-ix)
+            strs (sort (mapv str (cbase/symaverse)))
+            private? #(let [u (str (textparse/unqual (symbol %)))] (or (string/starts-with? u "-") (string/starts-with? u "_")))
+            strs (concat (remove private? strs) (filter private? strs)) ; private later.
+            matches (filterv #(string/includes? % sym-str) strs)]
+        (if (= (count matches) 0) 
+          (do (println "No matching fully qualified symbols [in loaded namespaces] to" sym-str) box)
+          (do (if (> (count matches) 1) (println "Multible matches to" sym-str "taking fist one."))
+            (set-precompute (rtext/edit box (nth sel0s sym-ix) (nth sel1s sym-ix) (first matches) [])))))
+      (do (println "What is at the cursor is not a symbol.") box))))
 
 (defn key-press [key-evt box]
   "Key-based interaction 101. Tab indents (shift-tab dedents) rather than whoops where did the block of code go.
