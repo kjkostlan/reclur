@@ -358,9 +358,19 @@
   "Non-common tools that are interactive versions of commands."
   [{:name :no-tool}])
 
+(defn attempt-repair [s]
+  "Tries to remove common problems with s that can throw an exception.
+   Does not remove all problems and will not help if the event function is broken, etc."
+   (print "ATTEMPT REPAIR" (keys s))
+  (let [ensure-place #(let [c1 (if (:position %) % (assoc % :position [0.0 0.0]))
+                            c2 (if (:size c1) c1 (assoc c1 :size [800.0 600.0]))
+                            c3 (if (:z c2) c2 (assoc c2 :z 0.0))] c3) ; Easily forgotten. 
+        s (update-in s [:components] #(zipmap (keys %) (mapv ensure-place (vals %))))]
+    s))
+
 (defn logged-function-run [f s & args]
   "(apply f s args), logging to siconsole printlns within f as well as exceptions to s.
-   f returns the new value of s. If f throws an exception s isn't changed apart from logging."
+   f returns the new value of s. If f throws an exception s isn't changed apart from logging and an attempted repair."
   (let [outs clojurize/*our-out*
         s1-or-ex (binding [*out* outs] (try (apply f s args) (catch Exception e e)))
         txt (clojurize/extract! outs)
@@ -368,8 +378,9 @@
         err? (instance? java.lang.Exception s1-or-ex) 
         s2 (if err? s s1-or-ex)
         s3 (if (= (count txt) 0) s2 (siconsole/log s2 txt))
-        s4 (limit-cam s3)]
-     (if err? (do (println (unerror/pr-error s1-or-ex)) (siconsole/log s4 (unerror/pr-error s1-or-ex))) s4)))
+        s4 (limit-cam s3)
+        s5 (if err? (attempt-repair s4) s4)]
+     (if err? (do (println (unerror/pr-error s1-or-ex)) (siconsole/log s5 (unerror/pr-error s1-or-ex))) s5)))
 
 (defn undo-wrapped-listener [evt-g s]
   (let [ty (:type evt-g)
