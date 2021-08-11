@@ -266,20 +266,23 @@
 ;;;;;;;;;;;;;;;;;;; Rendering runtime ;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn convert-commands [cmds]
+(defn convert-commands [cmds last-cmd-atom]
  "Converts commands from functional drawing format to java's mutable-state format.
   Returns :intro and :cmds
   The input commands have an optional third argument that specifies (i.e. color).
   We pull out the third argument into i.e. :Color and reverse the setColor command for the next run.
   :intro is :getColor, etc commands for finding out what the defaults are, :cmds are the main command.
   The :default keyword as a second argument means use the defaultinstead of the second arg itself."
-  (let [n (count cmds)
-        ever-changed (apply hash-set (apply concat (mapv #(if-let [x (get % 2)] (keys x) []) cmds))) ; #{:Color, :Stroke, etc}
+  (let [_ (if last-cmd-atom (reset! last-cmd-atom "<No command hit>"))
+        n (count cmds)
+        acf #(if-let [x (do (if last-cmd-atom (reset! last-cmd-atom %)) (get % 2))] (keys x) [])
+        ever-changed (apply hash-set (apply concat (mapv acf cmds))) ; #{:Color, :Stroke, etc}
         intro (mapv #(keyword (str "get" (subs (str %) 1))) ever-changed)] 
     {:intro intro :cmds
       (loop [acc [] non-defaults {} ix 0]
         (if (= ix (count cmds)) acc
           (let [cmd (nth cmds ix)
+                _ (if last-cmd-atom (reset! last-cmd-atom cmd))
                 specs (if-let [x (get cmd 2)] x {}) ; The second argument is stuff like color, etc that mutates the java class.
                 ; Works for both java and non-java objects:
                 changes (reduce #(let [sp (get specs %2) old (get non-defaults %2)]
@@ -324,19 +327,43 @@
                  (catch Exception e (report-e (str "Error for command: " (k bank) " given: " arg " on: " (g-code k)) e)))))
            (throw (Exception. (str "Unrecognized draw command: " k))))))))
 
-(defn paint-gfx! [^Graphics2D g cmds]
+(defn _paint-gfx-fairweather! [^Graphics2D g camera cmds need-convert?]
+  "Shine (but not rain): Fails if the cmds are bad."
+  (let [cmds (if (nil? camera) cmds (mapv #(xgfx camera % true) cmds))
+        cmds (if need-convert? (convert-commands cmds nil) cmds)
+        intro (:intro cmds)
+        body (:cmds cmds)
+        _ (reset! dbat {:pre cmds :post body}) ; Debug atom.
+        defaults (zipmap intro (mapv #(if-let [get-default (get cmd-bank %)] (get-default g)) ; Settings that will be changed, requiring us to store defaults.
+                                 intro))]
+    (mapv #(try (draw1! g % defaults)
+             (catch Exception e
+               (throw (Exception. (str "Converted command failed to draw: " %))))) body)))
+(defn paint-gfx! [^Graphics2D g camera cmds]
   "Paints graphics given a vector of cmds in the format described at the top of this file."
-  (if (nil? cmds) (throw (Exception. "Nil gfx cmds given.")))
-  (if (not (sequential? cmds)) (throw (Exception. "gfx cmds arent a vector, list, etc.")))
-  (let [cmds (convert-commands cmds)
-        intro (:intro cmds) ; defaults we need to store.
-        body (:cmds cmds) ; the drawing itself.
-        
-        g-code (fn [k] (binding [*print-meta* true] (pr-str (k _cmd-bank)))) ; for error reporting.
-        defaults (zipmap intro (mapv #(try ((get cmd-bank %) g) ; Settings that will be changed, requiring us to store defaults.
-                                        (catch Exception e (report-e (str "Error getting default:" % " on: " (g-code %)) e))) intro))]
-    (reset! dbat {:pre cmds :post body})
-    (mapv #(draw1! g % defaults) body)))
+  (let [get-err (fn [] (throw (Exception. "Error was thrown when painting.")))
+        err-report-cmds (fn [hint] ; These commands draw basic text and will not generate an error.
+                          (gfxcustom/err-gfx (get-err) hint))]
+   (cond (nil? cmds) (_paint-gfx-fairweather! g camera (err-report-cmds "Nil GFX cmd list") true)
+     (not (sequential? cmds)) (_paint-gfx-fairweather! g camera (err-report-cmds "Gfx cmds must be a vector.") true)
+     :else
+     (let [cmds (into [] cmds)
+           e-atom (atom {})
+           cmds-xf-or-err-ix (try (mapv #(xgfx camera % true) cmds)
+                               (catch Exception e
+                                 (first (filter identity (mapv #(try (do (xgfx camera (nth cmds %) true) false)
+                                                                       (catch Exception e 
+                                                                         (do (reset! e-atom e) %))) (range (count cmds)))))))]
+       (if (number? cmds-xf-or-err-ix)
+         (_paint-gfx-fairweather! g camera (gfxcustom/err-gfx @e-atom (str "Applying camera xform failed on: " (nth cmds cmds-xf-or-err-ix))) true)
+         (let [debug-atom (atom nil)
+               cmds-or-err (try (convert-commands cmds-xf-or-err-ix debug-atom) (catch Exception e e))]
+           (if (map? cmds-or-err)
+             (try (_paint-gfx-fairweather! g nil cmds-or-err false)
+               (catch Exception e
+                 (_paint-gfx-fairweather! g camera (gfxcustom/err-gfx e "GFX cmds could be converted, but rendering failed.") true)))
+             (_paint-gfx-fairweather! g camera (gfxcustom/err-gfx cmds-or-err 
+                                                  (str "GFX cmd could not be converted: " @debug-atom)) true))))))))
 
 (defn make-imagep [cmds]
   "Makes a single image's gfx cmds along with it's xform. This is before any camera translation.
@@ -358,10 +385,9 @@
         ^BufferedImage img (.createCompatibleImage gc (int sx) (int sy) (int Transparency/TRANSLUCENT))
         ;(BufferedImage. (int sx) (int sy) (int BufferedImage/TYPE_INT_ARGB))
         ^Graphics2D g (.createGraphics img)
-        _ (healthy-stroke! g)
-        cmds-xformed (mapv #(xgfx xf % true) cmds)]
+        _ (healthy-stroke! g)]
     (fixed-width-font! g)
-    (paint-gfx! g cmds-xformed) [img xf]))
+    (paint-gfx! g xf cmds) [img xf]))
   
 (defn add-image! [^Graphics2D g ^BufferedImage sprite-im im-xform camera]
   "Adds the image to g with the xform applied from the camera."
@@ -395,13 +421,12 @@
                                  enough-for-sprite? (> (- t-now t-old) wait-ns)
                                  sp? (and (:bitmap-cache? %2) enough-for-sprite?)]
                              (if (and sp? sp-old (= gc-old gc)) sp-old
-                               (if sp? (make-imagep gc)))) kys vls))
-        camg (fn [cm] #(xgfx cm %1 true))]
+                               (if sp? (make-imagep gc)))) kys vls))]
     (mapv #(let [sp (get sprites1p %) cam (get cameras %)]
              (if sp 
                (add-image! g (first sp) (xform/x-1 (second sp)) cam)
-               (let [gc (get gfx-cmds %)] 
-                 (paint-gfx! g (mapv (camg cam) gc))))) kys)
+               (let [cmds-this-box (get gfx-cmds %)] 
+                 (paint-gfx! g cam cmds-this-box)))) kys)
     sprites1p))
 
 (defn defaultPaintComponent! [g this-obj]

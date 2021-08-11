@@ -35,6 +35,12 @@
   ([f coll] (.reduce ^clojure.lang.IReduce coll f))
   ([f val coll] (println "Coll is:" coll) (.reduce ^clojure.lang.IReduceInit coll f val)))
 
+(defn queue 
+  "Creates or converts a coll to clojure's builtin queue type, from https://admay.github.io/queues-in-clojure/"
+  ([] (clojure.lang.PersistentQueue/EMPTY))
+  ([coll]
+    (reduce conj clojure.lang.PersistentQueue/EMPTY coll)))
+
 ;;;;;;;;;;;;;;;; Modified functions (an accent on functions we know) ;;;;;;;;;;;;;;
 
 (defn vcat [& cs] ; TODO: would catv be a better name consistency?

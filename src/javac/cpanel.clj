@@ -7,7 +7,8 @@
     [javac.clojurize :as clojurize]
     [coder.unerror :as unerror]
     [app.iteration :as iteration]
-    [crossplatform.cp :as crossp])
+    [crossplatform.cp :as crossp]
+    [collections])
   (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent ComponentAdapter]
     [javax.swing SwingUtilities]
     [java.awt FlowLayout] 
@@ -17,7 +18,7 @@
 ;;;;;;;;;;;;;;;;;;;;; Settings ;;;;;;;;;;;;;;;;;;;;
 
 (def ^:dynamic *frame-time-ms* 30) ; a somewhat complex mechanism to ensure graceful degradation when the events are heavy.
-(def ^:dynamic *flush-every-nframe* 15) ; Flush our output stream.
+(def ^:dynamic *nframe-slowdown-when-idle* 15) ; Same CPU when nothing is requesting an every frame event.
 (def ^:dynamic *drop-frames-queue-length-threshold* 3)
 (def ^:dynamic *mac-keyboard-kludge?* false) ; A huuuuuuge bug with typing involving accents stealing focus. 
 (def ^:dynamic *add-keyl-to-frame?* true) ; tab only works on the frame. False goes to panel.
@@ -29,11 +30,6 @@
 (defn empty-state []
   {:evt-queue [] :external-state {:X0 0 :Y0 0 :X1 0 :Y1 0}})
 
-(defn grequel [gr]
-  "Black background and monospaced font, added to the beginning of graphics."
-  (into [] (concat [[:java (fn [g] (.setFont g (java.awt.Font. "Monospaced" 0 10)))]
-             [:fillRect [0 0 3000 3000] {:Color [0.01 0 0 1]}]] gr)))
- 
 ;;;;;;;;;;;;;;;;;;;;; Queing ;;;;;;;;;;;;;;;;;;;;;
 
 (defn update-external-state [e-clj kwd old-extern]
@@ -126,8 +122,8 @@
         (let [x @one-atom
               s (:app-state x)
               t (swap! _frame-counter inc)]
-          (if (or (> (count (:hot-repls s)) 0) ; A single empty hot repl adds idle CPU about 1.25%
-                (= (mod t *flush-every-nframe*) 0)) 
+          (if (or (> (count (:hot-boxes s)) 0) ; A single empty hot box adds about 1.25% CPU, tripling our CPU usage.
+                (= (mod t *nframe-slowdown-when-idle*) 0)) 
             (event-queue! {:Time (System/currentTimeMillis)} :everyFrame)))
         (dispatch-loop!)
         (if (:needs-gfx-update? @one-atom) (update-graphics!))

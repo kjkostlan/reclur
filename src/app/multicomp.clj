@@ -65,7 +65,7 @@
   "tree is indexes with :children for folders and :text for the filename."
   (let [tmpk (gensym "reference") fb (fbrowser/new-fbrowser tree) ; sync to a temp component.
         comps1 (dissoc (multisync/comprehensive-sync (:components s) (assoc (:components s) tmpk fb)) tmpk)]
-    (assoc s :components (if reset-fullname0s? (zipmap (keys comps1) (mapv fbrowser/reset-fullname0s (vals comps1))) comps1))))
+    (assoc s :components (if reset-fullname0s? (zipmap (keys comps1) (mapv #(if (= (:type %) :fbrowser) (fbrowser/reset-fullname0s %) %) (vals comps1))) comps1))))
 
 (defn open-fcache [comps fname]
   "Loads fname from s, not the disk. nil if fname isn't found."

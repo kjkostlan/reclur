@@ -1,4 +1,4 @@
-; Demos that show potential should be turned into full versions.
+; Misc demos
 
 (ns test.demo
   (:require [coder.cbase :as cbase]
@@ -10,7 +10,8 @@
     [coder.cnav :as cnav]
     [coder.crosslang.langs :as langs]
     [coder.textparse :as textparse]
-    [coder.cbase :as cbase]))
+    [coder.cbase :as cbase]
+    [globals]))
 
 (defonce futures (atom []))
 

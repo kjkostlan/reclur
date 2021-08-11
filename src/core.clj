@@ -95,14 +95,15 @@
     s2))
 
 (defn single-comp-dispatches [evt-c s]
-  (let [sel (set/intersection (apply hash-set (keys (:components s))) (apply hash-set (:selected-comp-keys s)))] ; normalize this.
+  (let [sel (set/intersection (apply hash-set (keys (:components s))) 
+              (apply hash-set (:selected-comp-keys s)))] ; normalize this.
     (reduce 
       (fn [s k] (binding [*comp-k* k] (single-comp-dispatch evt-c s k))) 
          (assoc s :selected-comp-keys sel) sel)))
 
 (defn dispatch-hot-events [s evt-c]
   "Mouse move evts and everyFrame evts are ignored, as they cost CPU battery life.
-   But what if you are using the repl as a video game? They should let you do anything. We store the hot repl list."
+   But what if you are making a video game? They should let you do anything. We store the hot box list."
   (reduce (fn [s k] (single-comp-dispatch evt-c s k)) s (:hot-boxes s)))
 
 (defn update-hot-boxes [s]
@@ -311,8 +312,7 @@
   (if (not (map? comp)) (throw (Exception. "Non-map component")))
   (let [gfx (try ((:render comp) (dissoc comp :position) focused?)
               (catch Exception e 
-                (let [pieces (string/split (unerror/pr-error e) #"\n")]
-                  (mapv #(vector :drawString [%1 10 (+ 10 (* %2 10))] {:Color [1 1 1 1]}) pieces (range)))))] 
+                (gfxcustom/err-gfx e "The :render fn crashed for this box.")))] 
         (if (= (count gfx) 0) (println "WARNING: no graphics drawn."))
     gfx))
 
