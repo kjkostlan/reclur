@@ -19,16 +19,17 @@
 
 (def ^:dynamic *frame-time-ms* 30) ; a somewhat complex mechanism to ensure graceful degradation when the events are heavy.
 (def ^:dynamic *nframe-slowdown-when-idle* 15) ; Same CPU when nothing is requesting an every frame event.
-(def ^:dynamic *drop-frames-queue-length-threshold* 3)
+(def ^:dynamic *drop-frames-queue-length-threshold* 1024) ; Not needed for now but we may change how we deal with slow dispatches.
+(def ^:dynamic *drop-frames-report-every* 50)
 (def ^:dynamic *mac-keyboard-kludge?* false) ; A huuuuuuge bug with typing involving accents stealing focus. 
 (def ^:dynamic *add-keyl-to-frame?* true) ; tab only works on the frame. False goes to panel.
 
 ;;;;;;;;;;;;;;;;;;;;; Other Support functions ;;;;;;;;;;;;;;;;;;;;;
 
-(defonce _ (println "If you are on a mac don't forget:   defaults write -g ApplePressAndHoldEnabled -bool false"))
+(defonce _ (println "If you are on a mac this may help:   defaults write -g ApplePressAndHoldEnabled -bool false"))
 
 (defn empty-state []
-  {:evt-queue [] :external-state {:X0 0 :Y0 0 :X1 0 :Y1 0}})
+  {:evt-queue (collections/queue) :external-state {:X0 0 :Y0 0 :X1 0 :Y1 0}})
 
 ;;;;;;;;;;;;;;;;;;;;; Queing ;;;;;;;;;;;;;;;;;;;;;
 
@@ -52,20 +53,19 @@
       :AltGraphDown (:AltGraphDown e-clj)))
     :else old-extern))
 
-(defn queue1 [x e kwd] 
-  "Queues e, but frame events can't stack directly on other frame events or else pileup to infinity.
+(defonce _dropped-frame-counter (atom 0)) ; Reports if many frames were dropped.
+(defn queue1 [x e-clj kwd] 
+  "Queues e, with reasonable limits to prevent everyFrame events piling-up to infinity.
    Handles both java and clojure datastructures for e, converting e into clojure if it is a java event."
-  (let [e-clj (if (map? e) e (clojurize/translate-event e (.getSource e)))
+  (let [_ (if (not (map? e-clj)) (throw (Exception. "all events need to be converted to clojure maps for queue1.")))
         e-clj (assoc (dissoc e-clj :ParamString :ID :When) :type kwd)
-        evtq (:evt-queue x)
-        add? (or (not (= kwd :everyFrame)) 
-               (and (not= (:type (last evtq)) :everyFrame)
-                 (< (count evtq) *drop-frames-queue-length-threshold*)))]
-    ;(if add? (println "Adding: " kwd "old queue len" (count evtq) "new queue len: " (count (conj (into [] evtq) e-clj))))
-    (if add? (assoc x :evt-queue (conj (into [] evtq) e-clj)) x)))
+        evtq (:evt-queue x)]
+    (assoc x :evt-queue (conj evtq e-clj))))
 
-(defn dequeue1 [x] ; returns the modified keys only. Doesn't modify the evt queue, must do that in a swap.
-  (if-let [evt (first (:evt-queue x))]
+(defn dispatch [x evt] 
+  "Processes one event on x. Returns x if evt is nil.
+   Does not affect the event queue."
+  (if evt 
     (let [kwd (:type evt)
           extern (:external-state x)
           evt (if (or (= kwd :mouseDragged) (= kwd :mouseMoved))
@@ -75,44 +75,79 @@
           new-external (update-external-state evt (:type evt) extern)
           new-state (try (if f (f evt (:app-state x)) (:app-state x))
                       (catch Exception e (println e) (:app-state x)))
-          ud? true] ; TODO: better gfx update.
-     {:app-state new-state :external-state new-external :needs-gfx-update? ud?}) {}))
+          ud? true ; TODO: better gfx update rules.
+          ]
+     (assoc x :app-state new-state :external-state new-external :needs-gfx-update? ud?)) x))
+
+(defn dispatch-all [x]
+  "Keeps dispatching events from x until it's queue is empty."
+  (if (empty? (:evt-queue x)) x
+    (let [evts-unsorted (into [] (:evt-queue x))
+          evts (sort-by #(get % :Time 0) evts-unsorted); Sort by time because the future does not preserve order.
+          x1 (reduce (fn [x-acc evt]
+                       (try (dispatch x-acc evt)
+                         (catch Exception e (do (println "dequeue error") x-acc)))) x evts)]
+      (assoc x1 :evt-queue (collections/queue)))))
 
 ;;;;;;;;;;;;;;;;;;;;; Mutation ;;;;;;;;;;;;;;;;;;;;;
 
 (def one-atom globals/one-atom)
 (defonce _ (reset! one-atom (empty-state)))
 
-(defn update-graphics! []
-  (let [x @one-atom 
-        udgfx (:update-gfx-fn x)]
+(defn can-add? [e-clj report-if-fail?]
+  "Not too many every frame events."
+  (let [evtq (:evt-queue @one-atom) ; safe to be async with respect to the locking code.
+        kwd (:type e-clj)
+        add? (or (not (= kwd :everyFrame)) 
+               (< (count evtq) *drop-frames-queue-length-threshold*))]
+    (cond add? true
+      (not report-if-fail?) false
+      :else 
+      (do (swap! _dropped-frame-counter 
+            #(if (< % *drop-frames-report-every*) (inc %)
+               (do (println "Dropped many frames due to slow evts and/or gfx: " %) 0))) false))))
+
+(defn lock-swap! [a f]
+  "Like swap! but we lock the atom so that it doesn't run more than once per call.
+   The event calls can cause all sorts of mutations and high-cost computations.
+   All modifications of the atom must be lock-swap'ed (I think), because swap! doesn't fully respect locks on the atom.
+   We use futures on the lightweight fns to avoid freezing the gui, etc."
+   (locking a
+     (reset! a (f @a))))
+
+(defn _update-graphics! [x]
+  "Causes mutation due to calls to the graphics functions."
+  (let [udgfx (:update-gfx-fn x)]
     (if udgfx
       (let [gfx-updated-app-state (try (udgfx (:app-state x)) (catch Exception e (do (println "app gfx update error:" e) (:app-state x))))
-            new-gfx (try ((:render-fn x) gfx-updated-app-state) (catch Exception e (do (println "gfx render error." e) {})))]
+            new-gfx (try ((:render-fn x) gfx-updated-app-state) (catch Exception e (do (println "gfx render error." e) [])))]
         (if-let [panel (:JPanel x)] (try (gfx/update-graphics! panel (:last-drawn-gfx x) new-gfx)
                                       (catch Exception e (println "gfx/update-graphics! error:" e))))
-        (swap! one-atom #(assoc % :last-drawn-gfx new-gfx :app-state gfx-updated-app-state :needs-gfx-update? false))))))
-
-(defn dispatch-loop! []
-  "Keeps dispatching events from the atom. This function is NOT thread safe, the price we pay for ensuring dequeue1 only is called once per event.
-   Note that dequeue1 will sometimes have side-effects and/or be expensive."
-  (while (> (count (:evt-queue @one-atom)) 0)
-    (let [x @one-atom xd (try (dequeue1 x) (catch Exception e (do (println "dequeue error") x)))]
-      (swap! one-atom #(let [x1 (merge % xd) evq (:evt-queue %)]
-                        (assoc x1 :evt-queue (into [] (rest evq)))))))) ; O(n) but should stay small.
+        (assoc x :last-drawn-gfx new-gfx :app-state gfx-updated-app-state :needs-gfx-update? false)) x)))
+(defn update-graphics! []
+  "Causes mutation due to calls to the graphics functions."
+  (lock-swap! one-atom _update-graphics!))
 
 (defn event-queue! [e kwd]
-  (swap! one-atom #(queue1 % e kwd)))
+  (let [e-clj (if (map? e) e
+                (try (clojurize/translate-event e (.getSource e))
+                  (catch Exception e
+                    (do (println "Evt failed to be clojurized and will be dropped: " e)
+                      (throw e)))))
+        e-clj (assoc e-clj :Time (System/currentTimeMillis) :type kwd)
+        add? (can-add? e-clj true)]
+    (if add? (future (lock-swap! one-atom #(queue1 % e-clj kwd))))))
 
 (defn store-window-size! [^JFrame frame]
-  (swap! one-atom #(assoc-in % [:external-state :window-size] 
-                     (let [^java.awt.Dimension sz (.getSize (.getContentPane frame))]
-                       [(.getWidth sz) (.getHeight sz)]))))
+  (future (lock-swap! one-atom 
+            #(assoc-in % [:external-state :window-size] 
+              (let [^java.awt.Dimension sz (.getSize (.getContentPane frame))]
+                [(.getWidth sz) (.getHeight sz)])))))
 
 ; Continuously polling is a (tiny) CPU drain, but it is way easier than a lock system that must ensure we don't get overlapping calls to dispatch-loop!
 ; The idle CPU is 0.7% of one core for the total program (tested Aug 13th 2019).
-(defonce _polling? (atom false)) ; only used to make sure we don't have multiple frame loops, an extra safeguard.
-(defonce _frame-counter (atom -1)) ; Only used locally, to reduce locking concerns setting the main atom.
+(defonce _polling? (atom false)) ; Used to make sure we don't have multiple frame loops, an extra safeguard.
+(defonce _frame-counter (atom -1)) ; Counts the time elapsed in frames, used for idle mode.
 (if (not @_polling?)
   (future 
     (loop [last-millis -1e100] ; This loop runs until the application is quit.
@@ -125,7 +160,7 @@
           (if (or (> (count (:hot-boxes s)) 0) ; A single empty hot box adds about 1.25% CPU, tripling our CPU usage.
                 (= (mod t *nframe-slowdown-when-idle*) 0)) 
             (event-queue! {:Time (System/currentTimeMillis)} :everyFrame)))
-        (dispatch-loop!)
+        (lock-swap! one-atom dispatch-all)
         (if (:needs-gfx-update? @one-atom) (update-graphics!))
         (recur (System/currentTimeMillis)))))
 (reset! _polling? true)
@@ -218,7 +253,6 @@
                       :app-state init-state
                       :dispatch dispatch-fn :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn 
                       :external-state {}
-                      :evt-queue []
                       :JFrame frame :JPanel panel))))))
 
 (defn stop-app! []
