@@ -16,7 +16,8 @@
     [javac.file :as jfile]
     [layout.colorful :as colorful]
     [layout.keyanal :as ka]
-    [layout.blit :as blit]))
+    [layout.blit :as blit]
+    [layout.browseedn :as browseedn]))
 
 ; The rtext has three pieces: 
 ; The first is the text entered. The second is a newline. The last is the repl's output.
@@ -89,18 +90,19 @@
                (let [codei (read-string txt)]
                  (reset! _err? false) codei)
                (catch Exception e e))
-        lim-len (fn [x] (try (limit-length x)
-                          (catch Exception e "LIMIT LEN NOT WORKING -(:")))]
+        lim-len (fn [x]
+                  (try (limit-length (blit/vps (browseedn/summarize [] x)))
+                    (catch Exception e (str "LIMIT LEN NOT WORKING -(:" e))))]
     (if @_err?
       (lim-len (str "Syntax error:" (.getMessage code-or-e) " " (type code-or-e)))
       (try
         (let [current-ns-sym (get-in s [:components repl-k :*ns*])
               r-ns1 (if current-ns-sym (find-ns current-ns-sym) r-ns)
-              y (str (binding [*ns* r-ns1 *this-k* repl-k *world* s] 
+              y (binding [*ns* r-ns1 *this-k* repl-k *world* s]
                   ;(clojure.stacktrace/print-stack-trace (Exception. "foo"))
                   ;(clojure.stacktrace/print-stack-trace (try (eval code) (catch Exception e e)))
-                  (let [out (eval code-or-e)] (reset! tmp-namespace-atom *ns*) out)))]
-          (limit-length y))
+                  (let [out (eval code-or-e)] (reset! tmp-namespace-atom *ns*) out))]
+          (lim-len y))
         (catch Exception e
                 (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
                   (lim-len (str "Runtime error:\n" (repl-err-msg-tweak (unerror/pr-error e))))))))))
