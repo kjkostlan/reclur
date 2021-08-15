@@ -49,7 +49,7 @@
   "Many macros become very long-winded. Do this before indentation.
    Of course, no need to do this if given a string and don't read it as code."
   (if *allow-structural-unmacro*
-    (throw (Exception. "Structural unmacroing not implemented TODO. Note we need a function that changes paths as well!")))
+    (throw (Exception. "Structural unmacroing not implemented TODO (for core macros only). Note we need a function that changes paths as well!")))
   (walk/prewalk leaf-unmacro code))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Other cleanup functions ;;;;;;;;;;;;;;;;;;;;;;;;
@@ -83,14 +83,26 @@
         not-mt (if (= (count trimmed) 0) " " trimmed)]
     (str not-mt (if com? "\n" ""))))
 
+(defn fuse-meta-tag [strings types]
+  "Type = 8 is meta tag, to the next tag which is never space under clojure's pr-str."
+  (loop [acc-str [] acc-ty [] ix 0]
+    (if (= ix (count strings)) [acc-str acc-ty]
+      (let [s (nth strings ix) ty (nth types ix)]
+        (if (= ty 8)
+          (recur (conj acc-str (str s (nth strings (inc ix))))
+            (conj acc-ty (nth types (inc ix)))
+            (+ ix 2))
+          (recur (conj acc-str s)
+            (conj acc-ty ty) (inc ix)))))))
+
 (defn lean-tokenize [code-or-str]
   "Lean tokenization of the code that removes extra whitespace, etc but keeps comments etc.
    There is a trailing newline for (blanck) tokens that are comments.
    Leaves a single space for space tokens so thingsdontjamtogether."
   (let [s (if (string? code-or-str) code-or-str
-            (binding [*print-meta* true]
-              (pr-str code-or-str)))
+            (pr-str code-or-str))
         vt (cbase/tokenize s :clojure)
+        vt (fuse-meta-tag (first vt) (second vt))
         strings (first vt)
         types (second vt) ; 0 = empty, 4=opening, 5=closing.
         lean-strings (mapv #(if (= %2 0) (lean-space-tok %1) %1) strings types)
@@ -349,7 +361,7 @@
   "Very Prettyprint to String."
   (let [code (to-code code-or-str)]
     (if (coll? code) (apply ez-blit (_vps-core code-or-str)) 
-      (binding [*print-meta* true] (pr-str code)))))
+      (pr-str code))))
 
 (defn vp [code-or-str]
   "Very Prettyprint"
