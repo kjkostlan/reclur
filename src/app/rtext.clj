@@ -541,7 +541,8 @@
    IF it is an object or array thereof it adds a new object.
    ix0 = ix1 with insert bieng a letter, etc is a normal typing insertion.
    copy-piece-ixs = sets :copy-piece-ixs in stats, use [] when not pasting in."
-  (let [box (v box) 
+  (let [ix0 (max ix0 0)
+        box (v box)
         stats (assoc (index-stats (:pieces box) ix0 ix1 (:partial-grab-fn box)) :copy-piece-ixs copy-piece-ixs)
         
         pure-deleting? (and (= insert "") (< ix0 ix1))
