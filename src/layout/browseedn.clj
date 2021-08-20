@@ -3,10 +3,11 @@
 (ns layout.browseedn
   (:require [clojure.set :as set] [clojure.string :as string]
     [layout.blit :as blit]
+    [app.codebox :as codebox]
     [collections]))
 
-
 (def ^:dynamic *max-dig-range* 1e5)
+(def ^:dynamic *shallow-digfurther-ratio* 8)
 (def ^:dynamic *target-fillchars* 512)
 (def ^:dynamic *min-child-fraction* 0.1)
 ; Format examples:
@@ -78,16 +79,53 @@
         ch-frac-min (get opts :min-child-fraction *min-child-fraction*)
         n (cond (not (coll? x)) 1 (counted? x) (count x)
             :else (let [n0 (count (take dig x))] (if (< n0 dig) n0 "???")))
-        sym+meta #(with-meta (symbol %) {:path path})
+        sym+meta #(with-meta (symbol %) {::path path})
         ch-frac (max ch-frac-min (/ 1.0 (if (number? n) n dig)))
         opts1 (assoc opts :target-fillchars (Math/ceil (* chars ch-frac)) :max-dig-range (Math/ceil (* dig ch-frac)))]
     (cond
       (and (coll? x) (not= n "???"))
-      (_summarize1 path x n true true opts1)
+      (_summarize1 path x n true (or (vector? x) (< n (* dig *shallow-digfurther-ratio*))) opts1)
       (coll? x) ; Uncounted colls, such as infinite sequences.
       (_summarize1 path x n true false opts1)
       (number? x) (sym+meta (num2str x))
-      :else (sym+meta (str x)))))
+      :else (sym+meta (pr-str x)))))
+
+(defn string-indexes-of [txt key]
+  "Does not work for regexp. TODO: did we write another version of this fn?"
+  (loop [acc [] char-ix 0]
+    (let [ix-next (string/index-of txt key char-ix)]
+      (if ix-next (recur (conj acc ix-next) (inc ix-next)) acc))))
+
+(defn path-at-cursor-core [x x-string cursor-ix]
+  "What path is where the cursor is at x, not sure if 100% fool-proof but at least 99%.
+   This fn may be moved to another file as it is independent of the summary process."
+  (let [cursor-ix (max 0 (min (count x-string) cursor-ix))
+        x-string (str x-string "   ")
+        get-subtok (fn [cursor-ix1]
+                     (let [cursor-ix1 (max 0 (min (count x-string) cursor-ix1))
+                           tmp-box (codebox/select-twofour-click
+                                (app.codebox/set-precompute 
+                                  (assoc (codebox/new-codebox) :pieces [{:text x-string}]
+                                    :cursor-ix cursor-ix1)) false)]
+                       (subs x-string (:selection-start tmp-box) (:selection-end tmp-box))))
+        
+        tok (get-subtok cursor-ix)
+        tok (try (do (read-string tok) tok) (catch Exception e (get-subtok (inc cursor-ix))))
+        tok (try (do (read-string tok) tok) (catch Exception e (get-subtok (dec cursor-ix))))
+        tok (try (do (read-string tok) tok) (catch Exception e (get-subtok (- cursor-ix 2))))
+        char-ixs (if (> (count tok) 0) (string-indexes-of x-string tok))
+        ix (first (filter #(let [cix (nth char-ixs %)] (and (>= cix %) (<= cix (+ % (count x-string)))))
+                     (range (count char-ixs))))]
+    (if ix
+      (let [can-tok? (fn [xi] (and (not (coll? xi)) (string/includes? (str xi) tok)))
+            hot-paths (filterv #(can-tok? (collections/cget-in x %)) (collections/paths x))]
+        (nth hot-paths ix)))))
+
+(defn path-at-cursor [x-summarized x-summarized-txt cursor-ix]
+  "What path points to the cursor, nil if failure Does not work for *print-meta*."
+  (if-let [hot-path (path-at-cursor-core x-summarized x-summarized-txt cursor-ix)]
+    (let [x-piece (collections/cget-in x-summarized hot-path)]
+      (::path (meta x-piece)))))
 
 ;coder.cnav/tree-diff
 ;blit/vps

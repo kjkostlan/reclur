@@ -654,7 +654,7 @@
   "Doesn't clear empty pieces."
   (let [box (v box) ty (:type ed)
         copy! (fn [] ; maybe make this customizable?
-                 (let [x0 (:ix0 ed) x1 (:ix1 ed)] ; selection indexes.
+                 (let [x0 (max (:ix0 ed) 0) x1 (:ix1 ed)] ; selection indexes.
                    (if (<= x1 x0) false ; nothing selected.
                      (let [slice (grab-selection-by (:pieces box) x0 x1 (:partial-grab-fn box))
                            txt (apply str (mapv :text slice)) ; txt is the lookup key on paste.

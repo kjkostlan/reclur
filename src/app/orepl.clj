@@ -90,11 +90,12 @@
                (let [codei (read-string txt)]
                  (reset! _err? false) codei)
                (catch Exception e e))
-        lim-len (fn [x]
-                  (try (limit-length (blit/vps (browseedn/summarize [] x)))
+        lim-len (fn [x summarize?]
+                  (try (if summarize? (limit-length (blit/vps (browseedn/summarize [] x)))
+                         (limit-length x))
                     (catch Exception e (str "LIMIT LEN NOT WORKING -(:" e))))]
     (if @_err?
-      (lim-len (str "Syntax error:" (.getMessage code-or-e) " " (type code-or-e)))
+      (lim-len (str "Syntax error:" (.getMessage code-or-e) " " (type code-or-e)) false)
       (try
         (let [current-ns-sym (get-in s [:components repl-k :*ns*])
               r-ns1 (if current-ns-sym (find-ns current-ns-sym) r-ns)
@@ -102,10 +103,10 @@
                   ;(clojure.stacktrace/print-stack-trace (Exception. "foo"))
                   ;(clojure.stacktrace/print-stack-trace (try (eval code) (catch Exception e e)))
                   (let [out (eval code-or-e)] (reset! tmp-namespace-atom *ns*) out))]
-          (lim-len y))
+          (lim-len y true))
         (catch Exception e
                 (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
-                  (lim-len (str "Runtime error:\n" (repl-err-msg-tweak (unerror/pr-error e))))))))))
+                  (lim-len (str "Runtime error:\n" (repl-err-msg-tweak (unerror/pr-error e))) false)))))))
 
 (defn set-result [box result]
   (let [pieces (:pieces box)

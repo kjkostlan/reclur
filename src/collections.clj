@@ -106,7 +106,8 @@
   "Like get but works for listy collections as well."
   (cond (or (map? x) (set? x) (vector? x)) (get x k)
     (not (coll? x)) nil
-   :else (get (into [] x) k)))
+    (integer? k) (get (into [] (take (inc k) x)) k)
+    :else nil))
 
 (defn cget-in [x ks]
   "Like get-in but works for listy collections as well."
