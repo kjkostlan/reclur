@@ -20,6 +20,8 @@
   "No need to include all decimal places."
   (str x)) ;TODO
 
+(defn valid? [tok] (try (read-string tok) true (catch Exception e false)))
+
 (defn nfill-char [x]
   (count (string/replace (string/replace (str x) "\n" "") " " "")))
 
@@ -33,15 +35,20 @@
     (map? counted-version-of) (zipmap (mapv first coll) (mapv second coll))
     :else coll))
 
-(declare summarize) ; summarize <-> _summarize1 circular.
+(declare _summarize) ; _summarize <-> _summarize1 circular.
 (defn _summarize1 [path x n from-head? from-tail? opts]
   "One step, on a collection, with specified head and tail directions."
   (let [m? (map? x) s? (set? x) chars (:target-fillchars opts) dig (opts :max-dig-range opts)
-        uno-dos (if (and from-head? from-tail?) 2 1)]
+        uno-dos (if (and from-head? from-tail?) 2 1)
+        quote-sym #(symbol (str "\"" % "\""))
+        ch-frac-min (get opts :min-child-fraction *min-child-fraction*)
+        ch-frac (max ch-frac-min (/ 1.0 (if (number? n) n dig)))
+        opts1 (assoc opts :target-fillchars (Math/ceil (* chars ch-frac)) 
+                :max-dig-range (Math/ceil (* dig ch-frac)))]
     (loop [n-used 0 c-used 0 acc-head [] acc-tail (list) xhead (seq x) xtail (if from-tail? (reverse x))]
             ; Bi-directional loop.
       (let [subsummary (fn [xi k] 
-                         (let [xs (summarize (conj path k) (if m? (second xi) xi) opts)]
+                         (let [xs (_summarize (conj path k) (if m? (second xi) xi) opts1)]
                            (if m? [(first xi) xs] xs)))
             
             k0 (cond m? (first (first xhead)) s? (first xhead) :else n-used)
@@ -51,44 +58,48 @@
             add-dot3 (fn []
                        (let [ellipse (if (= n "???") "(???)"
                                         (str "<" n "-" (* n-used uno-dos) ">"))]
-                         (concat acc-head [(symbol (str (if from-head? "..." "") ellipse 
-                                                     (if from-tail? "..." "")))] acc-tail)))]
+                         (concat acc-head [(quote-sym 
+                                             (str (if from-head? "..." "") ellipse 
+                                               (if from-tail? "..." "")))] acc-tail)))]
         (cond (and from-head? from-tail? (= (* n-used uno-dos) (dec n)))
           (_as-counted (concat acc-head [(get-h)] acc-tail) x)
           (= (* n-used uno-dos) n)
           (_as-counted (concat acc-head acc-tail) x)
           (and (> (count acc-head) 0) (> c-used (- chars 5)))
           (_as-counted (add-dot3) x)
-          :else (let [h (if from-head? (summarize (conj path k0) (first xhead) opts))
-                      t (if from-tail? (summarize (conj path k1) (first xtail) opts))
+          :else (let [h (if from-head? (_summarize (conj path k0) (first xhead) opts1))
+                      t (if from-tail? (_summarize (conj path k1) (first xtail) opts1))
                       c-used1 (+ c-used (if from-head? (nfill-char h) 0) 
                                 (if from-tail? (nfill-char t) 0))]
                   (recur (inc n-used) c-used1 (if from-head? (conj acc-head h) acc-head) 
                      (if from-tail? (conj acc-tail t) acc-tail)
                      (if from-head? (rest xhead)) (if from-tail? (rest xtail)))))))))
 
-(defn summarize [path x & opts]
+(defn _summarize [path x opts]
+  (let [chars (get opts :target-fillchars)
+        dig (int (get opts :max-dig-range))
+        shallow (int (get opts :shallow-digfurther-ratio))
+        n (cond (not (coll? x)) 1 (counted? x) (count x)
+            :else (let [n0 (count (take dig x))] (if (< n0 dig) n0 "???")))
+        sym+meta #(with-meta (symbol %) {::path path})]
+    (cond
+      (and (coll? x) (not= n "???"))
+      (_summarize1 path x n true (or (vector? x) (< n (* dig shallow))) opts)
+      (coll? x) ; Uncounted colls, such as infinite sequences.
+      (_summarize1 path x n true false opts)
+      (number? x) (sym+meta (num2str x))
+      :else (sym+meta (pr-str x)))))
+(defn summarize [x & opts]
   "Generates a human-friendly representation of x if x is large, and removes lazyness.
    Returns a nested data-structure, with symbols at the leaves
    Can handle infinite datastructures.
    Prepends path into the metadata of each symbol.
    (pr-str (summarize x)) is guarenteed to be resonablly sized on any non-malicious x."
-  (let [opts (first opts)
-        chars (get opts :target-fillchars *target-fillchars*)
-        dig (get opts :max-dig-range *max-dig-range*)
-        ch-frac-min (get opts :min-child-fraction *min-child-fraction*)
-        n (cond (not (coll? x)) 1 (counted? x) (count x)
-            :else (let [n0 (count (take dig x))] (if (< n0 dig) n0 "???")))
-        sym+meta #(with-meta (symbol %) {::path path})
-        ch-frac (max ch-frac-min (/ 1.0 (if (number? n) n dig)))
-        opts1 (assoc opts :target-fillchars (Math/ceil (* chars ch-frac)) :max-dig-range (Math/ceil (* dig ch-frac)))]
-    (cond
-      (and (coll? x) (not= n "???"))
-      (_summarize1 path x n true (or (vector? x) (< n (* dig *shallow-digfurther-ratio*))) opts1)
-      (coll? x) ; Uncounted colls, such as infinite sequences.
-      (_summarize1 path x n true false opts1)
-      (number? x) (sym+meta (num2str x))
-      :else (sym+meta (pr-str x)))))
+  (let [opts-default {:target-fillchars *target-fillchars*
+                      :max-dig-range *max-dig-range*
+                      :shallow-digfurther-ratio *shallow-digfurther-ratio*}
+        opts1 (merge opts-default opts)]
+    (_summarize [] x opts1)))
 
 (defn string-indexes-of [txt key]
   "Does not work for regexp. TODO: did we write another version of this fn?"
@@ -106,23 +117,23 @@
                            tmp-box (codebox/select-twofour-click
                                 (app.codebox/set-precompute 
                                   (assoc (codebox/new-codebox) :pieces [{:text x-string}]
-                                    :cursor-ix cursor-ix1)) false)]
+                                    :cursor-ix cursor-ix1)) false true)]
                        (subs x-string (:selection-start tmp-box) (:selection-end tmp-box))))
         
         tok (get-subtok cursor-ix)
-        tok (try (do (read-string tok) tok) (catch Exception e (get-subtok (inc cursor-ix))))
-        tok (try (do (read-string tok) tok) (catch Exception e (get-subtok (dec cursor-ix))))
-        tok (try (do (read-string tok) tok) (catch Exception e (get-subtok (- cursor-ix 2))))
-        char-ixs (if (> (count tok) 0) (string-indexes-of x-string tok))
-        ix (first (filter #(let [cix (nth char-ixs %)] (and (>= cix %) (<= cix (+ % (count x-string)))))
+        tok (first (filter valid? (mapv #(get-subtok (+ cursor-ix %)) [0 -1 -2 1])))
+        char-ixs (if tok (string-indexes-of x-string tok))
+        ix (first (filter #(let [cix (nth char-ixs %)] 
+                             (and (>= cursor-ix cix) 
+                               (<= cursor-ix (+ cix (count tok)))))
                      (range (count char-ixs))))]
-    (if ix
+    (if (and ix tok)
       (let [can-tok? (fn [xi] (and (not (coll? xi)) (string/includes? (str xi) tok)))
             hot-paths (filterv #(can-tok? (collections/cget-in x %)) (collections/paths x))]
         (nth hot-paths ix)))))
 
 (defn path-at-cursor [x-summarized x-summarized-txt cursor-ix]
-  "What path points to the cursor, nil if failure Does not work for *print-meta*."
+  "What path on the original x the cursor in x-summarized is at, nil if failure Does not work for *print-meta*."
   (if-let [hot-path (path-at-cursor-core x-summarized x-summarized-txt cursor-ix)]
     (let [x-piece (collections/cget-in x-summarized hot-path)]
       (::path (meta x-piece)))))

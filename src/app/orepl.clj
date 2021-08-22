@@ -48,15 +48,14 @@
 
 (defn new-repl [& code]
   (assoc (merge rtext/empty-text (interact-fns))
-    :type :orepl :langkwd :clojure :pieces [{:text (if (first code) (first code) "(+ 1 2)")}
-                                                                  {:text "\n3"}] 
+   :type :orepl :langkwd :clojure :pieces [{:text (if (first code) (first code) "(+ 1 2)")} {:text "\n3"}] 
    :num-run-times 0
    :outline-color [0.2 0.2 1 1]
    :cmd-history [] :cmd-history-viewix 1e100
+   :data-browse-path []
    :path "repl" :show-line-nums? false :colorize-fn colorize))
 
-;;;;;;;;;;;;;;;;;;;;;;;;; Low repl running ;;;;;;;;;;;;;;;;;;;;;;;;;;
-
+;;;;;;;;;;;;;;;;;;;;;;;;; Low level repl running ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def r-ns *ns*) ; default ns for the repls.
 
@@ -84,37 +83,45 @@
   (string/replace msg #"compiling:\(javac\/cpanel.clj:\d+:\d+\)" ""))
 
 (defn get-repl-result [s repl-k txt tmp-namespace-atom]
-  "The result will contain error messages if there is a problem."
+  "Result's :type can be :syntax-err, :runtime-err, :success.
+   :value has not yet been made into a string and could be infinitely big."
   (let [_err? (atom true)
-        code-or-e (try
-               (let [codei (read-string txt)]
-                 (reset! _err? false) codei)
-               (catch Exception e e))
-        lim-len (fn [x summarize?]
-                  (try (if summarize? (limit-length (blit/vps (browseedn/summarize [] x)))
-                         (limit-length x))
-                    (catch Exception e (str "LIMIT LEN NOT WORKING -(:" e))))]
+        code-or-e (try (let [codei (read-string txt)]
+                        (reset! _err? false) codei)
+                        (catch Exception e e))]
     (if @_err?
-      (lim-len (str "Syntax error:" (.getMessage code-or-e) " " (type code-or-e)) false)
+      {:type :syntax-err :value (str "Syntax error:" (.getMessage code-or-e) " " (type code-or-e))}
       (try
         (let [current-ns-sym (get-in s [:components repl-k :*ns*])
               r-ns1 (if current-ns-sym (find-ns current-ns-sym) r-ns)
               y (binding [*ns* r-ns1 *this-k* repl-k *world* s]
-                  ;(clojure.stacktrace/print-stack-trace (Exception. "foo"))
-                  ;(clojure.stacktrace/print-stack-trace (try (eval code) (catch Exception e e)))
                   (let [out (eval code-or-e)] (reset! tmp-namespace-atom *ns*) out))]
-          (lim-len y true))
+          {:type :success :value y})
         (catch Exception e
                 (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
-                  (lim-len (str "Runtime error:\n" (repl-err-msg-tweak (unerror/pr-error e))) false)))))))
+                  {:type :runtime-err :value (str "Runtime error:\n" (repl-err-msg-tweak (unerror/pr-error e)))}))))))
 
-(defn set-result [box result]
+(defn get-summary [box]
+  "Returns [summary-object, summary string], depends on the :view-path of the box.
+   Only use this for repl successes."
+  (let [view-path (get box :view-path [])
+        x-piece (collections/cget-in (:value (:result box)) view-path)
+        xp-summary (browseedn/summarize x-piece)
+        txt (str "\n" (if (= view-path []) "" (str ";" view-path "\n")) ; Prepends must not change the string's value.
+              (try (limit-length (blit/vps xp-summary))
+                (catch Exception e (str "LIMIT LEN NOT WORKING BUG IN OUR CODE " e))))]
+    [xp-summary txt]))
+
+(defn show-result [box]
+  "Depending on the nature of result, the repl result may need to be summarized."
   (let [pieces (:pieces box)
-        resultn (str "\n" result)
-        pieces1 (cond (= (count pieces) 0) [{:text " "} {:text resultn}]
-                  (= (count pieces) 1) (conj pieces {:text resultn})
-                  :else (assoc pieces (dec (count pieces)) {:text resultn}))]
-    (assoc box :pieces pieces1)))
+        result (:result box)
+        result-ty (if (map? result) (get result :type))
+        result-str (if (= (:type result) :success) (second (get-summary box)) (:value result))
+        pieces1 (cond (= (count pieces) 0) [{:text " "} {:text result-str}]
+                  (= (count pieces) 1) (conj pieces {:text result-str})
+                  :else (assoc pieces (dec (count pieces)) {:text result-str}))]
+    (codebox/set-precompute (assoc box :pieces pieces1))))
 
 (defn run-repl [s repl-k]
   "This returns the modified s, which will include any alteration of s in @globals/one-atom"
@@ -136,7 +143,7 @@
           s1 (:app-state @globals/one-atom) ; s1 not= s for more complex repl-as-application cases.
           repl1 (get-in s1 [:components repl-k])]
       (if (map? repl1) ; Our repl is still there.
-        (let [repl2 (-> repl1 (set-result result)
+        (let [repl2 (-> (assoc repl1 :result result :view-path []) (show-result)
                       (assoc :*ns* (textparse/sym2ns @new-ns-at))
                       (update :num-run-times inc)
                       (update :cmd-history #(conj % txt)))]
@@ -243,15 +250,26 @@
 (defn delete-and-update!! [cljfile]
   (jfile/delete!! cljfile) (reload-file! cljfile) {:error false :message (str "Deleted" cljfile)})
 
-(defn mouse-press [m-evt comp]
-  (let [nc (:ClickCount m-evt) ctxt (:text (first (:pieces comp)))]
-    (if (and (or (= nc 2) (= nc 4)) (<= (:cursor-ix comp) (count ctxt)))
-      (let [cbox (codebox/from-text ctxt (:langkwd comp))
-            ckys [:selection-start :selection-end :cursor-ix]
-            cbox (merge cbox (select-keys comp ckys))
-            cbox1 (codebox/select-twofour-click cbox (= nc 4))]
-        (merge comp (select-keys cbox1 ckys)))
-      (rtext/mouse-press m-evt comp))))
+(defn mouse-press [m-evt box]
+  (let [box1 (codebox/mouse-press m-evt box) ; vanilla.
+        nclick (:ClickCount m-evt) code-txt (:text (first (:pieces box)))
+        cursor-on-piece1 (- (:cursor-ix box1) (count code-txt))
+        run-result (:result box1)]
+    (cond
+      (and (= nclick 1) (= (get run-result :type) :success) (>= cursor-on-piece1 0) (= (:Button m-evt) 1)) ;Navigate inwards.
+      (let [[sumy sumy-txt] (get-summary box1)
+            ph-on-x (browseedn/path-at-cursor sumy sumy-txt cursor-on-piece1)]
+        (if (and ph-on-x (not (empty? ph-on-x)))
+          (let [new-viewpath (conj (get box :view-path []) (first ph-on-x))
+                box2 (assoc box1 :view-path new-viewpath)]
+            (show-result box2))
+           box1))
+      (and (= nclick 1) (= (get run-result :type) :success) (>= cursor-on-piece1 0) (= (:Button m-evt) 3)) ;Navigate outwards.
+      (let [old-viewpath (get box :view-path [])
+            new-viewpath (if (empty? old-viewpath) [] (into [] (butlast old-viewpath)))
+            box2 (assoc box1 :view-path new-viewpath)]
+        (show-result box2))
+      :else box1)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Component interface ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -277,7 +295,7 @@
     :else s1))
 
 (def dispatch 
-  {:mousePressed mouse-press
+  {:mousePressed (fn [evt box] (mouse-press evt box))
    :mouseReleased (fn [_ box] box)
    :mouseDragged rtext/mouse-drag
    :mouseWheelMoved rtext/mouse-wheel
@@ -346,8 +364,7 @@
 (defn cview [code & opts]
   "Code viewing tool with optional options to adjust the view."
   (let [opts (apply cmdunzip opts)
-        defaults {:pipeline? true :expand? true :console? false
-                  :unqual? true}
+        defaults {:pipeline? true :expand? true :console? false :unqual? true}
         ns-sym (symbol (str *ns*))
         opts (merge defaults opts)
         code (if (or (:expand? opts) (:mexpand? opts) (:macroexpand? opts) (:macro-expand? opts)) (langs/mexpand ns-sym code) code)

@@ -214,10 +214,11 @@
         tix (first (filterv #(nth allowed?s %) (range tix-in (count strings))))]
     [(if (= tix 0) 0 (nth cumsum (dec tix))) (nth cumsum tix) tix]))
 
-(defn select-twofour-click [box four?] 
+(defn select-twofour-click [box four? & suppress-human] 
   "double click with no shift, so selects text instead of code folding."
   (let [st (rtext/rendered-string box)
         c-ix (:cursor-ix box)
+        c-ix (max 0 (min c-ix (count st)))
         ils (:inter-levels (:precompute box))
         sel-start (:selection-start box)
         sel-end (:selection-end box)
@@ -238,7 +239,8 @@
         jx01-tix (token-cur-ix01 toks (repeat true) cur-jx)
         tix-in (nth jx01-tix 2)
         t-in (get toks tix-in)
-        jx01 (if (and (= (get ty tix-in) 0) (re-find #"[a-zA-Z0-9]+" t-in)) ; Trigger for in-comment mode which uses human language instead.
+        jx01 (if (and (not (first suppress-human)) (= (get ty tix-in) 0) 
+                   (re-find #"[a-zA-Z0-9]+" t-in)) ; Trigger for in-comment mode which uses human language instead.
                (let [jx0 (first jx01-tix)
                      piecesty (cbase/tokenize t-in :human)
                      pieces (first piecesty) ty (second piecesty)
