@@ -90,7 +90,7 @@
                         (reset! _err? false) codei)
                         (catch Exception e e))]
     (if @_err?
-      {:type :syntax-err :value (str "Syntax error:" (.getMessage code-or-e) " " (type code-or-e))}
+      {:type :syntax-err :value (str "\nSyntax error:" (.getMessage code-or-e) " " (type code-or-e))}
       (try
         (let [current-ns-sym (get-in s [:components repl-k :*ns*])
               r-ns1 (if current-ns-sym (find-ns current-ns-sym) r-ns)
@@ -99,7 +99,7 @@
           {:type :success :value y})
         (catch Exception e
                 (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
-                  {:type :runtime-err :value (str "Runtime error:\n" (repl-err-msg-tweak (unerror/pr-error e)))}))))))
+                  {:type :runtime-err :value (str "\nRuntime error:\n" (repl-err-msg-tweak (unerror/pr-error e)))}))))))
 
 (defn get-summary [box]
   "Returns [summary-object, summary string], depends on the :view-path of the box.

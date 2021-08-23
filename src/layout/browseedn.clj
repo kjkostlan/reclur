@@ -1,7 +1,7 @@
 ; Browsing large amounts of data in small amounts of space.
 
 (ns layout.browseedn
-  (:require [clojure.set :as set] [clojure.string :as string]
+  (:require [clojure.set :as set] [clojure.string :as string] [clojure.walk :as walk]
     [layout.blit :as blit]
     [app.codebox :as codebox]
     [collections]))
@@ -57,10 +57,11 @@
             get-t (fn [] (subsummary (first xtail) k1))
             add-dot3 (fn []
                        (let [ellipse (if (= n "???") "(???)"
-                                        (str "<" n "-" (* n-used uno-dos) ">"))]
-                         (concat acc-head [(quote-sym 
-                                             (str (if from-head? "..." "") ellipse 
-                                               (if from-tail? "..." "")))] acc-tail)))]
+                                        (str "<" n "-" (* n-used uno-dos) ">"))
+                             midpiece [(quote-sym 
+                                        (str (if from-head? "..." "") ellipse (if from-tail? "..." "")))]
+                             midpiece (if (map? x) [(conj midpiece (quote-sym "<kys>"))] midpiece)]
+                         (concat acc-head midpiece acc-tail)))]
         (cond (and from-head? from-tail? (= (* n-used uno-dos) (dec n)))
           (_as-counted (concat acc-head [(get-h)] acc-tail) x)
           (= (* n-used uno-dos) n)
@@ -81,10 +82,13 @@
         shallow (int (get opts :shallow-digfurther-ratio))
         n (cond (not (coll? x)) 1 (counted? x) (count x)
             :else (let [n0 (count (take dig x))] (if (< n0 dig) n0 "???")))
-        sym+meta #(with-meta (symbol %) {::path path})]
+        sym+meta #(with-meta (symbol %) {::path path})
+        meta1 #(with-meta %1 (meta %2))
+        meta-kvs-if-map (fn [x1] (if (map? x1) (zipmap (mapv meta1 (keys x1) (vals x1)) 
+                                                 (vals x1)) x1))]
     (cond
       (and (coll? x) (not= n "???"))
-      (_summarize1 path x n true (or (vector? x) (< n (* dig shallow))) opts)
+      (meta-kvs-if-map (_summarize1 path x n true (or (vector? x) (< n (* dig shallow))) opts))
       (coll? x) ; Uncounted colls, such as infinite sequences.
       (_summarize1 path x n true false opts)
       (number? x) (sym+meta (num2str x))
@@ -109,7 +113,9 @@
 
 (defn path-at-cursor-core [x x-string cursor-ix]
   "What path is where the cursor is at x, not sure if 100% fool-proof but at least 99%.
-   This fn may be moved to another file as it is independent of the summary process."
+   Only handles leaves and has toruble with non-leaf map keys.
+   This fn may be moved to another file as it is independent of the summary process.
+   Map keys and map values coorespond to the same path."
   (let [cursor-ix (max 0 (min (count x-string) cursor-ix))
         x-string (str x-string "   ")
         get-subtok (fn [cursor-ix1]
@@ -128,9 +134,19 @@
                                (<= cursor-ix (+ cix (count tok)))))
                      (range (count char-ixs))))]
     (if (and ix tok)
-      (let [can-tok? (fn [xi] (and (not (coll? xi)) (string/includes? (str xi) tok)))
-            hot-paths (filterv #(can-tok? (collections/cget-in x %)) (collections/paths x))]
-        (nth hot-paths ix)))))
+      (let [phs (into [] (collections/paths x)) n-ph (count phs)
+            x-fast (walk/postwalk #(if (sequential? %) (into [] %) %) x)]
+        (loop [used-up 0 ph-ix 0]
+          (if 
+            (= ph-ix n-ph) (throw (Exception. "Out of bounds likely bug in this code."))
+            (let [ph (nth phs ph-ix)
+                  xi (collections/cget-in x-fast ph)
+                  xi-parent (if (> (count ph) 0) (collections/cget-in x-fast (butlast ph)))
+                  match-uses (if (coll? xi) 0 (count (string-indexes-of (str xi) (str tok))))
+                  key-uses (if (map? xi-parent) (count (string-indexes-of (str (last ph)) (str tok))) 0)
+                  used-up1 (+ used-up match-uses key-uses)]
+              (if (>= (dec used-up1) ix) (nth phs ph-ix)
+                (recur used-up1 (inc ph-ix))))))))))
 
 (defn path-at-cursor [x-summarized x-summarized-txt cursor-ix]
   "What path on the original x the cursor in x-summarized is at, nil if failure Does not work for *print-meta*."
