@@ -13,9 +13,9 @@
 
 (def ^:dynamic *handle-pixels* 25)
 
-(defn is-sh? [] (:ShiftDown (:external-state @globals/one-atom)))
-(defn is-alt? [] (:AltDown (:external-state @globals/one-atom)))
-(defn is-mouse? [] (let [ext (:external-state @globals/one-atom)]
+(defn is-sh? [] (:ShiftDown @globals/external-state-atom))
+(defn is-alt? [] (:AltDown @globals/external-state-atom))
+(defn is-mouse? [] (let [ext @globals/external-state-atom]
                      (or (:Button0 ext) (:Button1 ext) (:Button2 ext))))
 
 (defn derive-key [kwd]

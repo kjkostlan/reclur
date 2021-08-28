@@ -2,6 +2,8 @@
 
 (ns test.demopong)
 
+;^:global (fn [s] (mapv load ["../test/demogui" "../test/demopong"]) ((resolve 'test.demogui/add-box) s ((resolve 'test.demopong/pong-game))))))
+
 (defn pong-newgame [sz]
   (let [sizex (first sz) starty 100 mass-paddle 3 mass-ball 1 paddle-margin 50
         sizex0 (- sizex paddle-margin)]

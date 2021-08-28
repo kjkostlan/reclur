@@ -28,7 +28,7 @@
 (defonce _ (println "If you are on a mac this may help:   defaults write -g ApplePressAndHoldEnabled -bool false"))
 
 (defn empty-state []
-  {:evt-queue (collections/queue) :external-state {:X0 0 :Y0 0 :X1 0 :Y1 0}})
+  {:evt-queue (collections/queue)})
 
 ;;;;;;;;;;;;;;;;;;;;; Queing ;;;;;;;;;;;;;;;;;;;;;
 
@@ -52,7 +52,6 @@
       :AltGraphDown (:AltGraphDown e-clj)))
     :else old-extern))
 
-(defonce _dropped-frame-counter (atom 0)) ; Reports if many frames were dropped.
 (defn queue1 [x e-clj kwd] 
   "Queues e, with reasonable limits to prevent everyFrame events piling-up to infinity.
    Handles both java and clojure datastructures for e, converting e into clojure if it is a java event."
@@ -66,7 +65,7 @@
    Does not affect the event queue."
   (if evt 
     (let [kwd (:type evt)
-          extern (:external-state x)
+          extern @globals/external-state-atom
           _ (if (= kwd :mouseWheelMoved) (crossp/update-inertial-scroll-guess! evt))
           evt (if (or (= kwd :mouseDragged) (= kwd :mouseMoved))
                 (assoc evt :X0 (:X0 extern) :Y0 (:Y0 extern) :X1 (:X1 extern) :Y1 (:Y1 extern)) evt)
@@ -77,7 +76,8 @@
                       (catch Exception e (println e) (:app-state x)))
           ud? true ; TODO: better gfx update rules.
           ]
-     (assoc x :app-state new-state :external-state new-external :needs-gfx-update? ud?)) x))
+     (reset! globals/external-state-atom new-external)
+     (assoc x :app-state new-state :needs-gfx-update? ud?)) x))
 
 (defn dispatch-all [x]
   "Keeps dispatching events from x until it's queue is empty."
@@ -89,27 +89,7 @@
                          (catch Exception e (do (println "dequeue error:" e) x-acc)))) x evts)]
       (assoc x1 :evt-queue (collections/queue)))))
 
-(defn set-window-size [one-atom-contents w h]
-  "Should be called every time the window is resized."
-  (assoc-in one-atom-contents [:external-state :window-size] [w h]))
-
 ;;;;;;;;;;;;;;;;;;;;; Mutation ;;;;;;;;;;;;;;;;;;;;;
-
-(def one-atom globals/one-atom)
-(defonce _ (reset! one-atom (empty-state)))
-
-(defn can-add? [e-clj report-if-fail?]
-  "Not too many every frame events."
-  (let [evtq (:evt-queue @one-atom) ; safe to be async with respect to the locking code.
-        kwd (:type e-clj)
-        add? (or (not (= kwd :everyFrame)) 
-               (< (count evtq) *drop-frames-queue-length-threshold*))]
-    (cond add? true
-      (not report-if-fail?) false
-      :else
-      (do (swap! _dropped-frame-counter 
-            #(if (< % *drop-frames-report-every*) (inc %)
-               (do (println "Dropped many frames due to slow evts and/or gfx: " %) 0))) false))))
 
 (defn lock-swap! [a f]
   "Like swap! but we lock the atom so that it doesn't run more than once per call.
@@ -119,18 +99,43 @@
    (locking a
      (reset! a (f @a))))
 
+(defn lock-reset! [a x] (lock-swap! a (fn [_] x)))
+
+(defn lock-deref [a]
+  "Like @a but locks on a."
+  (locking a @a))
+
+(defn set-window-size! [w h]
+  "Should be called every time the window is resized."
+  (swap! globals/external-state-atom #(assoc % :window-size [w h])))
+
+(defn can-add? [e-clj report-if-fail?]
+  "Not too many every frame events."
+  (let [evtq (:evt-queue (lock-deref globals/sync-app-atom))
+        kwd (:type e-clj)
+        add? (or (not (= kwd :everyFrame)) 
+               (< (count evtq) *drop-frames-queue-length-threshold*))]
+    (cond add? true
+      (not report-if-fail?) false
+      :else
+      (do (swap! globals/external-state-atom
+            #(let [n-drop (get % :dropped-frames-since-last-report 0)]
+               (if (< n-drop *drop-frames-report-every*) (assoc % :dropped-frames-since-last-report (inc n-drop))
+                 (do (println "Dropped many frames due to slow evts and/or gfx: " n-drop) 
+                   (assoc % :dropped-frames-since-last-report 0))))) false))))
+
 (defn _update-graphics! [x]
-  "Causes mutation due to calls to the graphics functions."
   (let [udgfx (:update-gfx-fn x)]
     (if udgfx
       (let [gfx-updated-app-state (try (udgfx (:app-state x)) (catch Exception e (do (println "app gfx update error:" e) (:app-state x))))
-            new-gfx (try ((:render-fn x) gfx-updated-app-state) (catch Exception e (do (println "gfx render error." e) [])))]
-        (if-let [panel (:JPanel x)] (try (gfx/update-graphics! panel (:last-drawn-gfx x) new-gfx)
-                                      (catch Exception e (println "gfx/update-graphics! error:" e))))
-        (assoc x :last-drawn-gfx new-gfx :app-state gfx-updated-app-state :needs-gfx-update? false)) x)))
+            new-gfx (try ((:render-fn x) gfx-updated-app-state) (catch Exception e (do (println "gfx render error." e) [])))
+            success? (atom false)]
+        (if-let [panel (:JPanel @globals/external-state-atom)] 
+          (try (do (gfx/update-graphics! panel (:last-drawn-gfx x) new-gfx) (reset! success? true))
+            (catch Exception e (println "gfx/update-graphics! error:" e))))
+        (if success? (assoc x :last-drawn-gfx new-gfx :app-state gfx-updated-app-state :needs-gfx-update? false) x)) x)))
 (defn update-graphics! []
-  "Causes mutation due to calls to the graphics functions."
-  (lock-swap! one-atom _update-graphics!))
+  (lock-swap! globals/sync-app-atom _update-graphics!))
 
 (defn event-queue! [e kwd]
   (let [e-clj (if (map? e) e
@@ -140,33 +145,31 @@
                       (throw e)))))
         e-clj (assoc e-clj :Time (System/currentTimeMillis) :type kwd)
         add? (can-add? e-clj true)]
-    (if add? (future (lock-swap! one-atom #(queue1 % e-clj kwd))))))
+    (if add? (future (lock-swap! globals/sync-app-atom #(queue1 % e-clj kwd))))))
 
 (defn store-window-size! [^JFrame frame]
-  (future (lock-swap! one-atom 
-            #(let [^java.awt.Dimension sz (.getSize (.getContentPane frame))]
-               (set-window-size % (.getWidth sz) (.getHeight sz))))))
+  (let [^java.awt.Dimension sz (.getSize (.getContentPane frame))]
+    (set-window-size! (.getWidth sz) (.getHeight sz))))
 
 ; Continuously polling is a (tiny) CPU drain, but it is way easier than a lock system that must ensure we don't get overlapping calls to dispatch-loop!
 ; The idle CPU is 0.7% of one core for the total program (tested Aug 13th 2019).
-(defonce _polling? (atom false)) ; Used to make sure we don't have multiple frame loops, an extra safeguard.
-(defonce _frame-counter (atom -1)) ; Counts the time elapsed in frames, used for idle mode.
-(if (not @_polling?)
+(if (not (:main-polling-loop? @globals/external-state-atom))
   (future 
     (loop [last-millis -1e100] ; This loop runs until the application is quit.
         (let [elapsed-millis (max 0 (- (System/currentTimeMillis) last-millis))
               sleep-time (- *frame-time-ms* elapsed-millis)]
           (if (> sleep-time 0) (Thread/sleep *frame-time-ms*)))
-        (let [x @one-atom
+        (let [x (lock-deref globals/sync-app-atom)
               s (:app-state x)
-              t (swap! _frame-counter inc)]
+              t (:frames-since-app-start
+                  (swap! globals/external-state-atom #(assoc % :frames-since-app-start (inc (get % :frames-since-app-start 0)))))]
           (if (or (> (count (:hot-boxes s)) 0) ; A single empty hot box adds about 1.25% CPU, tripling our CPU usage.
                 (= (mod t *nframe-slowdown-when-idle*) 0)) 
             (event-queue! {:Time (System/currentTimeMillis)} :everyFrame)))
-        (lock-swap! one-atom dispatch-all)
-        (if (:needs-gfx-update? @one-atom) (update-graphics!))
+        (lock-swap! globals/sync-app-atom dispatch-all)
+        (if (:needs-gfx-update? (lock-deref globals/sync-app-atom)) (update-graphics!))
         (recur (System/currentTimeMillis)))))
-(reset! _polling? true)
+(swap! globals/external-state-atom #(assoc % :main-polling-loop? true)) ; Extra sure we do not put more than one thread on this loop.
 
 ;;;;;;;;;;;;;;;;;;;;; Java listeners and windowing ;;;;;;;;;;;;;;;;;;;;;
 
@@ -177,9 +180,6 @@
       (mouseEntered [e] (event-queue! e :mouseEntered))
       (mouseExited [e] (event-queue! e :mouseExited))
       (mousePressed [e]
-        #_(.requestFocus (:JPanel @one-atom))
-        #_(let [frame (.getParent (.getParent (.getParent (.getParent (.getSource e)))))]
-          (.requestFocus frame)) 
         (event-queue! e :mousePressed))
       (mouseReleased [e] (event-queue! e :mouseReleased))))
   (.addMouseWheelListener panel
@@ -193,7 +193,7 @@
 (defn add-key-listeners! [x]
   (.addKeyListener x
     (proxy [KeyAdapter] []
-      (keyPressed [e] (do (store-window-size! ^JFrame (:JFrame @one-atom)) (event-queue! e :keyPressed)))
+      (keyPressed [e] (do (store-window-size! ^JFrame (:JFrame @globals/external-state-atom)) (event-queue! e :keyPressed)))
       (keyReleased [e] (event-queue! e :keyReleased)))))
 
 (defn add-resize-listener! [^JFrame frame]
@@ -237,7 +237,7 @@
     (.setVisible frame true)
     (if *add-keyl-to-frame?* (add-key-listeners! frame)
       (do (add-key-listeners! panel) (.setFocusable panel true) (.requestFocus panel)))
-    (crossp/add-quit-request-listener! #(event-queue! % :quit))
+    (crossp/add-quit-request-listener! (fn [e] (future (event-queue! {} :quit))))
     (.setDefaultCloseOperation frame (JFrame/DO_NOTHING_ON_CLOSE))
     (add-close-listener! frame) ; Not necessarily the least lines of code but gets the job done.
     [frame panel]))
@@ -254,22 +254,21 @@
   (swing-or-kludge
     (fn [& args]
       ;; https://stackoverflow.com/questions/1234912/how-to-programmatically-close-a-jframe
-      (if-let [old-frame (:JFrame @one-atom)]
+      (if-let [old-frame (:JFrame @globals/external-state-atom)]
         (do (.setDefaultCloseOperation old-frame (JFrame/DISPOSE_ON_CLOSE))
           (.dispatchEvent old-frame (WindowEvent. old-frame WindowEvent/WINDOW_CLOSING)))
-        (swap! one-atom #(dissoc % :JFrame)))
+        (swap! globals/external-state-atom #(dissoc % :JFrame)))
       (let [w 1440 h 877
-            [frame panel] (new-window w h)
-            s0 (set-window-size (empty-state) w h)
-            _ (reset! one-atom s0)]
-        (reset! one-atom
-               (assoc s0
+            [frame panel] (new-window w h)]
+        (reset! globals/external-state-atom {:X0 0 :Y0 0 :X1 0 :Y1 0})
+        (set-window-size! w h)
+        (swap! globals/external-state-atom #(assoc % :JFrame frame :JPanel panel))
+        (lock-reset! globals/sync-app-atom
+               (assoc (empty-state)
                       :app-state (init-state-fn)
-                      :dispatch dispatch-fn :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn 
-                      :external-state {}
-                      :JFrame frame :JPanel panel))))))
+                      :dispatch dispatch-fn :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn))))))
 
 (defn stop-app! []
   "Different from quit and very rarely used."
-  (if (not= (dissoc @one-atom :evt-queue) (dissoc (empty-state) :evt-queue)) (println "stopping app (IF any app was open)"))
+  (if (not= (dissoc @globals/sync-app-atom :evt-queue) (dissoc (empty-state) :evt-queue)) (println "stopping app (IF any app was open)"))
   (launch-app! {} {} (fn [state] []) (fn [state] [])))

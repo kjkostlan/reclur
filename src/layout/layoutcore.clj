@@ -78,7 +78,7 @@
 
 (defn screen-pixels []
   "[x y] pixels. The Retnia displays pretend to be 1/2 the resolution."
-  (if-let [sz (:window-size (:external-state @globals/one-atom))]
+  (if-let [sz (:window-size @globals/external-state-atom)]
     sz [800 600]))
 
 (defn visible-xxyy [cam]

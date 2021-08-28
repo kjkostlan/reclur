@@ -5,19 +5,15 @@
     [app.rtext :as rtext]
     [clojure.set :as set]))
 
-(defn add-box! [x]
-  "MAIN DEMO FN: Adds some component x to the global singleton app state.
-   If x has logic for events and rendering it can be interacted with.
-   These functions can even modify the state."
-  (swap! globals/one-atom
-    #(assoc-in % [:app-state :components (gensym "Demobox")] x)) "Box was added to global app state.")
+(defn add-box [s new-box] "Use ^:global in the repl." 
+  (assoc-in s [:components (gensym)] new-box))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Simple demos ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn set-simple-rtext [box txt]
   "Rtext has multible :pieces for the purposes of selective display of data.
    We only use one piece."
-  (assoc box :pieces [{:text txt}]))   
+  (assoc box :pieces [{:text txt}]))
  
 (defn light-dispatch-reporter []
   "This box reports and prints dispatches it gets, these are light dispatches that dont make as much use of the API."

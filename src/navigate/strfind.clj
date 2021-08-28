@@ -125,14 +125,11 @@
             blit #(if (symbol? %) (symbol (str "'" %)) %)
             cky (first ckys)
             m (assoc m0 :target (blit cky))
-            code '(do (swap! globals/one-atom
-                    (fn [x]
-                     (let [s (:app-state x)
-                           s1 (navigate.strfind/search-step s m)]
-                       (assoc x :app-state s1)))) "See console")
+            code '(fn [s] (navigate.strfind/search-step s m))
             code (walk/postwalk #(if (= % 'm) m %) code)
-            
-            code-string (layout.blit/vps code)
+            code (with-meta code {:global true})
+
+            code-string (binding [*print-meta* true] (layout.blit/vps code))
             cursor-ix0 (+ (first (first (boring-find code-string ":key \"\"" false))) 6)
             new-comp (assoc (orepl/new-repl code-string) :cursor-ix cursor-ix0)
             s1 (assoc s :selected-comp-keys #{boxk} :typing-mode? true)

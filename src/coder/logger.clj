@@ -20,10 +20,9 @@
 
 (def _junk-ns (create-ns 'logger-ns))
 
-(def ^:dynamic *log-atom* globals/one-atom)
+(def ^:dynamic *log-atom* globals/log-atom) ; Logs go here, even though loggers go only on globals/log-atom.
 (def ^:dynamic *err-print-code?* false) ; It is expensive.
 (def ^:dynamic *log-stack?* false) ; Is it expensive?
-
 
 ;;;;; Error reporting ;;;;
 
@@ -47,7 +46,7 @@
 (defn log! [x path start-time end-time]
   "Called when the logged code runs." 
   (swap! *log-atom*
-    #(let [code (get-in @globals/one-atom [:log-code-lookup path])           
+    #(let [code (get-in @globals/log-atom [:log-code-lookup path])           
            log {:path path :start-time start-time :end-time end-time :value x :Thread (format "0x%x" (System/identityHashCode (Thread/currentThread)))
                 :TraceOb (if *log-stack?* (.getStackTrace ^Thread (Thread/currentThread)))
                 :code code :lang :clojure} ; loggers for other languages will use different lang keywords.
@@ -93,14 +92,14 @@
 
 ;;;;;;;;;;; Querying logs and loggers ;;;;;;;;;;;;
 
-(defn get-logs [] (:logs @globals/one-atom)) ; logs are a vector of :path :start-time :end-time :value :Thead.
-(defn get-loggers [] (:loggers @globals/one-atom)) ; loggers are {symbol {path ...}} format.
+(defn get-logs [] (:logs @*log-atom*)) ; logs are a vector of :path :start-time :end-time :value :Thead.
+(defn get-loggers [] (:loggers @globals/log-atom)) ; loggers are {symbol {path ...}} format.
 (defn clear-logs! [] (do (let [n-log (count (get-logs))] 
                            (if (> n-log 0) (println "Removing all" n-log "logs")
                              (println "No logs to remove.")) 
-                       (swap! globals/one-atom #(assoc % :logs [])))))
+                       (swap! globals/log-atom #(assoc % :logs [])))))
 (defn logged? [sym-qual path]
-  (boolean (get-in (:loggers @globals/one-atom) [sym-qual path])))
+  (boolean (get-in (:loggers @globals/log-atom) [sym-qual path])))
 
 (defn last-log-of [sym-qual path-within-code]
   "Useful for debugging. Nil on failure."
@@ -109,7 +108,7 @@
 
 (defn logpath2code [log-path]
   "The code that was logged in log-path. It may be macroexpanded code."
-  (get-in @globals/one-atom [:log-code-lookup log-path]))
+  (get-in @globals/log-atom [:log-code-lookup log-path]))
 
 ;;;;;;;;;;;;;;; Low-level loggering ;;;;;;;;;;;;;;;;
 
@@ -161,7 +160,7 @@
     (alter-var-root (find-var sym-qual)
       (fn [old-val]
         (collections/keep-meta old-val (fn [_] logged-f))))
-    (swap! globals/one-atom
+    (swap! globals/log-atom
       (fn [world]
         (let [path+ #(collections/vcat [sym-qual] %)
               world (update world :log-code-lookup
@@ -181,7 +180,7 @@
   (let [path (into [] path)
         mexpand? (boolean mexpand?)
         ns-obj (find-ns (textparse/sym2ns sym-qual))
-        current-loggers (get-in @globals/one-atom [:loggers sym-qual] {}) ; path -> logger
+        current-loggers (get-in @globals/log-atom [:loggers sym-qual] {}) ; path -> logger
         mexpand?-old (:mexpand? (first (vals current-loggers)))
         untouched-loggers (dissoc current-loggers path)
         _ (cond 
@@ -201,7 +200,7 @@
 
 (defn remove-logger! [sym-qual path]
   (let [path (into [] path)
-        old-loggers (get-in @globals/one-atom [:loggers sym-qual])
+        old-loggers (get-in @globals/log-atom [:loggers sym-qual])
         old-paths (set (keys old-loggers))
         new-paths (disj old-paths path)
         hit? (< (count new-paths) (count old-paths))]
@@ -209,13 +208,13 @@
     (if hit? (set-logpaths! sym-qual new-paths (:mexpand? (first (vals old-loggers)))))))
 
 (defn remove-loggers! [sym-qual]
-  (if (> (count (get-in @globals/one-atom [:loggers sym-qual])) 0)
+  (if (> (count (get-in @globals/log-atom [:loggers sym-qual])) 0)
     (do (println "Removing loggers for:" sym-qual)
       (set-logpaths! sym-qual [] false))
     (println "No loggers to remove for:" sym-qual)))
 
 (defn remove-all-loggers! []
-  (let [syms (keys (get @globals/one-atom :loggers {}))]
+  (let [syms (keys (get @globals/log-atom :loggers {}))]
     (if (> (count syms) 0)
        (do (println "Removing all loggers, " (count syms) "symbols will be cleaned") 
          (mapv remove-loggers! syms))
@@ -327,7 +326,7 @@
             (require ns-sym :reload))
         syms (keys (ns-interns ns-sym))
         sym-quals (set (mapv #(langs/resolved ns-sym %) syms))
-        loggers (:loggers @globals/one-atom)
+        loggers (:loggers @globals/log-atom)
         sym-logged (set (keys loggers))
         need-logged (set/intersection sym-quals sym-logged)]
     (mapv
@@ -353,7 +352,7 @@
 
 (defn user-data-logger! [sym-qual path udata]
   "Put user data for the logger here."
-  (swap! globals/one-atom
+  (swap! globals/log-atom
     (fn [world] (update-in world [:loggers sym-qual path]
                   #(merge % udata)))))
 
@@ -378,7 +377,7 @@
     (mapv #(user-data-logger! sym-qual % {:watchpoint? true}) phs1)))
 
 (defn clear-watchpoints! []
-  (let [world @globals/one-atom
+  (let [world @globals/log-atom
         loggers (:loggers world)
         watchers (zipmap (keys loggers)
                    (mapv (fn [pack] (filterv #(:watchpoint? (get pack %))
@@ -393,7 +392,7 @@
 (defn get-last-watch-logs [sym-qual search-key]
   "Gets the logs that matches the watch, actually returns a vector of logs
    b/c watches can cover multible paths."
-  (let [logs (:logs @globals/one-atom)
+  (let [logs (:logs @globals/log-atom)
         phs (w2ps sym-qual search-key false)
         phs (mapv #(collections/vcat [sym-qual] %) phs)]
     (mapv (fn [ph] (first (filter #(= ph (:path %)) (reverse logs))))
@@ -402,7 +401,7 @@
 (defn watch! [sym-qual search-key & adjacents]
   "Unifies the add and the observe watching functions.
    Call, run, call again pattern."
-  (if (not (get-in @globals/one-atom [:loggers sym-qual search-key]))
+  (if (not (get-in @globals/log-atom [:loggers sym-qual search-key]))
     (apply add-watchpoint! sym-qual search-key adjacents))
   (get-last-watch-logs sym-qual search-key))
 (def w! watch!)

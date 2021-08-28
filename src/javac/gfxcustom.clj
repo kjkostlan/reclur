@@ -47,11 +47,11 @@
 
 (defn filename2BufferedImage [filename]
   "Caches images to prevent having to load stuff over and over."
-  (let [^BufferedImage cache (get-in @globals/one-atom [:assets :images filename])
+  (let [^BufferedImage cache (get-in @globals/external-state-atom [:assets :images filename])
         ^BufferedImage cache (if cache cache
                                (let [_ (if (not (jfile/exists? filename)) (println filename "does not exist"))
                                      x (ImageIO/read (File. filename))]
-                                 (swap! globals/one-atom #(assoc-in % [:assets :images filename] x)) x))]
+                                 (swap! globals/external-state-atom #(assoc-in % [:assets :images filename] x)) x))]
     cache))
 
 (defn file-bitmap-draw! [^java.awt.Graphics2D g args]

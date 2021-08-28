@@ -34,7 +34,7 @@
 
 (defn report! [evt s-old s]
   "Stores an event, but remember that the *max-undo* is used up."
-  (swap! globals/one-atom
+  (swap! globals/undo-atom
     #(let [undo-ix (?0 (:undo-index %)) ; nil when just starting up.
            undos (?vec (:undo-stack %))
            head-length (inc undo-ix)
@@ -60,7 +60,7 @@
 
 (defn unredoo! [delta]
   (let [tmp (atom nil)]
-    (swap! globals/one-atom 
+    (swap! globals/undo-atom 
       #(let [undos (?vec (:undo-stack %))
              undo-ix0 (?0 (:undo-index %))
              undo-ix (if (< delta 0) 

@@ -55,21 +55,6 @@
 
 ;;;;; State hotkey functions ;;;;;
 
-(defn store-state! [s]
-  "stores the state in our own buffer atom, to be retrieved later. 
-   More sophisticated undo system TODO."
-  (swap! cpanel/one-atom
-         assoc
-         :reclur.state-snapshot
-         s
-         #_ (dissoc s :reclur.state-snapshot) ;; this version prevents chaining
-         ) s)
-
-(defn retrieve-state! []
-  (assoc-in (:reclur.state-snapshot @cpanel/one-atom)
-            [:precompute :desync-supersafe-mod?]
-            true))
-
 (defn close [s]
   "Closes the active window if there is an active window.
    Recursivly contracts children."
@@ -106,8 +91,6 @@
                      (iteration/copy-child-to-us!! s1) s1) s))
    "C-S-h" (fn [s] (hintbox/try-to-toggle-hint-box s))
    "C-S-g" (fn [s] (graphbox/try-to-toggle-graph-box s))
-   "C-S c" store-state!
-   "C-S z" (fn [_] (retrieve-state!))
    "M-s" (fn [s] (do-to-selected-box s splice-at-cursor))
    "M-p" (fn [s] (do-to-selected-box s #(wrap-at-cursor % "coder.logger/pr-reportm")))
    "C-^^" (fn [s] (funcjump/try-to-go-ups s true false))

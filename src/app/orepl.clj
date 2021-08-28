@@ -82,18 +82,19 @@
 (defn get-repl-result [s repl-k txt tmp-namespace-atom]
   "Result's :type can be :syntax-err, :runtime-err, :success.
    :value has not yet been made into a string and could be infinitely big."
-  (let [_err? (atom true)
+  (let [_syntax-err? (atom true)
         code-or-e (try (let [codei (read-string txt)]
-                        (reset! _err? false) codei)
-                        (catch Exception e e))]
-    (if @_err?
+                        (reset! _syntax-err? false) codei)
+                        (catch Exception e e))
+        full-state-run? (:global (meta code-or-e))]
+    (if @_syntax-err?
       {:type :syntax-err :value (str "\nSyntax error:" (.getMessage code-or-e) " " (type code-or-e))}
       (try
         (let [current-ns-sym (get-in s [:components repl-k :*ns*])
               r-ns1 (if current-ns-sym (find-ns current-ns-sym) r-ns)
               y (binding [*ns* r-ns1 *this-k* repl-k *world* s]
-                  (let [out (eval code-or-e)] (reset! tmp-namespace-atom *ns*) out))]
-          {:type :success :value y})
+                  (let [out (if full-state-run? ((eval code-or-e) s) (eval code-or-e))] (reset! tmp-namespace-atom *ns*) out))]
+          {:type :success :value y :full-state-run? full-state-run?})
         (catch Exception e
                 (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
                   {:type :runtime-err :value (str "\nRuntime error:\n" (repl-err-msg-tweak (unerror/pr-error e)))}))))))
@@ -113,7 +114,6 @@
   "Depending on the nature of result, the repl result may need to be summarized."
   (let [pieces (:pieces box)
         result (:result box)
-        result-ty (if (map? result) (get result :type))
         result-str (if (= (:type result) :success) (second (get-summary box)) (:value result))
         pieces1 (cond (= (count pieces) 0) [{:text " "} {:text result-str}]
                   (= (count pieces) 1) (conj pieces {:text result-str})
@@ -121,7 +121,8 @@
     (codebox/set-precompute (assoc box :pieces pieces1))))
 
 (defn run-repl [s repl-k]
-  "This returns the modified s, which will include any alteration of s in @globals/one-atom"
+  "This returns the modified app state s. Most functions don't work with s and we just add in the report.
+   However, ^:global on a function will cause us to run it on s as a whole and we skip the report step."
   ; TODO: put repls on another process with it's own threads.
   ; The other process has no windows (headless).
   ; Sync our namespace variables with that process.
@@ -133,19 +134,16 @@
   ; If there is a *gui-atom* in the input we run it locally on a future.
     ; Crashes can leak into here but at least this gives us a way to modify the gui.
     (logger/gtime-reset!)
-    (let [_ (swap! globals/one-atom #(assoc % :app-state s))
-          txt (rtext/rendered-string (get-in s [:components repl-k]))
+    (let [txt (rtext/rendered-string (get-in s [:components repl-k]))
           new-ns-at (atom r-ns)
-          result (get-repl-result s repl-k txt new-ns-at) ; DONT put the repl into a swap. Swap may call more than once.
-          s1 (:app-state @globals/one-atom) ; s1 not= s for more complex repl-as-application cases.
-          repl1 (get-in s1 [:components repl-k])]
-      (if (map? repl1) ; Our repl is still there.
-        (let [repl2 (-> (assoc repl1 :result result :view-path []) (show-result)
+          result (get-repl-result s repl-k txt new-ns-at)]
+      (if (:full-state-run? result) (:value result) ;The repl code was a fn that ran on s and returned a modified s.
+        (let [repl (get-in s [:components repl-k])
+              repl1 (-> (assoc repl :result result :view-path []) (show-result)
                       (assoc :*ns* (textparse/sym2ns @new-ns-at))
                       (update :num-run-times inc)
                       (update :cmd-history #(conj % txt)))]
-          (assoc-in s1 [:components repl-k] repl2))
-        s1)))
+          (assoc-in s [:components repl-k] repl1)))))
 
 (defn old-cmd-search [box delta]
    "Select a region of text to narrow-down old cmds."

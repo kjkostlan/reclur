@@ -49,13 +49,14 @@
   (let [^String ver (System/getProperty "java.version")]
     (or (.startsWith ver "1.11") (.startsWith ver "11."))))
 
-(defonce _inertial-scroll-atom (atom #{}))
 (defn _scroll-core [mevt] (select-keys mevt [:ScrollAmount :UnitsToScroll :PreciseWheelRotation :WheelRotation]))
 (defn update-inertial-scroll-guess! [mevt]
   "Uses heuristics to figure out if we are on an inertial scroll or not."
-  (swap! _inertial-scroll-atom #(let [p1 (conj % (_scroll-core mevt))]
-                                  (if (< (count p1) 256) p1
-                                    (set (take 256 p1))))))
+  (swap! globals/external-state-atom 
+    #(let [evts (get % :scroll-unique-cache #{})
+           p1 (conj % (_scroll-core mevt))
+           p2 (if (< (count p1) 256) p1 (set (take 256 p1)))]
+       (assoc % :scroll-unique-cache p2))))
 (defn _inertial-scroll-guess-core? [evts]
   (let [g11 #(dec (* 2.0 (/ 1.0 (+ 1.0 (Math/exp (- %))))))
         mean #(/ (reduce + %) (max 1 (count %)))
@@ -72,7 +73,7 @@
     (boolean (> (+ nunique-evt-sway precise-sway units-sway) 0.0))))
 (defn inertial-scroll-guess? []
   "Are we on an inertial scroll or not? Best guess. Keep calling this, later guesses should be more accurate."
-  (let [evts @_inertial-scroll-atom]
+  (let [evts (get @globals/external-state-atom :scroll-unique-cache #{})]
     (if (empty? evts) false (_inertial-scroll-guess-core? evts))))
 
 ;;;;;;;;;;;;;;;;;;;;; Platform dependent code ;;;;;;;;;;;;;;;;;;;;;;;
