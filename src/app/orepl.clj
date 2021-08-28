@@ -19,9 +19,6 @@
     [layout.blit :as blit]
     [layout.browseedn :as browseedn]))
 
-; The rtext has three pieces: 
-; The first is the text entered. The second is a newline. The last is the repl's output.
-
 (declare interact-fns) ; Possible dependency cycle with the new function being used by some interact fns.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Look and feel ;;;;;;;;;;;;;;;;;;;;;;;;;;

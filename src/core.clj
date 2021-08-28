@@ -361,7 +361,7 @@
 (defn attempt-repair [s]
   "Tries to remove common problems with s that can throw an exception.
    Does not remove all problems and will not help if the event function is broken, etc."
-   (print "ATTEMPT REPAIR" (keys s))
+  (print "ATTEMPT REPAIR" (keys s) "\n")
   (let [ensure-place #(let [c1 (if (:position %) % (assoc % :position [0.0 0.0]))
                             c2 (if (:size c1) c1 (assoc c1 :size [800.0 600.0]))
                             c3 (if (:z c2) c2 (assoc c2 :z 0.0))] c3) ; Easily forgotten. 
@@ -390,18 +390,19 @@
       :else (let [s1 (logged-function-run #(dispatch-listener %2 %1) s evt-g)]
               (undo/maybe-report! evt-g s s1) s1))))
 
-(defn launch-main-app! []
-  (cpanel/stop-app!)
+(defn _init-state-fn []
+  "Opening the window first then setting up the app state should be better."
   (let [layout (layouts/default-lmode)
         s {:layout layout :components {} :camera [0 0 1 1] :typing-mode? true :active-tool (first (get-tools))}
         s1 (if (and (globals/can-child?) (not (globals/are-we-child?))) (iteration/ensure-childapp-folder-init!! s) s)
         s2 ((:initial-position layout) s1 (fbrowser/add-root-fbrowser s1) (orepl/new-repl) (siconsole/new-console))
-        
-        s3 (assoc s2 :selected-comp-keys #{})
-        s4 (update s3 :components #(multisync/update-keytags {} %))]
-    (cpanel/launch-app! s4 undo-wrapped-listener
+        s3 (assoc s2 :selected-comp-keys #{})]
+   (update s3 :components #(multisync/update-keytags {} %))))
+
+(defn launch-main-app! []
+    (cpanel/launch-app! _init-state-fn undo-wrapped-listener
       (fn [s] (logged-function-run update-gfx s))
-      app-render))) ; keep app-render minimal, no siconsole logging is allowed here.
+      app-render)) ; keep app-render minimal, no siconsole logging is allowed here.
 
 ; DONT call save-file, we can't run swing stuff from shutdown hooks reliably.
 ; Instead we do this on the exit-if-close function.

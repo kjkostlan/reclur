@@ -26,6 +26,13 @@
       []
       (reduce #(conj %1 (+ (last %1) %2)) [(nth couts 0)] (rest cs)))))
 
+(defn unwindoze [str-or-strs]
+  (cond (string? str-or-strs)
+    (string/replace str-or-strs "\\" "/")
+    (vector? str-or-strs) (mapv unwindoze str-or-strs)
+    (sequential? str-or-strs) (map unwindoze str-or-strs)
+    :else (throw (Exception. "This fn needs a str or vector of strs."))))
+
 ;;;;;;;;;;;;;;;;;;;;; Various types of files:
 
 ; is .clj file and is folder. Yes this could be abstracted to save a couple of lines.
@@ -52,17 +59,17 @@
        vec))
 
 (defn visible-children-leaf-names [^String file] ; Returns the leaf name.
-  (mapv #(let [^File f %] (.getName f)) (_visible-children-file-obj (File. file))))   
+  (mapv #(let [^File f %] (unwindoze (.getName f))) (_visible-children-file-obj (File. file))))
 
-(defn visible-children-full-names [^String file] ; Returns the leaf name.
-  (mapv #(let [^File f %] (.getCanonicalPath f)) (_visible-children-file-obj (File. file)))) 
+(defn visible-children-full-names [^String file] ; Returns the full path.
+  (mapv #(let [^File f %] (unwindoze (.getCanonicalPath f))) (_visible-children-file-obj (File. file))))
 
 (defn visible-children [folder full-path?]
   "Get a vector of a directory's children, if there are any.
    Omits hidden and temporary files.
    Works with both absolute and relative paths."
   (let [files (_visible-children-file-obj (File. folder))]
-    (mapv #(let [^File f %] (if full-path? (.getCanonicalPath %) (.getName %))) 
+    (mapv #(let [^File f %] (unwindoze (if full-path? (.getCanonicalPath %) (.getName %))))
       files)))
 
 (defn all-files-inside [folder]
@@ -73,17 +80,15 @@
 
 ;;;;;;;;;;;;;;;;;;;;;; environment:
 
-(defn sep [] (File/separator))
-
 (def ^:dynamic *file-safety?* true)
 
 (defn absolute-project-folder []
   "Gets the absolute project folder, the reclur folder's full path."
-  (System/getProperty "user.dir"))
+  (unwindoze (System/getProperty "user.dir")))
 
 (defn absolute-path [^String file]
   "Simplifies it as much as possible."
-  (.getCanonicalPath ^File (File. file)))
+  (unwindoze (.getCanonicalPath ^File (File. file))))
 
 (defn assert-in-our-folders [file]
   "Safety feature to ensure we only modify our own directories, which is either our reclur directory or the child iteration thereof."
@@ -105,35 +110,35 @@
 
 (defn file2dotpath [^String file]
   "./src/clooj/java/file.clj into clooj.java.file, etc"
-  (string/replace (subs file 6 (- (count file) 4)) (sep) "."))
+  (string/replace (subs file 6 (- (count file) 4)) "/" "."))
 
 (defn dotpath2file [^String dotpath]
   "inverse of file2dotpath."
   ; TODO: rename and possibly change these two fns since we return a string representation.
-  (str "." (sep) "src" (sep) (string/replace dotpath "." (sep)) ".clj"))
+  (str "./" "src/" (string/replace dotpath "." "/") ".clj"))
 
 (defn file2folder [^String file]
   "extracts the folder that the file (which is NOT a folder) is in."
-  (let [match (last (re-index (str-to-regex (sep)) file))]
-    (if (nil? match) 
+  (let [match (last (re-index (str-to-regex "/") file))]
+    (if (nil? match)
       file ; no change.
       (subs file 0 match))))
 
 (defn full-to-leaf [^String file]
-  (last (string/split file (str-to-regex (sep)))))
+  (last (string/split file (str-to-regex "/"))))
 
 (defn full-to-local [file]
   "Does nothing for files already local apart from ./ formatting."
-  (let [file (.getCanonicalPath ^File (File. file))
-        root (.getCanonicalPath ^File (File. "."))
-        _ (if (or (< (count file) (count root)) 
+  (let [file (unwindoze (.getCanonicalPath ^File (File. file)))
+        root (unwindoze (.getCanonicalPath ^File (File. ".")))
+        _ (if (or (< (count file) (count root))
                 (not= (subs file 0 (count root)) root))
             (throw (Exception. "Need to use .. for local TODO")))]
     (str "." (subs file (count root)))))
 
 (defn local-to-full [^String file]
   "Does nothing for files already fullpath execpt for formatting."
-  (.getCanonicalPath ^String (File. file)))
+  (unwindoze (.getCanonicalPath ^String (File. file))))
 
 ;;;;;;;;;;;;;;;;;;;; Saving and loading, etc:
 
@@ -165,11 +170,11 @@
 (defn save!! [^String file ^String contents] ; three ! means that the disk is mutated.
   (assert-in-our-folders file)
   (try (do
-         ; check for folder: 
+         ; check for folder:
          (let [folder (File. (file2folder file))]
            (.mkdirs folder))
          (with-open [writer (BufferedWriter. (OutputStreamWriter. (FileOutputStream. (File. file)) "UTF-8"))]
-                    (.write writer contents)))     
+                    (.write writer contents)))
   (catch Exception e
     (println (.getMessage e))
     )))
@@ -204,14 +209,14 @@
         ff (fn [x] (if ignore-git? (filterv #(not= % ".git") x) x))
         common (ff (set/intersection ch-ref ch-tgt))
         deletes (ff (set/difference ch-tgt ch-ref))]
-    (mapv #(delete!! (str target-folder (sep) %)) deletes)
-    (mapv #(let [file-ref (str ref-folder (sep) %) folder-r? (folder? file-ref)
-                 file-tgt (str target-folder (sep) %) folder-t? (folder? file-tgt)]
+    (mapv #(delete!! (str target-folder "/" %)) deletes)
+    (mapv #(let [file-ref (str ref-folder "/" %) folder-r? (folder? file-ref)
+                 file-tgt (str target-folder "/" %) folder-t? (folder? file-tgt)]
              (if (and folder-r? folder-t?)
                (_delete-missing!! file-ref file-tgt ignore-git?))) common)))
 
 (defn copy!! [^String orig ^String dest & dot-git-kludge]
-  "Copies a file/folder from origin to destination, overwriting any data. 
+  "Copies a file/folder from origin to destination, overwriting any data.
    For folders, removes files/folders in the dest that aren't in orig.
   dot-git-kludge fixes a strange not file-not-found error in the .git that I don't understand."
   (assert-in-our-folders orig) (assert-in-our-folders dest)

@@ -26,12 +26,14 @@
     [javax.swing SwingUtilities]
     [java.awt.image BufferedImage]
     [java.awt.geom AffineTransform])
-  (:require [clojure.set :as set]
+  (:require [clojure.set :as set] [clojure.string :as string]
+    [crossplatform.cp :as cp]
     [layout.xform :as xform]
-    [javac.gfxcustom :as gfxcustom]
-    [clojure.string :as string]))
+    [javac.gfxcustom :as gfxcustom]))
 
 (def ^:dynamic *sprite-cache-ms* 500) ; render components as sprites when we aren't actively using them, unless the no-sprite flag is used.
+
+(def ^:dynamic *image-scaleup* 2.0) ; Usually make sprite caching look better
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;; Specific code.
@@ -184,18 +186,15 @@
 ;;;;;;;;;;;;;;;;;;; Gfx parameters to set ;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn fixed-width-font! [^Graphics2D g]
-  (let [^Font font (Font. "Monospaced" (int Font/PLAIN) (int 11))]
-    (.setFont g font)))  
-    
 (defn interpolate-img! [^Graphics2D g]
   "Bilinear seems OK to almost as fast, but bicubic is very slow."
   (let [^RenderingHints rh (RenderingHints. ^java.awt.RenderingHints.Key (RenderingHints/KEY_INTERPOLATION) ^java.awt.RenderingHints.Key (RenderingHints/VALUE_INTERPOLATION_BILINEAR))]
     (.setRenderingHints g rh)))
 
 (defn healthy-stroke! [^Graphics2D g] 
-  "More than 1 is enough so that downscaled images don't look so horrible, at least with bilinear interp."
-  (.setStroke g ^BasicStroke (BasicStroke. (float 2.0))))
+  "More than 1 is enough so that downscaled images don't look so horrible, at least with bilinear interp.
+   Does not affect fonts, but as long as fonts render thick enough it should be OK."
+  (.setStroke g ^BasicStroke (BasicStroke. (float *image-scaleup*))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;; How cameras xform clojure gfx structures ;;;;;;;;
@@ -372,7 +371,7 @@
         pad 5 ; padding since gfx-bound isn't perfect. Accuracy vs performance.
         x0 (- (first xxyy) pad) x1 (+ (second xxyy) pad) y0 (- (nth xxyy 2) pad) y1 (+ (nth xxyy 3) pad)
         
-        scaleup 2 ; scaleup so the image is higher fidelity.
+        scaleup *image-scaleup* ; scaleup so the image is higher fidelity.
         xf [(- (* x0 scaleup)) (- (* y0 scaleup)) scaleup scaleup] ; xform to not cut off the up or left and to scale up.
         
         sx (* scaleup (- x1 x0)) sy (* scaleup (- y1 y0))
@@ -386,7 +385,7 @@
         ;(BufferedImage. (int sx) (int sy) (int BufferedImage/TYPE_INT_ARGB))
         ^Graphics2D g (.createGraphics img)
         _ (healthy-stroke! g)]
-    (fixed-width-font! g)
+    (cp/fixed-width-font! g)
     (paint-gfx! g xf cmds) [img xf]))
   
 (defn add-image! [^Graphics2D g ^BufferedImage sprite-im im-xform camera]
@@ -405,7 +404,7 @@
   "Cmds-old and cmds are maps of sprite, each sprite is a map with vectors and other information. Cam determines how to position everything.
    cmds-old and sprites are for precomputation, set to {} to recalculate everything.
    Returns the map of sprites to use for the precompute."
-  (fixed-width-font! g) (interpolate-img! g)
+  (cp/fixed-width-font! g) (interpolate-img! g)
   (let [kys (sort-by #(get-in cmds [% :z] 0.0) (keys cmds)) vls (mapv #(get cmds %) kys) ; z-sort
         ; code here a bit messy...
         cameras (zipmap kys (mapv :camera vls))

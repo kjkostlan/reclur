@@ -8,7 +8,7 @@
   :main core
   :java-source-paths ["src"]
   :jvm-opts ^:replace ["-XX:-OmitStackTraceInFastThrow"]
-  :dependencies [[org.clojure/clojure "1.10.1"] ; Keep this up-to-date.
+  :dependencies [[org.clojure/clojure "1.10.3"] ; Keep this on the latest "stable" build.
                  [clj-inspector "0.0.12"]      ; clojure spec website read rationale.
                  [slamhound "1.2.0"]           ; spec-ulation rich hickey (recent note).
                  [com.cemerick/pomegranate "0.0.11"]

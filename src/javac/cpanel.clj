@@ -9,11 +9,10 @@
     [app.iteration :as iteration]
     [crossplatform.cp :as crossp]
     [collections])
-  (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent ComponentAdapter]
+  (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent ComponentAdapter WindowAdapter]
     [javax.swing SwingUtilities]
     [java.awt FlowLayout] 
     [javax.swing JFrame JPanel]))
-
 
 ;;;;;;;;;;;;;;;;;;;;; Settings ;;;;;;;;;;;;;;;;;;;;
 
@@ -68,6 +67,7 @@
   (if evt 
     (let [kwd (:type evt)
           extern (:external-state x)
+          _ (if (= kwd :mouseWheelMoved) (crossp/update-inertial-scroll-guess! evt))
           evt (if (or (= kwd :mouseDragged) (= kwd :mouseMoved))
                 (assoc evt :X0 (:X0 extern) :Y0 (:Y0 extern) :X1 (:X1 extern) :Y1 (:Y1 extern)) evt)
           ;_ (println "Removing: " kwd "old queue len" (count (:evt-queue x)) "new queue len: " (count (into [] (rest (:evt-queue x)))))
@@ -86,8 +86,12 @@
           evts (sort-by #(get % :Time 0) evts-unsorted); Sort by time because the future does not preserve order.
           x1 (reduce (fn [x-acc evt]
                        (try (dispatch x-acc evt)
-                         (catch Exception e (do (println "dequeue error") x-acc)))) x evts)]
+                         (catch Exception e (do (println "dequeue error:" e) x-acc)))) x evts)]
       (assoc x1 :evt-queue (collections/queue)))))
+
+(defn set-window-size [one-atom-contents w h]
+  "Should be called every time the window is resized."
+  (assoc-in one-atom-contents [:external-state :window-size] [w h]))
 
 ;;;;;;;;;;;;;;;;;;;;; Mutation ;;;;;;;;;;;;;;;;;;;;;
 
@@ -102,7 +106,7 @@
                (< (count evtq) *drop-frames-queue-length-threshold*))]
     (cond add? true
       (not report-if-fail?) false
-      :else 
+      :else
       (do (swap! _dropped-frame-counter 
             #(if (< % *drop-frames-report-every*) (inc %)
                (do (println "Dropped many frames due to slow evts and/or gfx: " %) 0))) false))))
@@ -140,9 +144,8 @@
 
 (defn store-window-size! [^JFrame frame]
   (future (lock-swap! one-atom 
-            #(assoc-in % [:external-state :window-size] 
-              (let [^java.awt.Dimension sz (.getSize (.getContentPane frame))]
-                [(.getWidth sz) (.getHeight sz)])))))
+            #(let [^java.awt.Dimension sz (.getSize (.getContentPane frame))]
+               (set-window-size % (.getWidth sz) (.getHeight sz))))))
 
 ; Continuously polling is a (tiny) CPU drain, but it is way easier than a lock system that must ensure we don't get overlapping calls to dispatch-loop!
 ; The idle CPU is 0.7% of one core for the total program (tested Aug 13th 2019).
@@ -199,6 +202,11 @@
        (componentShown [e] (store-window-size! frame))
        (componentResized [e] (store-window-size! frame)))))
 
+(defn add-close-listener! [^JFrame frame]
+  (.addWindowListener frame
+    (proxy [WindowAdapter] []
+      (windowClosing [e] (event-queue! e :quit)))))
+
 (defn add-parentin-listener! [] 
   "Adds a listener for stdin."
   (future
@@ -213,7 +221,7 @@
       (do (proxy-super paintComponent g) 
         (gfx/defaultPaintComponent! g this)))))
 
-(defn new-window []
+(defn new-window [w h]
   "Sets up all listeners and atoms. EDT thread only."
   (let [^JFrame frame (JFrame.);(JFrame. "The app")
         ^JPanel panel (proxy-panel)]
@@ -224,19 +232,21 @@
     (.setFocusTraversalKeysEnabled frame false) 
     (.add frame panel)
     (add-resize-listener! frame)
-    (.setSize frame 1440 877)
+    (.setSize frame w h) ; Does not trigger the resize-listener yet.
     (.setLocationRelativeTo frame nil)
     (.setVisible frame true)
     (if *add-keyl-to-frame?* (add-key-listeners! frame)
       (do (add-key-listeners! panel) (.setFocusable panel true) (.requestFocus panel)))
     (crossp/add-quit-request-listener! #(event-queue! % :quit))
+    (.setDefaultCloseOperation frame (JFrame/DO_NOTHING_ON_CLOSE))
+    (add-close-listener! frame) ; Not necessarily the least lines of code but gets the job done.
     [frame panel]))
 
 (defn swing-or-kludge [f]
   (if *mac-keyboard-kludge?* (f)
     (SwingUtilities/invokeAndWait f)))
 
-(defn launch-app! [init-state dispatch-fn update-gfx-fn render-fn]
+(defn launch-app! [init-state-fn dispatch-fn update-gfx-fn render-fn]
   "app is singleton, launching 
    dispatch-fn including is (f evt-clj state), we make our own every-frame event.
    update-gfx-fn is (f state-clj), returns the new state, and should cache any expensive gfx cmds.
@@ -245,16 +255,21 @@
     (fn [& args]
       ;; https://stackoverflow.com/questions/1234912/how-to-programmatically-close-a-jframe
       (if-let [old-frame (:JFrame @one-atom)]
-        (do (.dispatchEvent old-frame (WindowEvent. old-frame WindowEvent/WINDOW_CLOSING)))
+        (do (.setDefaultCloseOperation old-frame (JFrame/DISPOSE_ON_CLOSE))
+          (.dispatchEvent old-frame (WindowEvent. old-frame WindowEvent/WINDOW_CLOSING)))
         (swap! one-atom #(dissoc % :JFrame)))
-      (let [[frame panel] (new-window)]
+      (let [w 1440 h 877
+            [frame panel] (new-window w h)
+            s0 (set-window-size (empty-state) w h)
+            _ (reset! one-atom s0)]
         (reset! one-atom
-               (assoc (empty-state)
-                      :app-state init-state
+               (assoc s0
+                      :app-state (init-state-fn)
                       :dispatch dispatch-fn :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn 
                       :external-state {}
                       :JFrame frame :JPanel panel))))))
 
 (defn stop-app! []
+  "Different from quit and very rarely used."
   (if (not= (dissoc @one-atom :evt-queue) (dissoc (empty-state) :evt-queue)) (println "stopping app (IF any app was open)"))
   (launch-app! {} {} (fn [state] []) (fn [state] [])))

@@ -9,7 +9,8 @@
 (ns app.rtext
   (:require [javac.clipboard :as clipboard]
     [clojure.string :as string]
-    [app.stringdiff :as stringdiff]))
+    [app.stringdiff :as stringdiff]
+    [layout.keyanal :as ka] [layout.mouseanal :as ma]))
 
 ; Variables stored here:
 ; :pieces = a vector of 
@@ -25,23 +26,8 @@
 ; TODO: an editor that handles extremly long text.
 
 (defn ctrl+ [key-evt]
-  "If the user hits control-a returns the character a, etc. Returns nil otherwise."
-  (if (:MetaDown key-evt) (:KeyChar key-evt)))
-
-(defn arrow-key [key-event]
-  "Returns the character ^ v < or > for arrow keys. Returns nil otherwise."
-  (let [kc (:KeyCode key-event)] 
-    (cond (= kc 37) \< (= kc 39) \> (= kc 38) \^ (= kc 40) \v)))
-
-(defn typed-key [key-event]
-  "Returns the character typed, including case, tabs, backspaces, and newlines. Returns nil otherwise."
-  (let [ch (:KeyChar key-event)
-        ^String s "`1234567890-=\b\tqwertyuiop[]\\asdfghjkl;'\nzxcvbnm,./~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>? "]
-    (if (.contains s (str ch)) ch)))
-
-(defn esc? [key-event]
-  "Did we hit the escape key?"
-  (= (int (:KeyChar key-event)) 27))
+  "If the user hits Ctrl-a returns the char a, etc. Returns nil otherwise."
+  (if (ka/c? key-evt) (first (ka/lowercase-letter key-evt))))
 
 ;;;;;;;;;;;;;;;;;;;; Defaults ;;;;;;;;;;;;;;;;
 
@@ -558,8 +544,8 @@
    :type is :type :backspace :select-all :cut :copy :paste :save :arrow :type :ignore
    :ix0 and :ix1 are the range of relevent selections. For :select-all it is the entire node.
    :value is the char typed."
-  (let [box (v box) ck (ctrl+ key-evt) ak (arrow-key key-evt)
-        tk (if-let [x (typed-key key-evt)] (str x)) ek (esc? key-evt)
+  (let [box (v box) ck (ctrl+ key-evt) ak (ka/arrow-key key-evt)
+        tk (if-let [x (ka/typed-key key-evt)] (str x)) ek (ka/esc? key-evt)
         ix01 (exon box) ix0 (first ix01) ix1 (second ix01)]
     (cond (= ck \a) {:type :select-all :ix0 0 :ix1 (count (rendered-string box))}
       (= ck \x) {:type :cut :ix0 ix0 :ix1 ix1 :value ""}
@@ -647,8 +633,9 @@
 (defn mouse-wheel [wheel-evt box]
   "Mouse wheel scrolling. Only vertical is supported, sorry mac trackpads."
   ;(println (:WheelRotation wheel-evt) (:PreciseWheelRotation wheel-evt))
-  (let [horiz? (:ShiftDown wheel-evt) delta (:WheelRotation wheel-evt)]
-    (scroll-bound (scroll box (if horiz? delta 0) (if horiz? 0 delta)))))
+  (let [xy (ma/get-scroll-xy wheel-evt false)
+        box1 (scroll box (first xy) (second xy))]
+    (scroll-bound box1)))
 
 (defn dispatch-edit-event [box ed]
   "Doesn't clear empty pieces."

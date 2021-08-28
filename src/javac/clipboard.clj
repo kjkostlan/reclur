@@ -18,4 +18,3 @@
         contents (.getContents cb nil)]
     (try (str (.getTransferData contents DataFlavor/stringFlavor))
       (catch Exception e (str contents)))))
-  

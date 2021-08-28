@@ -14,7 +14,8 @@
      ^String (str (char (:KeyCode kevt))))
     (= (:KeyCode kevt) 192)))
 
-(defn match-letter? [kevt letter] (= (.toLowerCase ^String (str letter)) (.toLowerCase ^String (str (char (:KeyCode kevt))))))
+(defn lowercase-letter [kevt] "Ctrl+s => the string s" (.toLowerCase ^String (str (char (:KeyCode kevt)))))
+(defn match-letter? [kevt letter] (= (.toLowerCase ^String (str letter)) (lowercase-letter kevt)))
 
 (defn escape? [kevt] (= (:KeyCode kevt) 27))
 (defn enter? [kevt] (= (:KeyCode kevt) 10))
@@ -29,6 +30,22 @@
           (and (= c 39) (or (= l ">>") (= l "..")))
           (and (= c 38) (or (= l "^^") (= l "55")))
           (and (= c 40) (or (= l "VV") (= l "vv"))))))
+
+(defn arrow-key [key-event]
+  "Returns the character ^ v < or > for arrow keys. Returns nil otherwise."
+  (let [kc (:KeyCode key-event)] 
+    (cond (= kc 37) \< (= kc 39) \> (= kc 38) \^ (= kc 40) \v)))
+
+(defn typed-key [key-event]
+  "Returns the character typed, including case, tabs, backspaces, and newlines. Returns nil otherwise.
+   Effects of shift and ctrl will change it."
+  (let [ch (:KeyChar key-event)
+        ^String s "`1234567890-=\b\tqwertyuiop[]\\asdfghjkl;'\nzxcvbnm,./~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>? "]
+    (if (.contains s (str ch)) ch)))
+
+(defn esc? [key-event]
+  "Did we hit the escape key?"
+  (= (int (:KeyChar key-event)) 27))
 
 ;;;;;;;;;;;;;;;;;;;;;; Key combinations ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
