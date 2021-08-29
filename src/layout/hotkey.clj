@@ -68,7 +68,7 @@
   {"C-w" close ; all these are (fn [s]).
    "esc" toggle-typing
    "C-r" (fn [s] (do-to-selected-box s codebox/hint-sym-qual #{:codebox :orepl :siconsole})) ;Don't worry about having to type the whole symbol
-   "C-S-r r r" #(if (or (globals/are-we-child?) (warnbox/yes-no? "Relaunch app, losing any unsaved work? Does not affect the child app." false)) 
+   "C-S-r r r" #(if (warnbox/yes-no? "Relaunch app, losing any unsaved work?" false) 
                   (do (future (eval 'core.launch-main-app!)) (throw (Exception. "This iteration is dead, reloading."))) %)
    "C-l" (fn [s] (layouts/next-layout s)) 
    "C-S-l" (fn [s] (layouts/prev-layout s))
@@ -84,11 +84,7 @@
    ; ctrl+s = save onto child generation.
    ; ctrl+shift+s = pull child onto ourselves (TODO: do this when we quit as well).
    ; The child is viewed as the most up-to-date at all times, and it is occasionally copied back to us.
-   "C-s" (fn [s] (iteration/save-state-to-disk!! s)) ; save to the child, rapid iteration.
-   "C-S s s s" (fn [s] ; copy from child to us if we are the parent
-                 (if (and (globals/can-child?) (not (globals/are-we-child?)))
-                   (let [s1 (iteration/ensure-childapp-folder-init!! s)]
-                     (iteration/copy-child-to-us!! s1) s1) s))
+   "C-s" (fn [s] (iteration/save-state-to-disk!! s))
    "C-S-h" (fn [s] (hintbox/try-to-toggle-hint-box s))
    "C-S-g" (fn [s] (graphbox/try-to-toggle-graph-box s))
    "M-s" (fn [s] (do-to-selected-box s splice-at-cursor))

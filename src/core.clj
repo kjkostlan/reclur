@@ -394,10 +394,9 @@
   "Opening the window first then setting up the app state should be better."
   (let [layout (layouts/default-lmode)
         s {:layout layout :components {} :camera [0 0 1 1] :typing-mode? true :active-tool (first (get-tools))}
-        s1 (if (and (globals/can-child?) (not (globals/are-we-child?))) (iteration/ensure-childapp-folder-init!! s) s)
-        s2 ((:initial-position layout) s1 (fbrowser/add-root-fbrowser s1) (orepl/new-repl) (siconsole/new-console))
-        s3 (assoc s2 :selected-comp-keys #{})]
-   (update s3 :components #(multisync/update-keytags {} %))))
+        s1 ((:initial-position layout) s (fbrowser/add-root-fbrowser s) (orepl/new-repl) (siconsole/new-console))
+        s2 (assoc s1 :selected-comp-keys #{})]
+   (update s2 :components #(multisync/update-keytags {} %))))
 
 (defn launch-main-app! []
     (cpanel/launch-app! _init-state-fn undo-wrapped-listener

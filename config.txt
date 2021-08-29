@@ -1,3 +1,0 @@
-; Global configurations, allowing different feature-sets for different clients.
-{:enable-child? false
- :we-are-child? false}

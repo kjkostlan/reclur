@@ -5,8 +5,7 @@
 ; TODO: normalize the api as to whether to give an error on missing files, etc.
 
 (ns javac.file
-  (:require [clojure.set :as set] [clojure.string :as string]
-            [app.chfile :as chfile])
+  (:require [clojure.set :as set] [clojure.string :as string] [globals])
   (:import (java.io File BufferedWriter OutputStreamWriter FileOutputStream)
            (org.apache.commons.io FileUtils)
            (java.nio.file Files Paths)
@@ -18,10 +17,10 @@
   "Returns the indexes of where the regular expression occurs in the string s."
   (let [ins (re-seq re s)
         outs (string/split s re)
-        cins (map count ins) 
+        cins (map count ins)
         n (count cins)
         couts (concat (map count outs) (repeat n 0))
-        cs (map + cins couts)];
+        cs (map + cins couts)]
     (if (= n 0)
       []
       (reduce #(conj %1 (+ (last %1) %2)) [(nth couts 0)] (rest cs)))))
@@ -94,11 +93,10 @@
   "Safety feature to ensure we only modify our own directories, which is either our reclur directory or the child iteration thereof."
   (if *file-safety?*
     (let [^String fullpath (absolute-path file)
-          us-folder (absolute-path chfile/us-folder)
-          ch-folder (absolute-path chfile/child-folder)
+          us-folder (absolute-path (globals/get-working-folder))
           contained-in? (fn [^String folder] (.startsWith fullpath folder))]
-      (if (or (contained-in? us-folder) (contained-in? ch-folder)) true
-        (throw (Exception. (str file " = " fullpath " is not in either us or the child reclur folder. It may be safe to do so, but be careful before removing this error!")))))))
+      (if (contained-in? us-folder) true
+        (throw (Exception. (str file " = " fullpath " is not in our project folder. It may be safe/desirable to do so, but be careful before removing this error!")))))))
 
 ;;;;;;;;;;;;;;;;;;;;;; conversion functions:
 
@@ -221,7 +219,7 @@
   dot-git-kludge fixes a strange not file-not-found error in the .git that I don't understand."
   (assert-in-our-folders orig) (assert-in-our-folders dest)
   (let [^File origf (File. orig) ^File destf (File. dest) ignore-git? (boolean (first dot-git-kludge))]
-    (if (and ignore-git? (not= orig chfile/us-folder))
+    (if (and ignore-git? (not= orig (globals/get-working-folder)))
       (let [f1 (str orig "/.git")] (if (exists? f1) (delete!! f1))))
     (cond (.isDirectory origf) (do (FileUtils/copyDirectory origf destf) (_delete-missing!! orig dest ignore-git?))
       (.isFile origf) (FileUtils/copyFile origf destf)

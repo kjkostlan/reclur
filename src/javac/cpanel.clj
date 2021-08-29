@@ -6,7 +6,6 @@
     [javac.gfx :as gfx]
     [javac.clojurize :as clojurize]
     [coder.unerror :as unerror]
-    [app.iteration :as iteration]
     [crossplatform.cp :as crossp]
     [collections])
   (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent ComponentAdapter WindowAdapter]
@@ -210,14 +209,6 @@
   (.addWindowListener frame
     (proxy [WindowAdapter] []
       (windowClosing [e] (event-queue! e :quit)))))
-
-(defn add-parentin-listener! [] 
-  "Adds a listener for stdin."
-  (future
-    (while [true]
-      (let [s (try (iteration/get-input) (catch Exception e (do (Thread/sleep 1000) (str "ERROR in iteration/get-input:\\n" (unerror/pr-error e)))))] ; waits here until the stream has stuff in it.
-        (SwingUtilities/invokeLater #(event-queue! {:contents s :type :parent-in} :parent-in)))))) ; all evts are queued on the edt thread, not sure if this is ideal.
-(if (globals/are-we-child?) (add-parentin-listener!))
 
 (defn proxy-panel []
   (proxy [javax.swing.JPanel] [] 

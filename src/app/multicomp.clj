@@ -204,7 +204,7 @@
 
 (defn which-tool-hud [s]
   (let [tool (if-let [m (:active-tool s)] (:name m) :OOPS) typing? (:typing-mode? s)
-        g-cmd [:drawString [(str "tool = " tool " typing? = " typing? (if (globals/are-we-child?) "CHILD VERSION" "")) 2 15] {:FontSize 18 :Color [0 1 1 0.7]}]]
+        g-cmd [:drawString [(str "tool = " tool " typing? = " typing?) 2 15] {:FontSize 18 :Color [0 1 1 0.7]}]]
     [g-cmd]))
 
 (defn draw-select-box [comps k camera]
