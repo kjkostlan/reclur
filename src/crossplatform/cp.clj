@@ -52,9 +52,9 @@
 (defn _scroll-core [mevt] (select-keys mevt [:ScrollAmount :UnitsToScroll :PreciseWheelRotation :WheelRotation]))
 (defn update-inertial-scroll-guess! [mevt]
   "Uses heuristics to figure out if we are on an inertial scroll or not."
-  (swap! globals/external-state-atom 
+  (swap! globals/external-state-atom
     #(let [evts (get % :scroll-unique-cache #{})
-           p1 (conj % (_scroll-core mevt))
+           p1 (conj evts (_scroll-core mevt))
            p2 (if (< (count p1) 256) p1 (set (take 256 p1)))]
        (assoc % :scroll-unique-cache p2))))
 (defn _inertial-scroll-guess-core? [evts]
@@ -65,10 +65,10 @@
                                    (apply f (mapv #(get evt %) ks))))
         nunique-evt-sway (* 1.0 (g11 (- (count evts) 8)))
         precise-sway (* 6.0 (g11 (mean-f (fn [evt] (ky-only evt #(- (Math/abs (- %1 %2)) 0.25) :WheelRotation :PreciseWheelRotation)))))
-        units-sway (* 1.0 (g11 (let [rots (mapv (fn [evt] (Math/abs (get evt :WheelRotation 0.0))) evts)
+        units-sway (* 0.5 (g11 (let [rots (mapv (fn [evt] (Math/abs (get evt :WheelRotation 0.0))) evts)
                                      diff (- (reduce max rots) (reduce min rots))]
                                  (- diff 2.0))))]
-    ;(mapv (fn [k] (println "wheel k " k (mapv #(get % k) evts))) (keys (first evts)))
+    ;(println "Evts:" evts)
     ;(println "Sways to inertial scroll:" nunique-evt-sway precise-sway units-sway)
     (boolean (> (+ nunique-evt-sway precise-sway units-sway) 0.0))))
 (defn inertial-scroll-guess? []

@@ -4,7 +4,7 @@
   (:require [layout.xform :as xform]
     [app.multicomp :as multicomp]
     [clojure.string :as string]
-    [layout.keyanal :as ka]
+    [layout.keyanal :as ka] [layout.mouseanal :as ma]
     [layout.layoutcore :as layoutcore]
     [clojure.set :as set]
     [globals]))
@@ -267,8 +267,8 @@
 (defn wheel-zoom [m-evt s] ; w and s to zoom in and out by an increment.
                       (let [zoom0 (nth (:camera s) 2)
                             mX (:X m-evt) mY (:Y m-evt)
-                            rotation (:PreciseWheelRotation m-evt)
-                            step 0.020; (cond (:AltDown m-evt) 0.5 (:ShiftDown m-evt) 0.01 :else 0.05)
+                            rotation (second (ma/get-scroll-xy m-evt true))
+                            step 0.005; (cond (:AltDown m-evt) 0.5 (:ShiftDown m-evt) 0.01 :else 0.05)
                             rzoom (Math/exp (* step rotation))
                             xf [(* mX (- 1 rzoom)) (* mY (- 1 rzoom)) rzoom rzoom]]
                         (update s :camera #(xform/xx % xf))))

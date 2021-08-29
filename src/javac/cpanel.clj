@@ -47,9 +47,9 @@
       (= (:Button e-clj) 1) (assoc old-extern :Button1 false :Button false)
       (= (:Button e-clj) 2) (assoc old-extern :Button2 false :Button false))
     (or (= kwd :keyPressed) (= kwd :keyReleased))
-    (do (assoc old-extern :ShiftDown (:ShiftDown e-clj) :ShiftDown (:ShiftDown e-clj)
+    (assoc old-extern :ShiftDown (:ShiftDown e-clj) :ShiftDown (:ShiftDown e-clj)
       :AltDown (:AltDown e-clj) :ControlDown (:ControlDown e-clj)
-      :AltGraphDown (:AltGraphDown e-clj)))
+      :AltGraphDown (:AltGraphDown e-clj))
     :else old-extern))
 
 (defn queue1 [x e-clj kwd] 
@@ -65,18 +65,22 @@
    Does not affect the event queue."
   (if evt 
     (let [kwd (:type evt)
+          _ (if (= kwd :mouseWheelMoved) 
+              (do (crossp/update-inertial-scroll-guess! evt)
+                (swap! globals/external-state-atom
+                  #(let [sc-h (get % :mouse-wheel-history [])
+                         sc-h (if (> (count sc-h) 255) (into [] (rest sc-h)) sc-h)]
+                     (assoc % :mouse-wheel-history (conj sc-h evt))))))
           extern @globals/external-state-atom
-          _ (if (= kwd :mouseWheelMoved) (crossp/update-inertial-scroll-guess! evt))
           evt (if (or (= kwd :mouseDragged) (= kwd :mouseMoved))
                 (assoc evt :X0 (:X0 extern) :Y0 (:Y0 extern) :X1 (:X1 extern) :Y1 (:Y1 extern)) evt)
           ;_ (println "Removing: " kwd "old queue len" (count (:evt-queue x)) "new queue len: " (count (into [] (rest (:evt-queue x)))))
           f (:dispatch x)
-          new-external (update-external-state evt (:type evt) extern)
           new-state (try (if f (f evt (:app-state x)) (:app-state x))
                       (catch Exception e (println e) (:app-state x)))
           ud? true ; TODO: better gfx update rules.
           ]
-     (reset! globals/external-state-atom new-external)
+     (swap! globals/external-state-atom #(update-external-state evt (:type evt) %))
      (assoc x :app-state new-state :needs-gfx-update? ud?)) x))
 
 (defn dispatch-all [x]
@@ -260,13 +264,12 @@
         (swap! globals/external-state-atom #(dissoc % :JFrame)))
       (let [w 1440 h 877
             [frame panel] (new-window w h)]
-        (reset! globals/external-state-atom {:X0 0 :Y0 0 :X1 0 :Y1 0})
+        (swap! globals/external-state-atom #(assoc % :X0 0 :Y0 0 :X1 0 :Y1 0))
         (set-window-size! w h)
         (swap! globals/external-state-atom #(assoc % :JFrame frame :JPanel panel))
         (lock-reset! globals/sync-app-atom
-               (assoc (empty-state)
-                      :app-state (init-state-fn)
-                      :dispatch dispatch-fn :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn))))))
+               (assoc (empty-state) :app-state (init-state-fn)
+                :dispatch dispatch-fn :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn))))))
 
 (defn stop-app! []
   "Different from quit and very rarely used."
