@@ -387,17 +387,29 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Tree functions ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-(defn _find-value-in [x v p]
+(defn _find-value-in [x v p include-map-keys?]
   (cond (= x v) p
     (coll? x)
-    (let [kys (into [] (ckeys x))
-          vls (into [] (cvals x))]
-      (first (filter identity (mapv #(_find-value-in %2 v (conj p %1)) kys vls))))))
-(defn find-value-in [x v]
+    (let [kys (ckeys x) vls (cvals x)
+          mk? (and (map? x) include-map-keys?
+                (first (filter #(_find-value-in % v p true) kys)))]
+      (if mk? (conj p mk?)
+        (first (filter identity (mapv #(_find-value-in %2 v (conj p %1) include-map-keys?) kys vls)))))))
+(defn find-value-in [x v & include-map-keys?]
   "Finds the first path to value v in x.
    The path can't go through a key in maps.
-   Value is determied by cvals. nil for not found."
-  (_find-value-in x v []))
+   Value is determied by cvals. nil for not found.
+   include-map-keys?: Stuff that is or is inside of a map's keys paths to the map key itself."
+  (_find-value-in x v [] (first include-map-keys?)))
+(defn find-values-in [x v]
+  "All paths to v, not just the first one."
+  (let [stop (if v false true)]
+    (loop [xi x out []]
+      (let [ph1 (find-value-in xi v)]
+        (if (and ph1 (= ph1 (last out))) (throw (Exception. "Something is not working.")))
+        (if ph1
+          (recur (cassoc-in xi ph1 stop) (conj out ph1))
+          out)))))
 
 (defn _leaves [x]
   (if (not (coll? x)) [x]

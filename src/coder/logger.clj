@@ -228,40 +228,6 @@
 
 ;;;;;;;;;;;;;;; High-level loggering ;;;;;;;;;;;;;;;;
 
-(defn fnresult-logpaths [code]
-  "Log paths to the function's result. One path per each arity. Flexible to macroexpanding vs not and other formatting."
-  (let [cl (last code) cl0 (if (coll? cl) (first cl))
-        explicit-fn? (contains? #{'fn* `fn 'fn} cl0) ; Is it (def ... (fn ...))
-        prepend (if explicit-fn? [(dec (count code))] [])
-        fcode (c/cget-in code prepend)
-        packed? (not (first (filter vector? fcode))); (fn ([a b] ...)) vs (fn [a b] ...)
-        paths-in-fcode (if packed? (mapv #(vector % (dec (count (c/cget fcode %))))
-                                     (filterv #(c/listy? (c/cget fcode %)) (range (count fcode))))
-                         [[(dec (count fcode))]])]
-    (mapv #(c/vcat prepend %) paths-in-fcode)))
-
-(defonce _core-stuff (set (keys (ns-map (find-ns 'clojure.core)))))
-(defn fncall-logpaths [code & ns-sym]
-  "Log paths to forms that call external, non clojure core and non java Math functions.
-   It will be tricked by some bad coding styles such as functions that shadow clojure.core.
-   The path takes us to the whole function call, i.e (foo/bar 1 2 3)."
-  (let [path-atom (atom []) ns-sym (first ns-sym)
-        ns-ob (cond (not ns-sym) (find-ns 'clojure.core) 
-                (symbol? ns-sym) (find-ns ns-sym) :else ns-sym)
-        walk-fn (fn [path x]
-                  (if (c/listy? x)
-                    (let [x0 (first x)]
-                      (cond (not (symbol? x0)) "Not a symbol"
-                        (string/includes? (str x0) "clojure.core/") "We ignore the core namespace"
-                        (or (string/starts-with? (str x0) "Math/") 
-                          (string/starts-with? (str x0) "java.lang.Math/")) "We ignore java.lang/Math"
-                        (textparse/qual? x0) (swap! path-atom #(conj % path))
-                        (let [symr (ns-resolve ns-ob x0)] 
-                          (or (not symr) (string/includes? (str symr) "clojure.core/"))) "Local sym OR clojure.core sym" 
-                        :else (swap! path-atom #(conj % path)))
-                      x) x))]
-    (c/pwalk walk-fn code) @path-atom))
-
 (defn with-log-paths [sym2paths sym2mexpand? var-obj & args]
   "Runs var-obj with temporarly adjusted log paths and returns the logs.
    var-obj can be a function, but a direct reference to a var will NOT get it's log-paths.
@@ -347,7 +313,7 @@
 (defn w2ps [sym-qual search-key mexpand?]
    (let [code (symqual2code sym-qual mexpand?)
         _ (if (not code) (throw (Exception. (str "Cant find code for:" sym-qual))))
-        phs (cnav/paths-of code search-key)] 
+        phs (c/find-values-in code search-key)] 
      phs))
 
 (defn user-data-logger! [sym-qual path udata]
@@ -447,8 +413,8 @@
         fn-syms (mapv (fn [sym] (if-let [x (first (filter #(string/includes? (str %) (str sym)) 
                                                     (keys vv)))] x sym)) fn-syms)
         _ (println "Fn syms:" fn-syms)
-        sym2paths (zipmap fn-syms (mapv #(fnresult-logpaths (get vv %)) fn-syms))
-        sym2mexpand? false ; fnresult-logpaths needs no mexpand.
+        sym2paths (zipmap fn-syms (mapv #(cnav/fnresult-paths (get vv %)) fn-syms))
+        sym2mexpand? false ; Needs no mexpand.
         logs (apply with-log-paths sym2paths sym2mexpand? f args)
         log-syms (mapv #(first (:path %)) logs)
         start-times (mapv :start-time logs)

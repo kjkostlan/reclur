@@ -91,7 +91,7 @@
   (dec (count (string/split (piece-real-string piece) #"\n"))))
 
 (defn contain-ixs [box] 
- "Indexes on the rendered str that contain the index
+ "Indexes on the rendered str that contain the cursor in terms of nesting level.
   grab the string using an inclusive, exclusive pattern to select the internal region and the brackets. 
   rtext/cursor-ix-to-piece can get the piece index.
   Used for cold-folding, etc."

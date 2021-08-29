@@ -4,6 +4,7 @@
   (:require [clojure.set :as set] [clojure.string :as string] [clojure.walk :as walk]
     [layout.blit :as blit]
     [app.codebox :as codebox]
+    [coder.cbase :as cbase]
     [c]))
 
 (def ^:dynamic *max-dig-range* 1e5)
@@ -83,7 +84,7 @@
         n (cond (not (coll? x)) 1 (counted? x) (count x)
             :else (let [n0 (count (take dig x))] (if (< n0 dig) n0 "???")))
         sym+meta #(with-meta (symbol %) {::path path})
-        meta1 #(with-meta %1 (meta %2))
+        meta1 #(try (with-meta %1 (meta %2)) (catch Exception e %1))
         meta-kvs-if-map (fn [x1] (if (map? x1) (zipmap (mapv meta1 (keys x1) (vals x1)) 
                                                  (vals x1)) x1))]
     (cond
@@ -105,50 +106,8 @@
         opts1 (merge opts-default opts)]
     (_summarize [] x opts1)))
 
-(defn string-indexes-of [txt key]
-  "Does not work for regexp. TODO: did we write another version of this fn?"
-  (loop [acc [] char-ix 0]
-    (let [ix-next (string/index-of txt key char-ix)]
-      (if ix-next (recur (conj acc ix-next) (inc ix-next)) acc))))
-
-(defn path-at-cursor-core [x x-string cursor-ix]
-  "What path is where the cursor is at x, not sure if 100% fool-proof but at least 99%.
-   Only handles leaves and has toruble with non-leaf map keys.
-   This fn may be moved to another file as it is independent of the summary process.
-   Map keys and map values coorespond to the same path."
-  (let [cursor-ix (max 0 (min (count x-string) cursor-ix))
-        x-string (str x-string "   ")
-        get-subtok (fn [cursor-ix1]
-                     (let [cursor-ix1 (max 0 (min (count x-string) cursor-ix1))
-                           tmp-box (codebox/select-twofour-click
-                                     (assoc (codebox/new-codebox) :pieces [{:text x-string}]
-                                      :cursor-ix cursor-ix1) false true)]
-                       (subs x-string (:selection-start tmp-box) (:selection-end tmp-box))))
-        
-        tok (get-subtok cursor-ix)
-        tok (first (filter valid? (mapv #(get-subtok (+ cursor-ix %)) [0 -1 -2 1])))
-        char-ixs (if tok (string-indexes-of x-string tok))
-        ix (first (filter #(let [cix (nth char-ixs %)] 
-                             (and (>= cursor-ix cix) 
-                               (<= cursor-ix (+ cix (count tok)))))
-                     (range (count char-ixs))))]
-    (if (and ix tok)
-      (let [phs (into [] (c/paths x)) n-ph (count phs)
-            x-fast (walk/postwalk #(if (sequential? %) (into [] %) %) x)]
-        (loop [used-up 0 ph-ix 0]
-          (if 
-            (= ph-ix n-ph) (throw (Exception. "Out of bounds likely bug in this code."))
-            (let [ph (nth phs ph-ix)
-                  xi (c/cget-in x-fast ph)
-                  xi-parent (if (> (count ph) 0) (c/cget-in x-fast (butlast ph)))
-                  match-uses (if (coll? xi) 0 (count (string-indexes-of (str xi) (str tok))))
-                  key-uses (if (map? xi-parent) (count (string-indexes-of (str (last ph)) (str tok))) 0)
-                  used-up1 (+ used-up match-uses key-uses)]
-              (if (>= (dec used-up1) ix) (nth phs ph-ix)
-                (recur used-up1 (inc ph-ix))))))))))
-
 (defn path-at-cursor [x-summarized x-summarized-txt cursor-ix]
   "What path on the original x the cursor in x-summarized is at, nil if failure Does not work for *print-meta*."
-  (if-let [hot-path (path-at-cursor-core x-summarized x-summarized-txt cursor-ix)]
-    (let [x-piece (c/cget-in x-summarized hot-path)]
+  (if-let [hot-path (into [] (rest (cbase/stringlang-to-wpath x-summarized-txt cursor-ix :clojure)))]
+    (if-let [x-piece (c/cget-in x-summarized hot-path)]
       (::path (meta x-piece)))))

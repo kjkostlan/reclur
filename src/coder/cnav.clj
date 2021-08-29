@@ -1,11 +1,10 @@
 ; Code NAVigation
 
 (ns coder.cnav
-  (:require [clojure.walk :as walk]
-    [clojure.string :as string]
-    [app.fbrowser :as fbrowser]
-    [javac.file :as jfile]
+  (:require [clojure.walk :as walk] 
     [clojure.set :as set]
+    [clojure.string :as string]
+    [coder.textparse :as textparse] 
     [c]))
 
 ;;;;;;;; Support fns ;;;;;;;;;
@@ -26,7 +25,66 @@
 (defn list-is-list [t]
   (clojure.walk/prewalk #(if (= (_lty %) 1) (apply list %) %) t))
 
-;;;;;;;; Pathing fns ;;;;;;;;;
+(defn _class? [code]
+  (and (c/listy? code)
+    (contains? #{'defclass 'definterface `definterface 'defenum 'defprotocol `defprotocol} (first code))))
+
+;;;;;;;;;;;;;;;;;;;;;;; Walk-a-collection functions ;;;;;;;;;;;;;;;;;;;;;;
+
+(defn symbols-in [x]
+  "Acts recursivly, returns a set. Does not include special forms or map keys."
+  (cond (contains? specials x) #{}
+    (symbol? x) #{x}
+    (map? x) (set/union #_(symbols-in (keys x)) (symbols-in (vals x)))
+    (coll? x) (apply set/union (mapv symbols-in x))
+    :else #{}))
+
+(defn unique-leaves [x exclude-f]
+  "Makes leaves unuqie, unless exclude-f is true on the leaf."
+  (let [a (atom 0)
+        xform! #(let [ix (str @a) _ (swap! a inc)]
+                  (cond (and exclude-f (exclude-f %)) %
+                    (symbol? %) (symbol (str "sym" ix))
+                    (string? %) (str ix)
+                    (keyword? %) (keyword (str "kwd" ix))
+                    (coll? %) %
+                    (number? %) ix
+                    :else (str "leafy" ix)))]
+    (walk/postwalk xform! x)))
+
+;;;;;;;; Comparing two collections ;;;;;;;
+
+(defn leaf-path-map [x y]
+  "Map from path in x to path in y for any leaf element. If a leaf element appears more than once in y
+   only one path is chosen. Using ^:leaf-meta also will let us associcate."
+  (let [lget-in (fn [x ph] (let [yi (c/cget-in x ph)
+                                 lm (:leaf-meta (meta yi))]
+                             (cond (not (coll? yi)) yi lm lm :else false)))
+        leaf2py (reduce #(let [v (lget-in y %2)] 
+                           (if v (assoc %1 v %2) %1)) {} (c/paths y))]
+    (reduce #(let [xi (lget-in x %2)]
+               (if (get leaf2py xi) (assoc %1 %2 (get leaf2py xi)) %1)) 
+      {} (c/paths x))))
+
+(defn leaf-branch-path-map [x y]
+  "Not just leaves."
+  (let [lpm (leaf-path-map x y)
+        
+        max-depth (apply max (mapv count (keys lpm)))
+        cut (fn [v n-cut]
+              (if (>= (count v) n-cut) (subvec (into [] v) 0 (- (count v) n-cut))))
+        no-nil (fn [m] (select-keys m (filter #(and % (get m %)) (keys m))))
+        ; Sucessively more stubby branch-maps:
+        branch-phms (mapv (fn [n-cut] (no-nil (zipmap (mapv #(cut % n-cut) (keys lpm))
+                                                (mapv #(cut % n-cut) (vals lpm))))) 
+                      (range max-depth))
+        phx (c/paths x)
+        get-ph (fn [px] 
+                 (let [phs (mapv #(get % px) branch-phms)]
+                   (first (filterv #(and % (= (c/cget-in x px) (c/cget-in y %))) phs))))
+        paths-x (c/paths x)]
+    (c/filter-kv
+      (fn [k v] v) (zipmap paths-x (mapv get-ph paths-x)))))
 
 (defn tree-diff [x y]
   "Finds a shortest path that differences x and y, false if x=y.
@@ -51,33 +109,6 @@
       :else (let [x (into [] x) y (into [] y)]
               (into [] (concat diff (tree-diff (nth x diff0) (nth y diff0))))))))
 
-(defn path-of [code search-key include-map-keys?]
-  "Finds the first path of search-key in code. False when nothing found.
-   include-map-keys?: Stuff that is or is inside of a map's keys paths to the map itself."
-  (cond (= code search-key) []
-    (not (coll? code)) false
-    :else
-    (let [kys (into [] (c/ckeys code)) vals (into [] (c/cvals code))
-          n (count vals)
-          ph (loop [ix 0]
-               (if (= ix n) false
-                 (if-let [p (path-of (nth vals ix) search-key include-map-keys?)]
-                   (vcons (nth kys ix) p) (recur (inc ix)))))]
-      (cond ph ph
-        (and include-map-keys? (map? code)) 
-        (if (first (filter #(path-of % search-key true) (keys code))) [] false)
-        :else false))))
-
-(defn paths-of [code search-key & include-map-keys?]
-  "Paths that lead to search-key in code."
-  (let [stop (if search-key false true) include-map-keys? (first include-map-keys?)]
-    (loop [x code out []]
-      (let [ph1 (path-of x search-key include-map-keys?)]
-        (if (= ph1 (last out)) (throw (Exception. "Something is not working.")))
-        (if ph1 
-          (recur (c/cassoc-in x ph1 stop) (conj out ph1))
-          out)))))
-
 (defn drag-path [code-old code-new path-old]
   "Tries to find a corresponding path, nil if failure.
    No obvious algorithim here, more of a heuristic. Room for much improvement."
@@ -85,8 +116,8 @@
         nesting-keys (mapv #(c/cget-in code-old
                               (subvec path-old %))
                        (range np)) ; shallow -> deep.
-        pathss-old (mapv #(paths-of code-old %) nesting-keys)
-        pathss-new (mapv #(paths-of code-new %) nesting-keys)
+        pathss-old (mapv #(c/find-values-in code-old %) nesting-keys)
+        pathss-new (mapv #(c/find-values-in code-new %) nesting-keys)
         shallowest (first (filter #(> (count %) 0) pathss-new))
         deepest (last (filter #(> (count %) 0) pathss-new))]
     (if deepest ; Which is most similar? How deep can we go?
@@ -99,6 +130,35 @@
               (and (vector? v0) (vector? v1) (= (count v0) (count v1))))
             (c/cget-in code-new path-old))
        path-old false))))
+
+;;;;;;;; Clojure-aware, single path return ;;;;;;
+
+(defn path2subdef-path [codes path]
+  "The part of path that digs into the def.
+   Handles java classes and other stuff, but for normal defns it simply removes the first element from path.
+   defclass, definterface, defenum, and defprotocol trigger going deeper."
+  (loop [codes1 (nth codes (first path)) path1 (into [] (rest path))]
+    (if (_class? codes1) (recur (c/cget codes1 (first path)) (into [] (rest path1)))
+      path1)))
+
+(defn symbol2defpath-qual [codes sym]
+  "The path to the path enclosing def in codes.
+   In java and other languages, it usually wouldn't be explicitly a 'def'."
+  (let [def-paths (into [] (apply concat (mapv #(c/find-values-in codes %) def-variants)))
+        defenclose-paths (mapv #(into [] (butlast %)) def-paths)
+        def-vals (mapv #(c/cget-in codes (conj % 1)) defenclose-paths)
+        sym-unqual (textparse/unqual sym)
+        path-ix (first (filter #(or (= (nth def-vals %) sym-unqual) (= (nth def-vals %) sym)) (range (count def-vals))))
+        _ (if (not path-ix) (throw (Exception. (str "Can't find the def-path for: " sym))))
+        path+1 (nth def-paths path-ix)]
+    (subvec path+1 0 (dec (count path+1)))))
+
+;;;;;;;; Clojure-aware, leaf return ;;;;;;
+
+(defn path2defsym [codes path]
+  "The foo in (def foo)."
+  (let [fpath (path2subdef-path codes path) path2def (subvec (into [] path) 0 (- (count path) (count fpath)))]
+    (c/cget-in codes (conj path2def 1))))
 
 (defn sym-def? [code path]
   "Is path in code the location of a local defined symbol?
@@ -117,47 +177,53 @@
         fn-unpacked? fn-packed?) true
       :else false)))
 
-;;;;;;;; Big thing reducing functions ;;;;;;;;;
- 
-(defn lucky-branch [code path]
-  "Takes a sample, this fn is intended as a debugger."
-  (let [p0 (first path) pr (if (> (count path) 0) (into [] (rest path)))
-        myst-char \u2601 ; clouds obscure whatever is beneath.
-        myst-str (symbol (apply str (repeat 3 myst-char)))
-        empty-coll (fn [x] 
-                     (cond (set? x) #{myst-str}
-                       (map? x) {myst-str myst-str}
-                       (vector? x) [myst-str]
-                       :else (list myst-str)))
-        lb1 (if (and (coll? code) p0) 
-              (lucky-branch (c/cget code p0) pr))]
-    (if (not p0) code
-      (c/vmap #(cond (= %2 p0) lb1 
-                           (coll? %1) (empty-coll %1)
-                           :else %1) 
-        code (c/ckeys code)))))
+;;;;;;;; Clojure-aware, vector of paths return ;;;;;;
 
-(defn lucky-leaf [code search-key]
-  "Includes only the branches that contain key from code.
-   Collections are collapsed to 1 element, but the depth remains."
-  (lucky-branch code (path-of code search-key)))
+(defn fnresult-paths [code]
+  "Log paths to the function's result. One path per each arity. Flexible to macroexpanding vs not and other formatting."
+  (let [cl (last code) cl0 (if (coll? cl) (first cl))
+        explicit-fn? (contains? #{'fn* `fn 'fn} cl0) ; Is it (def ... (fn ...))
+        prepend (if explicit-fn? [(dec (count code))] [])
+        fcode (c/cget-in code prepend)
+        packed? (not (first (filter vector? fcode))); (fn ([a b] ...)) vs (fn [a b] ...)
+        paths-in-fcode (if packed? (mapv #(vector % (dec (count (c/cget fcode %))))
+                                     (filterv #(c/listy? (c/cget fcode %)) (range (count fcode))))
+                         [[(dec (count fcode))]])]
+    (mapv #(c/vcat prepend %) paths-in-fcode)))
 
-;;;;;;;; Code navigaton fns ;;;;;;;;
+(defonce _core-stuff (set (keys (ns-map (find-ns 'clojure.core)))))
+(defn fncall-paths [code & ns-sym]
+  "Paths to forms that call external, non clojure core and non java Math functions.
+   It will be tricked by some bad coding styles such as functions that shadow clojure.core.
+   The path takes us to the whole function call, i.e (foo/bar 1 2 3)."
+  (let [path-atom (atom []) ns-sym (first ns-sym)
+        ns-ob (cond (not ns-sym) (find-ns 'clojure.core) 
+                (symbol? ns-sym) (find-ns ns-sym) :else ns-sym)
+        walk-fn (fn [path x]
+                  (if (c/listy? x)
+                    (let [x0 (first x)]
+                      (cond (not (symbol? x0)) "Not a symbol"
+                        (string/includes? (str x0) "clojure.core/") "We ignore the core namespace"
+                        (or (string/starts-with? (str x0) "Math/") 
+                          (string/starts-with? (str x0) "java.lang.Math/")) "We ignore java.lang/Math"
+                        (textparse/qual? x0) (swap! path-atom #(conj % path))
+                        (let [symr (ns-resolve ns-ob x0)] 
+                          (or (not symr) (string/includes? (str symr) "clojure.core/"))) "Local sym OR clojure.core sym" 
+                        :else (swap! path-atom #(conj % path)))
+                      x) x))]
+    (c/pwalk walk-fn code) @path-atom))
 
-(defn unqual [sym-qual] "Duplicated from textparse to avoid circles." 
-  (symbol (last (string/split (str sym-qual) #"\/"))))
-
-(defn symbol2defpath-qual [codes sym]
-  "The path to the path enclosing def in codes.
-   In java and other languages, it usually wouldn't be explicitly a 'def'."
-  (let [def-paths (into [] (apply concat (mapv #(paths-of codes % false) def-variants)))
-        defenclose-paths (mapv #(into [] (butlast %)) def-paths)
-        def-vals (mapv #(c/cget-in codes (conj % 1)) defenclose-paths)
-        sym-unqual (unqual sym)
-        path-ix (first (filter #(or (= (nth def-vals %) sym-unqual) (= (nth def-vals %) sym)) (range (count def-vals))))
-        _ (if (not path-ix) (throw (Exception. (str "Can't find the def-path for: " sym))))
-        path+1 (nth def-paths path-ix)]
-    (subvec path+1 0 (dec (count path+1)))))
+(defn all-defpaths [codes]
+  "All paths to the codes that enclose the defs."
+  (apply c/vcat
+    (mapv (fn [codei ix]
+            (cond (_class? codei)
+              (let [ipaths (all-defpaths codei)]
+                (mapv (c/vcat [ix] ipaths)))
+              (and (c/listy? codei) (contains? def-variants (first codei)))
+              [[ix]]
+              :else [])) 
+      codes (range))))
 
 (defn local-downhills [cpath code-fully-qual]
   "Returns the where-it-is-used paths of a variable addressed by path in code.
@@ -184,44 +250,7 @@
           (c/vcat [sym-qual] first-use) false))
       false)))
 
-(defn _class? [code]
-  (and (c/listy? code)
-    (contains? #{'defclass 'definterface `definterface 'defenum 'defprotocol `defprotocol} (first code))))
-
-(defn path2subdef-path [codes path]
-  "The part of path that digs into the def.
-   Handles java classes and other stuff, but for normal defns it simply removes the first element from path.
-   defclass, definterface, defenum, and defprotocol trigger going deeper."
-  (loop [codes1 (nth codes (first path)) path1 (into [] (rest path))]
-    (if (_class? codes1) (recur (c/cget codes1 (first path)) (into [] (rest path1)))
-      path1)))
-
-(defn all-defpaths [codes]
-  "All paths to the codes that enclose the defs."
-  (apply c/vcat
-    (mapv (fn [codei ix]
-            (cond (_class? codei)
-              (let [ipaths (all-defpaths codei)]
-                (mapv (c/vcat [ix] ipaths)))
-              (and (c/listy? codei) (contains? def-variants (first codei)))
-              [[ix]]
-              :else [])) 
-      codes (range))))
-
-(defn path2defsym [codes path]
-  "The foo in (def foo)."
-  (let [fpath (path2subdef-path codes path) path2def (subvec (into [] path) 0 (- (count path) (count fpath)))]
-    (c/cget-in codes (conj path2def 1))))
-
-;;;;;;;;;;;;;;;;; Recursive functions ;;;;;;;;;;;;;;;;
-
-(defn symbols-in [x]
-  "Acts recursivly, returns a set. Does not include special forms or map keys."
-  (cond (contains? specials x) #{}
-    (symbol? x) #{x}
-    (map? x) (set/union #_(symbols-in (keys x)) (symbols-in (vals x)))
-    (coll? x) (apply set/union (mapv symbols-in x))
-    :else #{}))
+;;;;;;;; Clojure-aware, other walking fns ;;;;;;
 
 (defn locals-walk [f x locals]
   "Applies (f x locals) recursively, locals is a set.
@@ -264,8 +293,6 @@
         :else (apply list (mapv #(locals-walk f % locals) x)))
       locals)))
 
-;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;
-
 (defn unbound-non-fn-syms [x]
   "Unbound symbols that aren't called as a function. Returns a set.
    Excludes clojure.core qualified symbols."
@@ -292,3 +319,28 @@
               (swap! ubs #(conj % x))) x)
         _ (locals-walk f x #{})] 
     (set/difference @ubs @blacklist)))
+
+;;;;;;;; Summary fns, mainly for debugging ;;;;;;;;;
+
+(defn lucky-branch [code path]
+  "Takes a sample, this fn is intended as a debugger."
+  (let [p0 (first path) pr (if (> (count path) 0) (into [] (rest path)))
+        myst-char \u2601 ; clouds obscure whatever is beneath.
+        myst-str (symbol (apply str (repeat 3 myst-char)))
+        empty-coll (fn [x] 
+                     (cond (set? x) #{myst-str}
+                       (map? x) {myst-str myst-str}
+                       (vector? x) [myst-str]
+                       :else (list myst-str)))
+        lb1 (if (and (coll? code) p0) 
+              (lucky-branch (c/cget code p0) pr))]
+    (if (not p0) code
+      (c/vmap #(cond (= %2 p0) lb1 
+                           (coll? %1) (empty-coll %1)
+                           :else %1) 
+        code (c/ckeys code)))))
+
+(defn lucky-leaf [code search-key]
+  "Includes only the branches that contain key from code.
+   Collections are collapsed to 1 element, but the depth remains."
+  (lucky-branch code (c/find-value-in code search-key)))

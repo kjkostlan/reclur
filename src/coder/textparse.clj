@@ -2,10 +2,17 @@
 
 (ns coder.textparse
   (:require
-    [coder.cnav :as cnav]
     [c]
     [coder.javar :as javar]
     [clojure.string :as string]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;; Helper functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn string-indexes-of [txt key]
+  "Does not work for regexp. TODO: did we write another version of this fn?"
+  (loop [acc [] char-ix 0]
+    (let [ix-next (string/index-of txt key char-ix)]
+      (if ix-next (recur (conj acc ix-next) (inc ix-next)) acc))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;; Functions that give us information about where a cursor is ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -135,7 +142,7 @@
         sym (gensym "IAmUnique")
         txt1 (str (subs txt 0 c0) " " sym " " (subs txt c1))
         x1 (reads-string-fn txt1)
-        path (cnav/path-of x1 sym true)]
+        path (c/find-value-in x1 sym true)]
     (if (not path) (throw (Exception. (str "String-to-wpath not working: ..." (subs txt1 (max 0 (- ix 20)) (min (+ ix 20) (count txt1))) "..."))))
     path))
 
@@ -160,7 +167,7 @@
     (if (and (coll? target) (> (count target) 0))
       (let [; Pick the key to the rarest element:
             vs (into [] (c/cvals target))
-            counts (mapv count (mapv #(cnav/paths-of x %) vs))
+            counts (mapv count (mapv #(c/find-values-in x %) vs))
             ky (nth (into [] (c/ckeys target)) (c/argmin counts))
             ixs (wpath-to-string-ixs txt (conj wpath ky) tok-ints-fn reads-string-fn)
             ix (int (Math/round (+ (* 0.5 (first ixs)) (* 0.5 (second ixs)))))]

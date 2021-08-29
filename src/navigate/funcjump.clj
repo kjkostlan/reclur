@@ -81,7 +81,7 @@
                           (mapv (fn [sq] (let [source (:source (langs/var-info sq true))
                                                ns-sym (textparse/sym2ns sq)
                                                source-qual (sunshine/deshadow-qual ns-sym source)
-                                               subdefpaths (cnav/paths-of source-qual x false)]
+                                               subdefpaths (c/find-values-in source-qual x false)]
                                            (mapv #(cbase/subdefpath-fstr-ixs sq %) subdefpaths)))
                             syms-qual))
                         (not goto-me-log) [] ; log goto fail.
