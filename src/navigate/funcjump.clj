@@ -4,7 +4,7 @@
     [app.codebox :as codebox]
     [app.rtext :as rtext]
     [coder.cnav :as cnav]
-    [collections]
+    [c]
     [coder.logger :as logger]
     [coder.sunshine :as sunshine]
     [coder.textparse :as textparse]
@@ -77,7 +77,7 @@
                  f01s (cond (and shallow? (not log?)) 
                         (mapv cbase/defpath-fstr-ixs syms-qual)
                         (not log?)
-                        (apply collections/vcat
+                        (apply c/vcat
                           (mapv (fn [sq] (let [source (:source (langs/var-info sq true))
                                                ns-sym (textparse/sym2ns sq)
                                                source-qual (sunshine/deshadow-qual ns-sym source)

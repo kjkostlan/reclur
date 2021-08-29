@@ -7,7 +7,7 @@
     [javac.clojurize :as clojurize]
     [coder.unerror :as unerror]
     [crossplatform.cp :as crossp]
-    [collections])
+    [c])
   (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent ComponentAdapter WindowAdapter]
     [javax.swing SwingUtilities]
     [java.awt FlowLayout] 
@@ -27,7 +27,7 @@
 (defonce _ (println "If you are on a mac this may help:   defaults write -g ApplePressAndHoldEnabled -bool false"))
 
 (defn empty-state []
-  {:evt-queue (collections/queue)})
+  {:evt-queue (c/queue)})
 
 ;;;;;;;;;;;;;;;;;;;;; Queing ;;;;;;;;;;;;;;;;;;;;;
 
@@ -90,7 +90,7 @@
           x1 (reduce (fn [x-acc evt]
                        (try (dispatch x-acc evt)
                          (catch Exception e (do (println "dequeue error:" e) x-acc)))) x evts)]
-      (assoc x1 :evt-queue (collections/queue)))))
+      (assoc x1 :evt-queue (c/queue)))))
 
 ;;;;;;;;;;;;;;;;;;;;; Mutation ;;;;;;;;;;;;;;;;;;;;;
 

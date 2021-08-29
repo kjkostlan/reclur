@@ -5,7 +5,7 @@
     [clojure.set :as set]
     [app.codebox :as codebox]
     [app.rtext :as rtext]
-    [globals]
+    [globals] [c]
     [navigate.funcjump :as funcjump]
     [coder.logger :as logger]
     [coder.textparse :as textparse]
@@ -103,7 +103,7 @@
   "Returns [summary-object, summary string], depends on the :view-path of the box.
    Only use this for repl successes."
   (let [view-path (get box :view-path [])
-        x-piece (collections/cget-in (:value (:result box)) view-path)
+        x-piece (c/cget-in (:value (:result box)) view-path)
         xp-summary (browseedn/summarize x-piece)
         txt (str "\n" (if (= view-path []) "" (str ";" view-path "\n")) ; Prepends must not change the string's value.
               (try (limit-length (blit/vps xp-summary))
@@ -310,7 +310,7 @@
 (defn make-lrepl [sym-qual path-within-code]
   "Start seeing your log immediately (ok with a ctrl+enter)."
   (let [path-within-code (into [] path-within-code)
-        src-piece-str (str (collections/cget-in (langs/var-source sym-qual) path-within-code))
+        src-piece-str (str (c/cget-in (langs/var-source sym-qual) path-within-code))
         hint-str (if (< (count src-piece-str) 32) src-piece-str
                    (str (subs src-piece-str 0 14) "..." (subs src-piece-str (- (count src-piece-str) 14))))
         code-str (str "^:active-logview\n"

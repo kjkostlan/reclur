@@ -1,3 +1,4 @@
+; c = collections
 ; Functions to unify the behavior of vectors, lists, sets, and maps which are better at preserving metadata, useful within the refactoring functions.
 ; This unified behavior means O(n) instead of O(1) costs in various places with the "wrong" collection.
 ; There are two main ways the unification happens:
@@ -10,8 +11,7 @@
 ;    The output metadata is always the first collection or the union of input collections (even for difference operations), 
 ;      as some collections may be missing their metadata. 
 
-(ns collections
-  (:require [clojure.set :as set]))
+(ns c (:require [clojure.set :as set]))
 
 ;;;;;;;;;;;;;;;; Foundational functions ;;;;;;;;;;;;;;
 

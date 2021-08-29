@@ -13,14 +13,14 @@
     [javac.file :as jfile]
     [layout.xform :as xform]
     [coder.unerror :as unerror]
-    [globals]))
+    [globals] [c]))
 
 ;;;;;;;;;;;;;;;;;;; Error reporting ;;;;;;;;
 
 (defn err-gfx [java-e our-err-msg]
    "Generates the clj gfx commands from a java exception. Used to debug bad graphics."
    (let [pieces (string/split (unerror/pr-error java-e) #"\n")]
-     (collections/vcat [[:drawString [(str our-err-msg) 10 10] {:Color [1 0.5 1 1]}]]
+     (c/vcat [[:drawString [(str our-err-msg) 10 10] {:Color [1 0.5 1 1]}]]
        (mapv #(vector :drawString [(str %1) 10 (+ 20 (* %2 10))] {:Color [1 1 1 1]}) pieces (range)))))
 
 ;;;;;;;;;;;;;;;;;;; Defining graphics commands, which can avoid unnecessary gfx reset calls ;;;;;;;;

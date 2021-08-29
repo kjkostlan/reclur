@@ -6,7 +6,7 @@
     [clojure.set :as set]
     [clojure.string :as string]
     [layout.blit :as blit]
-    [collections]
+    [c]
     [coder.crosslang.langs :as langs]))
 
 ;;;;;;;;;;;; Simple helper functions that are fairly generic ;;;;;;;;;;;;
@@ -85,10 +85,10 @@
       (catch Exception e
         (if-let [deeper-error
                   (cond 
-                    (map? code) (collections/juice-1 #(_on-macroexpand-err-catch ns-sym (get code %) (conj path %)) (keys code))
-                    (set? code) (collections/juice-1 #(_on-macroexpand-err-catch ns-sym % (conj path %)) (keys code))
+                    (map? code) (c/juice-1 #(_on-macroexpand-err-catch ns-sym (get code %) (conj path %)) (keys code))
+                    (set? code) (c/juice-1 #(_on-macroexpand-err-catch ns-sym % (conj path %)) (keys code))
                     :else (let [codev (into [] code)]
-                            (collections/juice-1 #(_on-macroexpand-err-catch ns-sym (nth codev %) (conj path %)) (range (count codev)))))]
+                            (c/juice-1 #(_on-macroexpand-err-catch ns-sym (nth codev %) (conj path %)) (range (count codev)))))]
           deeper-error {:msg (_msg-merrxpand code e) :path path :b4expand? true})))))
 
 
@@ -153,16 +153,16 @@
       (map? code) 
       (if-let [err0 (_loop-recur-check1 (keys code))] 
         {:path path :msg (assoc err0 :msg (str (:msg err0) " (error in a KEY to this map)."))}
-        (collections/juice-1 #(_loop-recur-check1 (get code %) (add-path [%]) n-binding false) (keys code)))
-      (set? code) (collections/juice-1 #(_loop-recur-check1 % (add-path [%] false) n-binding false) code)
-      (vector? code) (collections/juice-1 #(_loop-recur-check1 (nth code %) (add-path [%]) n-binding false) (range (count code)))
+        (c/juice-1 #(_loop-recur-check1 (get code %) (add-path [%]) n-binding false) (keys code)))
+      (set? code) (c/juice-1 #(_loop-recur-check1 % (add-path [%] false) n-binding false) code)
+      (vector? code) (c/juice-1 #(_loop-recur-check1 (nth code %) (add-path [%]) n-binding false) (range (count code)))
       (= code 'recur) {:msg "recur not called as function." :path path}
       (not (coll? code)) false
       (and (= (first code) 'recur) (not tail?)) {:msg "recur not in tail position" :path path}
       (and (= (first code) 'recur) (< (dec (count code)) n-binding)) {:msg "Too few args to recur" :path path}
       (and (= (first code) 'recur) (> (dec (count code)) n-binding)) {:msg "Too many args to recur" :path path}
       :else (let [codev (into [] (cool-head code 1)) if? (= (first code) 'if) n (count codev)]
-              (collections/juice-1 #(_loop-recur-check1 (nth codev %) (add-path [%]) n-binding (or if? (= % (dec n)))) 
+              (c/juice-1 #(_loop-recur-check1 (nth codev %) (add-path [%]) n-binding (or if? (= % (dec n)))) 
                 (range (count code)))))))
 (defn _loop-recur-check [code-list state] 
   (let [n-binding (/ (count (second code-list)) 2)]
@@ -287,11 +287,11 @@
     ;(if (symbol? code) (println "unerrorLeaf:" code))
     (cond
       (map? code) ; Errors in map keys just path to the map itself.
-      (if-let [key-err (collections/juice-1 #(_compile-err-catch % (assoc state1 :path [%])) (keys code))]
+      (if-let [key-err (c/juice-1 #(_compile-err-catch % (assoc state1 :path [%])) (keys code))]
         (_abridged-error key-err path "somewhere in this map KEY: ")
-        (collections/juice-1 #(_compile-err-catch (get code %) (add-path [%])) (keys code)))
-      (set? code) (collections/juice-1 #(_compile-err-catch % (add-path [%])) code)
-      (vector? code) (collections/juice-1 #(_compile-err-catch (nth code %) (add-path [%])) (range (count code)))
+        (c/juice-1 #(_compile-err-catch (get code %) (add-path [%])) (keys code)))
+      (set? code) (c/juice-1 #(_compile-err-catch % (add-path [%])) code)
+      (vector? code) (c/juice-1 #(_compile-err-catch (nth code %) (add-path [%])) (range (count code)))
       (symbol? code) (_symbol-not-found-check code path locals state)
       (not (coll? code)) false ; We aren't checking at the string level where badnumber formats, etc can mess us up.
       (= (first code) 'quote) false ; Quotes mean inside stuff isn't evaled.
@@ -299,7 +299,7 @@
       (if-let [spec-err (_spec-assert code state)] spec-err
         (cond
           (= c0 '.) (_compile-err-catch ; Java call = first 3 can break rules
-                      (collections/cassoc (cool-head code 3) 1 (second code)) state1) 
+                      (c/cassoc (cool-head code 3) 1 (second code)) state1) 
           (and (= c0 'new) (not (get (:locals state) 'new))) (_compile-err-catch (cool-head code 2) state1) ; Constructor, first 2 can break rules.
           (= c0 'catch) ; Adds a single local variable.
           (let [locals1 (conj locals (nth codev 2))]
@@ -317,7 +317,7 @@
             ;(println "the err report:" err-report)
             (if err-report err-report
               (_compile-err-catch (cool-head code 2) (assoc state2 :path path))))
-          :else (collections/juice-1 #(_compile-err-catch (nth codev %) (add-path [%])) (range (count code))))))))
+          :else (c/juice-1 #(_compile-err-catch (nth codev %) (add-path [%])) (range (count code))))))))
 
 
 (defn compile-err-catch [code ns-sym]
@@ -341,7 +341,7 @@
     (symbol (str sadface sadface sadface sym sadface sadface sadface))))
 
 (defn label-code [code err-info]
-  (collections/cupdate-in code (:path err-info) 
+  (c/cupdate-in code (:path err-info) 
     (fn [broken-part] (label-symbol (pr-str broken-part)))))
 
 (defn errprint [code err-info]

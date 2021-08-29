@@ -5,8 +5,7 @@
     [coder.cbase :as cbase] [coder.cnav :as cnav] [coder.crosslang.langs :as langs]
     [app.orepl :as orepl] [app.hintbox :as hintbox] [app.codebox :as codebox]
     [layout.selectmovesize :as selectmovesize]
-    [app.fbrowser :as fbrowser] [app.rtext :as rtext]
-    [collections]))
+    [app.fbrowser :as fbrowser] [app.rtext :as rtext]))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Small helper functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;

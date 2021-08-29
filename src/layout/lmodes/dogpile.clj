@@ -1,6 +1,6 @@
 ; Dogpile mode: adding stuff finds the least compressed space and goes there.
 (ns layout.lmodes.dogpile
-  (:require [collections]
+  (:require [c]
     [layout.layoutcore :as lay]
     [layout.lmodes.stack :as stack]))
 
@@ -14,7 +14,7 @@
         xxyys (mapv #(lay/xxyy %) (vals (:components s)))
         resolution 20
         xs-ys-ds (lay/boxed-density-measure xxyys query-range-xxyy resolution)
-        ix (collections/argmin (last xs-ys-ds))
+        ix (c/argmin (last xs-ys-ds))
         center-x (nth (first xs-ys-ds) ix)
         center-y (nth (second xs-ys-ds) ix)
         

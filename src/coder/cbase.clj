@@ -4,7 +4,7 @@
 (ns coder.cbase
   (:require [clojure.repl] [clojure.set :as set]
     [clojure.string :as string]
-    [collections]
+    [c]
     [javac.file :as jfile]
     [clojure.set :as set]
     [coder.textparse :as textparse]
@@ -16,7 +16,7 @@
 
 (defn strip-name [code]
   "Remove named def or functions."
-  (if (and (collections/listy? code)
+  (if (and (c/listy? code)
         (symbol? (second code)))
     (apply list (first code) [] (nthrest code 2)) code))
 
@@ -74,8 +74,8 @@
                   (do (println "Parsing failed for" fname " see thrown error") (throw e))))
         defpaths (cnav/all-defpaths codes)
         ns-sym (langs/file2ns fname)
-        def-syms (mapv #(second (collections/cget-in codes %)) defpaths)
-        def-codes (mapv #(collections/cget-in codes %) defpaths)
+        def-syms (mapv #(second (c/cget-in codes %)) defpaths)
+        def-codes (mapv #(c/cget-in codes %) defpaths)
         def-syms-qual (mapv #(langs/resolved ns-sym %) def-syms)]
     (zipmap def-syms-qual def-codes)))
 

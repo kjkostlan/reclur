@@ -1,7 +1,7 @@
 ; TODO: this makes heavy use of clojure-only functions. They should be refactored to langs.
 
 (ns coder.logger
-  (:require [collections]
+  (:require [c]
     [clojure.pprint :as pprint]
     [coder.refactor :as refactor]
     [coder.crosslang.langs :as langs]
@@ -76,7 +76,7 @@
 (defn logify-code1 [code log-path path-in-code]
   "Naive logging of the code. Other functions must make sure we don't use a log-path that steps on special forms."
   (let [log-pathq (update log-path 0 #(list 'quote %))]
-    (collections/cupdate-in code path-in-code
+    (c/cupdate-in code path-in-code
       #(list `logm! % log-pathq))))
 
 (defn symqual2code [sym-qual mexpand?]
@@ -103,7 +103,7 @@
 
 (defn last-log-of [sym-qual path-within-code]
   "Useful for debugging. Nil on failure."
-  (let [logs (get-logs) lpath (collections/vcat [sym-qual] path-within-code)]
+  (let [logs (get-logs) lpath (c/vcat [sym-qual] path-within-code)]
     (last (filter #(= (:path %) lpath) logs))))
 
 (defn logpath2code [log-path]
@@ -137,13 +137,13 @@
                   (or (< (count firstph) 1)
                     (and def? (< (first firstph) (dec (count code))))
                     (and (not def?)
-                      (let [cx (collections/cget code (first firstph))]
+                      (let [cx (c/cget code (first firstph))]
                         (and (not (coll? cx)) (not (string? cx)))))))
               (throw (Exception. 
                        (str "All logpaths must be inside the function part of a defn, but " firstph " isn't for: " sym-qual)))))
-        logged-code (reduce #(logify-code1 %1 (collections/vcat [sym-qual] %2) %2) code paths-sort)
+        logged-code (reduce #(logify-code1 %1 (c/vcat [sym-qual] %2) %2) code paths-sort)
         logged-fn-code (if mexpand? (last logged-code)
-                         (apply list 'fn (collections/cget logged-code 2) (subvec (into [] logged-code) 3)))
+                         (apply list 'fn (c/cget logged-code 2) (subvec (into [] logged-code) 3)))
         err-atm (atom nil)
         f (try (binding [*ns* ns-obj] (eval+ logged-fn-code)) 
                  (catch Exception e (do (reset! err-atm e) nil)))]
@@ -155,14 +155,14 @@
   (let [code-f (get-logged-code-and-fn sym-qual paths mexpand?)
         logged-f (if-let [x (second code-f)] x (throw (last code-f)))
         code (symqual2code sym-qual mexpand?)
-        logged-codes (mapv #(collections/cget-in code %) paths)
+        logged-codes (mapv #(c/cget-in code %) paths)
         loggers (zipmap paths (repeat (count paths) {:mexpand? mexpand? :source code}))]
     (alter-var-root (find-var sym-qual)
       (fn [old-val]
-        (collections/keep-meta old-val (fn [_] logged-f))))
+        (c/keep-meta old-val (fn [_] logged-f))))
     (swap! globals/log-atom
       (fn [world]
-        (let [path+ #(collections/vcat [sym-qual] %)
+        (let [path+ #(c/vcat [sym-qual] %)
               world (update world :log-code-lookup
                       #(merge % (zipmap (mapv path+ paths) logged-codes)))
               loggers-old (get-in world [:loggers sym-qual])
@@ -233,12 +233,12 @@
   (let [cl (last code) cl0 (if (coll? cl) (first cl))
         explicit-fn? (contains? #{'fn* `fn 'fn} cl0) ; Is it (def ... (fn ...))
         prepend (if explicit-fn? [(dec (count code))] [])
-        fcode (collections/cget-in code prepend)
+        fcode (c/cget-in code prepend)
         packed? (not (first (filter vector? fcode))); (fn ([a b] ...)) vs (fn [a b] ...)
-        paths-in-fcode (if packed? (mapv #(vector % (dec (count (collections/cget fcode %))))
-                                     (filterv #(collections/listy? (collections/cget fcode %)) (range (count fcode))))
+        paths-in-fcode (if packed? (mapv #(vector % (dec (count (c/cget fcode %))))
+                                     (filterv #(c/listy? (c/cget fcode %)) (range (count fcode))))
                          [[(dec (count fcode))]])]
-    (mapv #(collections/vcat prepend %) paths-in-fcode)))
+    (mapv #(c/vcat prepend %) paths-in-fcode)))
 
 (defonce _core-stuff (set (keys (ns-map (find-ns 'clojure.core)))))
 (defn fncall-logpaths [code & ns-sym]
@@ -249,7 +249,7 @@
         ns-ob (cond (not ns-sym) (find-ns 'clojure.core) 
                 (symbol? ns-sym) (find-ns ns-sym) :else ns-sym)
         walk-fn (fn [path x]
-                  (if (collections/listy? x)
+                  (if (c/listy? x)
                     (let [x0 (first x)]
                       (cond (not (symbol? x0)) "Not a symbol"
                         (string/includes? (str x0) "clojure.core/") "We ignore the core namespace"
@@ -260,7 +260,7 @@
                           (or (not symr) (string/includes? (str symr) "clojure.core/"))) "Local sym OR clojure.core sym" 
                         :else (swap! path-atom #(conj % path)))
                       x) x))]
-    (collections/pwalk walk-fn code) @path-atom))
+    (c/pwalk walk-fn code) @path-atom))
 
 (defn with-log-paths [sym2paths sym2mexpand? var-obj & args]
   "Runs var-obj with temporarly adjusted log paths and returns the logs.
@@ -367,11 +367,11 @@
         adj (fn [ph]
               (cond (= (count adjacents) 0) true
                 (= (count adjacents) 1)
-                (or (= (first adjacents) (collections/cget-in code (just-before ph)))
-                  (= (first adjacents) (collections/cget-in code (just-after ph))))
+                (or (= (first adjacents) (c/cget-in code (just-before ph)))
+                  (= (first adjacents) (c/cget-in code (just-after ph))))
                 (>= (count adjacents) 2)
-                (and (= (first adjacents) (collections/cget-in code (just-before ph)))
-                  (= (second adjacents) (collections/cget-in code (just-after ph))))))
+                (and (= (first adjacents) (c/cget-in code (just-before ph)))
+                  (= (second adjacents) (c/cget-in code (just-after ph))))))
         phs1 (filterv adj phs)]
     (mapv #(add-logger! sym-qual % false "[not-so-Breakpoint]") phs1)
     (mapv #(user-data-logger! sym-qual % {:watchpoint? true}) phs1)))
@@ -384,7 +384,7 @@
                            (keys pack))) (vals loggers)))
         watchersu (mapv (fn [k] (mapv #(vector k %) (get watchers k)))
                     (keys watchers))
-        watchersu (apply collections/vcat watchersu)]
+        watchersu (apply c/vcat watchersu)]
     (mapv #(apply remove-logger! %) watchersu)
     (println "Cleared:" (count watchersu) "Debug watchers.")))
 (def cw! clear-watchpoints!)
@@ -394,7 +394,7 @@
    b/c watches can cover multible paths."
   (let [logs (:logs @globals/log-atom)
         phs (w2ps sym-qual search-key false)
-        phs (mapv #(collections/vcat [sym-qual] %) phs)]
+        phs (mapv #(c/vcat [sym-qual] %) phs)]
     (mapv (fn [ph] (first (filter #(= ph (:path %)) (reverse logs))))
       phs)))
 

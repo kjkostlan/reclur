@@ -6,7 +6,7 @@
     [app.fbrowser :as fbrowser]
     [javac.file :as jfile]
     [clojure.set :as set]
-    [collections]))
+    [c]))
 
 ;;;;;;;; Support fns ;;;;;;;;;
 
@@ -31,7 +31,7 @@
 (defn tree-diff [x y]
   "Finds a shortest path that differences x and y, false if x=y.
    Did this get written b4?
-   Should this (and other fns?) go in collections?"
+   Should this (and other fns?) go in c?"
   (let [x (list-is-list x) y (list-is-list y) ; May not be necessary.
         diff
             (cond (not= (_lty x) (_lty y)) []
@@ -57,7 +57,7 @@
   (cond (= code search-key) []
     (not (coll? code)) false
     :else
-    (let [kys (into [] (collections/ckeys code)) vals (into [] (collections/cvals code))
+    (let [kys (into [] (c/ckeys code)) vals (into [] (c/cvals code))
           n (count vals)
           ph (loop [ix 0]
                (if (= ix n) false
@@ -75,14 +75,14 @@
       (let [ph1 (path-of x search-key include-map-keys?)]
         (if (= ph1 (last out)) (throw (Exception. "Something is not working.")))
         (if ph1 
-          (recur (collections/cassoc-in x ph1 stop) (conj out ph1))
+          (recur (c/cassoc-in x ph1 stop) (conj out ph1))
           out)))))
 
 (defn drag-path [code-old code-new path-old]
   "Tries to find a corresponding path, nil if failure.
    No obvious algorithim here, more of a heuristic. Room for much improvement."
   (let [np (count path-old)
-        nesting-keys (mapv #(collections/cget-in code-old
+        nesting-keys (mapv #(c/cget-in code-old
                               (subvec path-old %))
                        (range np)) ; shallow -> deep.
         pathss-old (mapv #(paths-of code-old %) nesting-keys)
@@ -92,24 +92,24 @@
     (if deepest ; Which is most similar? How deep can we go?
       (let [pathdif (fn [a b] (reduce + (mapv #(if (= %1 %2) 0.0 1.0) a b)))
             diffs (mapv #(pathdif path-old %) shallowest)]
-        (nth deepest (collections/argmax diffs)))
+        (nth deepest (c/argmax diffs)))
       (if (and (> np 0) ; very simple subsitution
-            (let [v0 (collections/cget-in code-old (subvec path-old 0 (dec np)))
-                  v1 (collections/cget-in code-new (subvec path-old 0 (dec np)))]
+            (let [v0 (c/cget-in code-old (subvec path-old 0 (dec np)))
+                  v1 (c/cget-in code-new (subvec path-old 0 (dec np)))]
               (and (vector? v0) (vector? v1) (= (count v0) (count v1))))
-            (collections/cget-in code-new path-old))
+            (c/cget-in code-new path-old))
        path-old false))))
 
 (defn sym-def? [code path]
   "Is path in code the location of a local defined symbol?
    I.e. the path to 'x in '(let [x 1]).
    Class members don't count as local, variables defined within fns do."
-  (let [x (collections/cget-in code path)
+  (let [x (c/cget-in code path)
         first? #(if (coll? %) (first %) false)
-        pairbind? (contains? #{`let `let* `loop `loop* 'let 'loop} (first? (collections/cget-in code (drop-last 2 path))))
-        fn-unpacked? (contains? #{`fn `fn* 'fn} (first? (collections/cget-in code (drop-last 2 path))))
-        fn-packed? (contains? #{`fn `fn* 'fn} (first? (collections/cget-in code (drop-last 3 path))))
-        in-vector? (vector? (collections/cget-in code (drop-last 1 path)))
+        pairbind? (contains? #{`let `let* `loop `loop* 'let 'loop} (first? (c/cget-in code (drop-last 2 path))))
+        fn-unpacked? (contains? #{`fn `fn* 'fn} (first? (c/cget-in code (drop-last 2 path))))
+        fn-packed? (contains? #{`fn `fn* 'fn} (first? (c/cget-in code (drop-last 3 path))))
+        in-vector? (vector? (c/cget-in code (drop-last 1 path)))
         second? (= (last (butlast path)) 1)]
     (cond 
       (< (count path) 2) false (not (symbol? x)) false (not in-vector?) false (not second?) false
@@ -130,12 +130,12 @@
                        (vector? x) [myst-str]
                        :else (list myst-str)))
         lb1 (if (and (coll? code) p0) 
-              (lucky-branch (collections/cget code p0) pr))]
+              (lucky-branch (c/cget code p0) pr))]
     (if (not p0) code
-      (collections/vmap #(cond (= %2 p0) lb1 
+      (c/vmap #(cond (= %2 p0) lb1 
                            (coll? %1) (empty-coll %1)
                            :else %1) 
-        code (collections/ckeys code)))))
+        code (c/ckeys code)))))
 
 (defn lucky-leaf [code search-key]
   "Includes only the branches that contain key from code.
@@ -152,7 +152,7 @@
    In java and other languages, it usually wouldn't be explicitly a 'def'."
   (let [def-paths (into [] (apply concat (mapv #(paths-of codes % false) def-variants)))
         defenclose-paths (mapv #(into [] (butlast %)) def-paths)
-        def-vals (mapv #(collections/cget-in codes (conj % 1)) defenclose-paths)
+        def-vals (mapv #(c/cget-in codes (conj % 1)) defenclose-paths)
         sym-unqual (unqual sym)
         path-ix (first (filter #(or (= (nth def-vals %) sym-unqual) (= (nth def-vals %) sym)) (range (count def-vals))))
         _ (if (not path-ix) (throw (Exception. (str "Can't find the def-path for: " sym))))
@@ -166,10 +166,10 @@
         path (into [] (rest cpath))
         codeu code-fully-qual]
     (if (sym-def? codeu path)
-      (let [paths (collections/paths codeu)
-            target (collections/cget-in codeu path)
+      (let [paths (c/paths codeu)
+            target (c/cget-in codeu path)
             path-ix (first (filter #(= (nth paths %) path) (range)))]
-        (filterv #(= (collections/cget-in codeu %) target) (subvec paths (inc path-ix))))
+        (filterv #(= (c/cget-in codeu %) target) (subvec paths (inc path-ix))))
       [])))
 
 (defn local-uphill [cpath code-fully-qual]
@@ -177,15 +177,15 @@
   (let [sym-qual (first cpath)
         path (into [] (rest cpath))
         codeu code-fully-qual
-        target (collections/cget-in codeu path)]
+        target (c/cget-in codeu path)]
     (if (symbol? target)
-      (let [first-use (first (filter #(= (collections/cget-in codeu %) target) (collections/paths codeu)))]
+      (let [first-use (first (filter #(= (c/cget-in codeu %) target) (c/paths codeu)))]
         (if (and (sym-def? codeu first-use) (and (not= path first-use))) 
-          (collections/vcat [sym-qual] first-use) false))
+          (c/vcat [sym-qual] first-use) false))
       false)))
 
 (defn _class? [code]
-  (and (collections/listy? code)
+  (and (c/listy? code)
     (contains? #{'defclass 'definterface `definterface 'defenum 'defprotocol `defprotocol} (first code))))
 
 (defn path2subdef-path [codes path]
@@ -193,17 +193,17 @@
    Handles java classes and other stuff, but for normal defns it simply removes the first element from path.
    defclass, definterface, defenum, and defprotocol trigger going deeper."
   (loop [codes1 (nth codes (first path)) path1 (into [] (rest path))]
-    (if (_class? codes1) (recur (collections/cget codes1 (first path)) (into [] (rest path1)))
+    (if (_class? codes1) (recur (c/cget codes1 (first path)) (into [] (rest path1)))
       path1)))
 
 (defn all-defpaths [codes]
   "All paths to the codes that enclose the defs."
-  (apply collections/vcat
+  (apply c/vcat
     (mapv (fn [codei ix]
             (cond (_class? codei)
               (let [ipaths (all-defpaths codei)]
-                (mapv (collections/vcat [ix] ipaths)))
-              (and (collections/listy? codei) (contains? def-variants (first codei)))
+                (mapv (c/vcat [ix] ipaths)))
+              (and (c/listy? codei) (contains? def-variants (first codei)))
               [[ix]]
               :else [])) 
       codes (range))))
@@ -211,7 +211,7 @@
 (defn path2defsym [codes path]
   "The foo in (def foo)."
   (let [fpath (path2subdef-path codes path) path2def (subvec (into [] path) 0 (- (count path) (count fpath)))]
-    (collections/cget-in codes (conj path2def 1))))
+    (c/cget-in codes (conj path2def 1))))
 
 ;;;;;;;;;;;;;;;;; Recursive functions ;;;;;;;;;;;;;;;;
 
@@ -275,7 +275,7 @@
             (if (and (symbol? x) (not (contains? locals x))
                   (not (string/starts-with? (str x) "clojure.core/")))
               (swap! ubs #(conj % x)))
-            (if (and (collections/listy? x) (symbol? (first x)))
+            (if (and (c/listy? x) (symbol? (first x)))
               (swap! blacklist #(conj % (first x)))) x)
         _ (locals-walk f x #{})] 
     (set/difference @ubs @blacklist)))

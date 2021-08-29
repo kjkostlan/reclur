@@ -4,7 +4,7 @@
   (:require [clojure.set :as set] [clojure.string :as string] [clojure.walk :as walk]
     [layout.blit :as blit]
     [app.codebox :as codebox]
-    [collections]))
+    [c]))
 
 (def ^:dynamic *max-dig-range* 1e5)
 (def ^:dynamic *shallow-digfurther-ratio* 8)
@@ -28,9 +28,9 @@
 (defn _as-counted [coll counted-version-of]
   "Makes coll counted? with the same paren or brackets as counted-version-of.
    If coll is a sequential? and counted-version-of is a map it will use [[k0 v0] [k1 v1] ...] format.
-   TODO: belongs in collections?"
+   TODO: belongs in c?"
   (cond (vector? counted-version-of) (into [] coll) (set? counted-version-of) (set coll)
-    (collections/listy? counted-version-of) (apply list (into [] coll))
+    (c/listy? counted-version-of) (apply list (into [] coll))
     (and (map? counted-version-of) (map? coll)) coll
     (map? counted-version-of) (zipmap (mapv first coll) (mapv second coll))
     :else coll))
@@ -134,14 +134,14 @@
                                (<= cursor-ix (+ cix (count tok)))))
                      (range (count char-ixs))))]
     (if (and ix tok)
-      (let [phs (into [] (collections/paths x)) n-ph (count phs)
+      (let [phs (into [] (c/paths x)) n-ph (count phs)
             x-fast (walk/postwalk #(if (sequential? %) (into [] %) %) x)]
         (loop [used-up 0 ph-ix 0]
           (if 
             (= ph-ix n-ph) (throw (Exception. "Out of bounds likely bug in this code."))
             (let [ph (nth phs ph-ix)
-                  xi (collections/cget-in x-fast ph)
-                  xi-parent (if (> (count ph) 0) (collections/cget-in x-fast (butlast ph)))
+                  xi (c/cget-in x-fast ph)
+                  xi-parent (if (> (count ph) 0) (c/cget-in x-fast (butlast ph)))
                   match-uses (if (coll? xi) 0 (count (string-indexes-of (str xi) (str tok))))
                   key-uses (if (map? xi-parent) (count (string-indexes-of (str (last ph)) (str tok))) 0)
                   used-up1 (+ used-up match-uses key-uses)]
@@ -151,7 +151,7 @@
 (defn path-at-cursor [x-summarized x-summarized-txt cursor-ix]
   "What path on the original x the cursor in x-summarized is at, nil if failure Does not work for *print-meta*."
   (if-let [hot-path (path-at-cursor-core x-summarized x-summarized-txt cursor-ix)]
-    (let [x-piece (collections/cget-in x-summarized hot-path)]
+    (let [x-piece (c/cget-in x-summarized hot-path)]
       (::path (meta x-piece)))))
 
 ;coder.cnav/tree-diff

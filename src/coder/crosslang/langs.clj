@@ -63,7 +63,7 @@
   (:require [coder.textparse :as textparse]
             [coder.crosslang.langparsers.clojure :as clojure] 
             [coder.crosslang.langparsers.human :as human]
-            [collections]
+            [c]
             [clojure.string :as string]
             [javac.file :as jfile]
             [clojure.set :as set]
@@ -78,8 +78,8 @@
 
 (defn unpacked-fn? [form]
   "Functions without packed arguments. Making all arguments packed can make things easier but changes the path."
-  (if (and (collections/listy? form) (contains? #{`fn `fn* 'fn} (first form)))
-    (cond (vector? (second form)) 1 (vector? (collections/third form)) 2 :else false)))
+  (if (and (c/listy? form) (contains? #{`fn `fn* 'fn} (first form)))
+    (cond (vector? (second form)) 1 (vector? (c/third form)) 2 :else false)))
 
 (defn fn-pack1 [code]
   "Like fn-pack but doesn't act recursively."
@@ -119,11 +119,11 @@
    (. Math sin 1.2) => (java.lang.Math/sin 1.2).
    This can be treated like a qualified symbol to a function for MOST metaprogramming.
   This is a clojure-unique function; for any other lang it will do nothing."
-  (cond (not (collections/listy? x)) x
+  (cond (not (c/listy? x)) x
     (not (symbol? (first x))) x
     (= (first x) 'new) (apply list (symbol (str (second x) ".")) (nthrest x 2))
     (and (= (first x) '.) (clj-resolve-class (second x))) 
-    (apply list (symbol (str (clj-resolve-class (second x)) "/" (collections/third x))) (nthrest x 3))
+    (apply list (symbol (str (clj-resolve-class (second x)) "/" (c/third x))) (nthrest x 3))
     (clj-resolve-class (textparse/sym2ns (first x)))
     (apply list (symbol (str (clj-resolve-class (textparse/sym2ns (first x))) "/" (textparse/unqual (first x)))) (rest x)) ; resolve
     :else x))
@@ -233,7 +233,7 @@
                  (mapv (fn [stub nms] (mapv #(symbol (str stub "/" %)) 
                                        (defs nms))) 
                    (keys as2ns) (vals as2ns)))] 
-    (collections/vcat native foreign standard)))
+    (c/vcat native foreign standard)))
 
 (defn defs [ns-sym]
   "Not qualified."
@@ -247,7 +247,7 @@
   "Performs a macroexpand-all on the function, as well as some other minor steps to make
    the code easier to work with." 
   (let [langkwd (textparse/ns2langkwd ns-sym)]
-    (#(if (collections/listy? %) (apply list %) %) (fn-pack
+    (#(if (c/listy? %) (apply list %) %) (fn-pack
       (cond (= langkwd :clojure)
         (walk/postwalk unmacro-static-java1
           (if-let [ns-obj (find-ns ns-sym)]

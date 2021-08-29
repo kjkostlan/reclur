@@ -1,7 +1,7 @@
 ; Teleport mode: adding stuff copies the screen but with the new component replacing 
 ; the type of the old component, if necessary.
 (ns layout.lmodes.teleport
-  (:require 
+  (:require [c]
     [layout.layoutcore :as lay]
     [layout.xform :as xform]
     [layout.lmodes.stack :as stack]
@@ -27,7 +27,7 @@
             pnorm 2.0
             dist-penalties (mapv #(/ (lay/pnorm-dist 0.0 %1 0.0 %2 pnorm) search-len 5.0) 
                              (first xs-ys-ds) (second xs-ys-ds))
-            ix (collections/argmin (mapv + dist-penalties (last xs-ys-ds)))
+            ix (c/argmin (mapv + dist-penalties (last xs-ys-ds)))
             
             ; The old and new centers:
             center-x0 (* 0.5 (+ (nth screen-xxyy 0) (nth screen-xxyy 1)))

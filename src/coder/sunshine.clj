@@ -6,7 +6,7 @@
     [coder.cnav :as cnav]
     [coder.crosslang.langs :as langs]
     [coder.textparse :as textparse]
-    [collections]))
+    [c]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;; Support functions ;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -16,7 +16,7 @@
    If we switch even/odd, now ODD symbols will be bound-on-declaration: (let [1 a] a).
    Call this function again to restore the original code."
   (let [walkf (fn [form]
-                (if (and (collections/listy? form) 
+                (if (and (c/listy? form) 
                       (contains? #{'let `let 'let*} (first form)))
                   (apply list (first form)
                     (let [v (second form)] 

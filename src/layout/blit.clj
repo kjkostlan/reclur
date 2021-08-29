@@ -5,7 +5,7 @@
 (ns layout.blit
   (:require [coder.crosslang.langs :as langs] [coder.cbase :as cbase]
     [coder.textparse :as textparse]
-    [collections]
+    [c]
     [clojure.string :as string]
     [clojure.walk :as walk]
     [clojure.pprint :as pprint]
@@ -36,7 +36,7 @@
   (cond (symbol? code)
     (let [sym-replacers {'let* 'let 'fn* 'fn 'def* 'def}]
       (get sym-replacers code code))
-    (and (collections/listy? code) (= (first code) 'fn*)
+    (and (c/listy? code) (= (first code) 'fn*)
       (vector? (second code))
       (re-matches #"p\d*\_+\d+\#+" (str (first (second code))))) ; the annoying % stuff.
     (let [arg-list (second code)

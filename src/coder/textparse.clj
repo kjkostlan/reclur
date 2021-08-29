@@ -3,7 +3,7 @@
 (ns coder.textparse
   (:require
     [coder.cnav :as cnav]
-    [collections]
+    [c]
     [coder.javar :as javar]
     [clojure.string :as string]))
 
@@ -156,12 +156,12 @@
    The w stands for wrapped.
    TODO: This function can be expensive O(n^2) if there is a long string and lots of look-alikes."
   (let [wpath (into [] wpath) x (reads-string-fn txt) n (count txt)
-        target (collections/cget-in x wpath)]
+        target (c/cget-in x wpath)]
     (if (and (coll? target) (> (count target) 0))
       (let [; Pick the key to the rarest element:
-            vs (into [] (collections/cvals target))
+            vs (into [] (c/cvals target))
             counts (mapv count (mapv #(cnav/paths-of x %) vs))
-            ky (nth (into [] (collections/ckeys target)) (collections/argmin counts))
+            ky (nth (into [] (c/ckeys target)) (c/argmin counts))
             ixs (wpath-to-string-ixs txt (conj wpath ky) tok-ints-fn reads-string-fn)
             ix (int (Math/round (+ (* 0.5 (first ixs)) (* 0.5 (second ixs)))))]
         (enclosing-ixs txt ix tok-ints-fn))
