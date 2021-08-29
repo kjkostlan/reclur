@@ -121,9 +121,8 @@
         get-subtok (fn [cursor-ix1]
                      (let [cursor-ix1 (max 0 (min (count x-string) cursor-ix1))
                            tmp-box (codebox/select-twofour-click
-                                (app.codebox/set-precompute 
-                                  (assoc (codebox/new-codebox) :pieces [{:text x-string}]
-                                    :cursor-ix cursor-ix1)) false true)]
+                                     (assoc (codebox/new-codebox) :pieces [{:text x-string}]
+                                      :cursor-ix cursor-ix1) false true)]
                        (subs x-string (:selection-start tmp-box) (:selection-end tmp-box))))
         
         tok (get-subtok cursor-ix)
@@ -153,6 +152,3 @@
   (if-let [hot-path (path-at-cursor-core x-summarized x-summarized-txt cursor-ix)]
     (let [x-piece (c/cget-in x-summarized hot-path)]
       (::path (meta x-piece)))))
-
-;coder.cnav/tree-diff
-;blit/vps

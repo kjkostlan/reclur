@@ -30,8 +30,7 @@
 
 (defn splice-at-cursor [box]
   "Splices at the cursor. (foo | (bar baz)) => (bar baz)"
-  (let [box (codebox/set-precompute box)
-        ixs (codebox/contain-ixs box)
+  (let [ixs (codebox/contain-ixs box)
         ix0 (first ixs) ix1 (second ixs)
         substr (subs (rtext/rendered-string box) (first ixs) (second ixs))
         inter-levels (langs/interstitial-depth substr (:langkwd box))
@@ -40,18 +39,15 @@
         keep-ix1 (if (last keeps) (+ ix0 (last keeps)))
         
         box1 (if keep-ix0 (rtext/edit box (inc keep-ix1) ix1 "" []) box)
-        box2 (if keep-ix0 (rtext/edit box1 ix0 (dec keep-ix0) "" []) box1)]
-    (codebox/set-precompute box2)))
+        box2 (if keep-ix0 (rtext/edit box1 ix0 (dec keep-ix0) "" []) box1)] box2))
 
 (defn wrap-at-cursor [box txt]
   "The opposite of splice. For example, wrapping a (time x) around x."
-  (let [box (codebox/set-precompute box)
-        ixs (codebox/contain-ixs box)
+  (let [ixs (codebox/contain-ixs box)
         ix0 (first ixs) ix1 (second ixs)
         edit? (and ix0 ix1)
         box1 (if edit? (rtext/edit box ix1 ix1 ")" []) box)
-        box2 (if edit? (rtext/edit box1 ix0 ix0 (str "(" txt " ") []) box1)]
-    (codebox/set-precompute box2)))
+        box2 (if edit? (rtext/edit box1 ix0 ix0 (str "(" txt " ") []) box1)] box2))
 
 ;;;;; State hotkey functions ;;;;;
 

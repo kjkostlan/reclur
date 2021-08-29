@@ -30,8 +30,7 @@
     (into [] (repeat (inc (- char-ix1 char-ix0)) rgba))))
 
 (defn colorize [box s piece-ix char-ix0 char-ix1]
-  (let [box (codebox/set-precompute box)
-        cols-if-top (colorize-top box s piece-ix char-ix0 char-ix1)
+  (let [cols-if-top (colorize-top box s piece-ix char-ix0 char-ix1)
         cols-if-out (colorize-out box s piece-ix char-ix0 char-ix1)
         n0 (dec (count (:pieces box)))]
     (mapv #(if (< %1 n0) (nth cols-if-top %2)
@@ -114,11 +113,15 @@
   "Depending on the nature of result, the repl result may need to be summarized."
   (let [pieces (:pieces box)
         result (:result box)
-        result-str (if (= (:type result) :success) (second (get-summary box)) (:value result))
+        no-err? (= (:type result) :success)
+        [sumy sumy-txt] (if no-err? (get-summary box) [[] ""])
+        result-str (if no-err? sumy-txt (:value result))
         pieces1 (cond (= (count pieces) 0) [{:text " "} {:text result-str}]
                   (= (count pieces) 1) (conj pieces {:text result-str})
-                  :else (assoc pieces (dec (count pieces)) {:text result-str}))]
-    (codebox/set-precompute (assoc box :pieces pieces1))))
+                  :else (assoc pieces (dec (count pieces)) {:text result-str}))
+        result1 (assoc result :summary sumy :summary-txt sumy-txt)
+        box (assoc box :result result1)]
+    (codebox/update-precompute (assoc box :pieces pieces1))))
 
 (defn run-repl [s repl-k]
   "This returns the modified app state s. Most functions don't work with s and we just add in the report.
@@ -143,7 +146,7 @@
                       (assoc :*ns* (textparse/sym2ns @new-ns-at))
                       (update :num-run-times inc)
                       (update :cmd-history #(conj % txt)))]
-          (assoc-in s [:components repl-k] repl1)))))
+          (assoc-in s [:components repl-k] (codebox/update-precompute repl1))))))
 
 (defn old-cmd-search [box delta]
    "Select a region of text to narrow-down old cmds."
@@ -178,7 +181,7 @@
       (ka/emacs-hit? "S-^^" key-evt) (old-cmd-search box -1)
       (ka/emacs-hit? "S-vv" key-evt) (old-cmd-search box 1)
       :else
-      (codebox/key-press key-evt (codebox/set-precompute box)))))
+      (codebox/key-press key-evt box))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Namespace reloading et al ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -252,7 +255,7 @@
         run-result (:result box1)]
     (cond
       (and (= nclick 1) (= (get run-result :type) :success) (>= cursor-on-piece1 0) (= (:Button m-evt) 1)) ;Navigate inwards.
-      (let [[sumy sumy-txt] (get-summary box1)
+      (let [sumy (:summary run-result) sumy-txt (:summary-txt run-result)
             ph-on-x (browseedn/path-at-cursor sumy sumy-txt cursor-on-piece1)]
         (if (and ph-on-x (not (empty? ph-on-x)))
           (let [new-viewpath (conj (get box :view-path []) (first ph-on-x))

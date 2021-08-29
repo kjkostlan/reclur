@@ -35,15 +35,20 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;; Updating the precomputation ;;;;;;;;;;;;;;;;;;;
 
-(defn set-precompute [box]
-  (let [inter-levels (langs/interstitial-depth (rtext/rendered-string box) (:langkwd box))
-        levels-inclusive (mapv max (butlast inter-levels) (rest inter-levels))]
-    (assoc box :precompute {:levels levels-inclusive :inter-levels inter-levels})))
+(defn update-precompute [box]
+  "Runs the precompute iff the string is different.
+   Calling this fn externally may help performance but is not required."
+  (let [txt0 (get-in box [:precompute :txt])
+        txt1 (rtext/rendered-string box)]
+    (if (= txt0 txt1) box
+      (let [inter-levels (langs/interstitial-depth (rtext/rendered-string box) (get box :langkwd :clojure))
+            levels-inclusive (mapv max (butlast inter-levels) (rest inter-levels))]
+        (assoc box :precompute {:levels levels-inclusive :inter-levels inter-levels :txt txt1})))))
 
 (defn edits-update [box box1 edits]
   ; For now we don't implement editing.
   (rtext/cursor-scroll-update box
-    (set-precompute (update box1 :pieces _rml)) edits))
+    (update-precompute (update box1 :pieces _rml)) edits))
 
 (defn generic-update [box box1]
   "Updates the precompute, making the best attempt to drag the cursor along.
@@ -90,7 +95,8 @@
   grab the string using an inclusive, exclusive pattern to select the internal region and the brackets. 
   rtext/cursor-ix-to-piece can get the piece index.
   Used for cold-folding, etc."
-  (let [levels (:inter-levels (:precompute box))
+  (let [box (update-precompute box)
+        levels (:inter-levels (:precompute box))
         cur-ix (:cursor-ix box)
         n (dec (count levels)) cur-ix (max 0 (min cur-ix n))
         lev (nth levels cur-ix)
@@ -107,13 +113,15 @@
 
 (defn colorize [box s piece-ix char-ix0 char-ix1]
   "Level based colorization, with exported pieces counting differently."
-  (let [levels (subvec (:levels (:precompute box)) char-ix0 char-ix1)
+  (let [box (update-precompute box)
+        levels (subvec (:levels (:precompute box)) char-ix0 char-ix1)
         mx (apply max 0 levels) cols (mapv #(conj (colorful/level2rgb %) 1) (range (inc mx)))]
     (mapv #(nth cols (if (>= % 0) % 0)) levels)))
 
 (defn new-codebox []
-  (assoc (merge rtext/empty-text (interact-fns)) :outline-color [0.8 0 0 1] :path [] :head "" :foot ""
-    :type :codebox :langkwd :clojure :precompute {:levels [] :inter-levels [0]} :colorize-fn (fn [& args] (apply colorize args))))
+  (update-precompute
+    (assoc (merge rtext/empty-text (interact-fns)) :outline-color [0.8 0 0 1] :path [] :head "" :foot ""
+      :type :codebox :langkwd :clojure :colorize-fn (fn [& args] (apply colorize args)))))
 
 (defn code-fold-toggle [cur-pieceix folding? ixs complement? box]
   "Folds or unfolds. complement? true to hilight instead of fold, i.e. in stead of hiding the
@@ -136,14 +144,14 @@
      (let [new-head (str (get box :head "") (apply str (mapv piece-real-string pieces-b4)))
            new-foot (str (apply str (mapv piece-real-string pieces-afr)) (get box :foot ""))
            ch-pieces (:in stats)]
-       (set-precompute (assoc box :head new-head :foot new-foot :pieces ch-pieces :cursor-ix 0)))
+       (update-precompute (assoc box :head new-head :foot new-foot :pieces ch-pieces :cursor-ix 0)))
      folding?
      (let [new-pieces (_rml (into [] (concat pieces-b4 [folded-piece] pieces-afr)))]
-       (set-precompute (assoc box :pieces new-pieces :cursor-ix (first ixs))))
+       (update-precompute (assoc box :pieces new-pieces :cursor-ix (first ixs))))
      complement?
      (throw (Exception. "Unfolding + complement is harder to make sense of."))
      :else (let [new-pieces (_rml (into [] (concat pieces-b4 (:children (first (:in stats))) pieces-afr)))] ; remove the dots.
-             (set-precompute (assoc box :pieces new-pieces :cursor-ix (first ixs)))))))
+             (update-precompute (assoc box :pieces new-pieces :cursor-ix (first ixs)))))))
 
 (defn code-fold-toggle-at-cursor [box folding? complement?]
   "Fold up the outer-level paren level of the code, or unfold folded code.
@@ -192,7 +200,7 @@
     (if (= pieces0 pieces1) box
       (let [ccf (fn [p0 p1 jx0] jx0) cix (:cursor-ix box)]
         ; the spacers count as an e either way, so don't factor into the edit we use:
-        (set-precompute
+        (update-precompute
           (assoc box :pieces (mapv (fn [p] (if (folded? p) p (update p :text #(string/replace % (str spacer) "e")))) pieces1)
             :cursor-ix (rtext/carry-cursor pieces0 pieces1 cix ccf)))))))
 
@@ -202,7 +210,7 @@
 
 (defn from-text [txt lang-kwd]
   "Sets up a text-editor from a given text and language keyword."
-  (set-precompute (assoc (new-codebox) :pieces [{:text txt}]
+  (update-precompute (assoc (new-codebox) :pieces [{:text txt}]
                    :langkwd lang-kwd)))
 
 (defn token-cur-ix01 [strings allowed?s ix]
@@ -216,7 +224,8 @@
 
 (defn select-twofour-click [box four? & suppress-human] 
   "double click with no shift, so selects text instead of code folding."
-  (let [st (rtext/rendered-string box)
+  (let [box (update-precompute box)
+        st (rtext/rendered-string box)
         c-ix (:cursor-ix box)
         c-ix (max 0 (min c-ix (count st)))
         ils (:inter-levels (:precompute box))
@@ -272,7 +281,7 @@
         (if (= (count matches) 0) 
           (do (println "No matching fully qualified symbols [in loaded namespaces] to" sym-str) box)
           (do (if (> (count matches) 1) (println "Multible matches to" sym-str "taking fist one."))
-            (set-precompute (rtext/edit box (nth sel0s sym-ix) (nth sel1s sym-ix) (first matches) [])))))
+            (update-precompute (rtext/edit box (nth sel0s sym-ix) (nth sel1s sym-ix) (first matches) [])))))
       (do (println "What is at the cursor is not a symbol.") box))))
 
 (defn key-press [key-evt box]
@@ -310,7 +319,7 @@
             box2 (assoc box1 :cursor-ix 
                    (rtext/cursor-ugrid-to-ix box1 
                      (max 0 (+ x0 (if shifting? (- nind) nind))) y0))]
-         (set-precompute box2))
+         (update-precompute box2))
       (= (:KeyCode key-evt) 10) ; indent current line as far.
       (let [box1 (rtext/key-press key-evt box) cix (:cursor-ix box)
             ix0 (first (contain-ixs1 box cix))
@@ -318,8 +327,8 @@
             n-indented (+ (first (get-xy ix0)) indent-add)
             spacer (apply str (repeat n-indented " "))
             box2 (rtext/edit box1 (:cursor-ix box1) (:cursor-ix box1) spacer [])]
-        (set-precompute box2))
-      :else (set-precompute (rtext/key-press key-evt box))))))
+        (update-precompute box2))
+      :else (update-precompute (rtext/key-press key-evt box))))))
 
 (defn mouse-press [m-evt box] ; shift+double click = code folding.
   (cond (and (= (:ClickCount m-evt) 2) (:ShiftDown m-evt))
@@ -412,7 +421,7 @@
       (contain-ixs box1)
       :else
       (let [box1 (if (or (sp? cs1) (open? cs1) (closed? cs1)) (update box1 :cursor-ix dec) box1)
-            box1 (select-twofour-click (set-precompute box1) false)
+            box1 (select-twofour-click (update-precompute box1) false)
             cix-real0 (cursor-to-real-string (assoc box1 :cursor-ix (:selection-start box1)))
             cix-real1 (cursor-to-real-string (assoc box1 :cursor-ix (:selection-end box1)))]
         [cix-real0 cix-real1]))))
@@ -506,7 +515,8 @@
 (defn interact-fns []
   {:dispatch dispatch
    :render (fn [box & show-cursor?] 
-             (let [head (get box :head "") foot (get box :foot "")
+             (let [box (update-precompute box) ;If is up-to-date already will not do anything.
+                   head (get box :head "") foot (get box :foot "")
                    title (str (fbrowser/devec-file (:path box))
                            (if (> (count (str head foot)) 0)
                              (str " (" (count head) ":-" (count foot) ")") ""))]
