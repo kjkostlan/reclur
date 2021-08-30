@@ -19,7 +19,6 @@
 (def ^:dynamic *nframe-slowdown-when-idle* 15) ; Same CPU when nothing is requesting an every frame event.
 (def ^:dynamic *drop-frames-queue-length-threshold* 1024) ; Not needed for now but we may change how we deal with slow dispatches.
 (def ^:dynamic *drop-frames-report-every* 50)
-(def ^:dynamic *mac-keyboard-kludge?* false) ; A huuuuuuge bug with typing involving accents stealing focus. 
 (def ^:dynamic *add-keyl-to-frame?* true) ; tab only works on the frame. False goes to panel.
 
 ;;;;;;;;;;;;;;;;;;;;; Other Support functions ;;;;;;;;;;;;;;;;;;;;;
@@ -233,21 +232,17 @@
     (.setVisible frame true)
     (if *add-keyl-to-frame?* (add-key-listeners! frame)
       (do (add-key-listeners! panel) (.setFocusable panel true) (.requestFocus panel)))
-    (crossp/add-quit-request-listener! (fn [e] (future (event-queue! {} :quit))))
+    (crossp/add-quit-request-listener! (event-queue! {} :quit))
     (.setDefaultCloseOperation frame (JFrame/DO_NOTHING_ON_CLOSE))
     (add-close-listener! frame) ; Not necessarily the least lines of code but gets the job done.
     [frame panel]))
-
-(defn swing-or-kludge [f]
-  (if *mac-keyboard-kludge?* (f)
-    (SwingUtilities/invokeAndWait f)))
 
 (defn launch-app! [init-state-fn dispatch-fn update-gfx-fn render-fn]
   "app is singleton, launching 
    dispatch-fn including is (f evt-clj state), we make our own every-frame event.
    update-gfx-fn is (f state-clj), returns the new state, and should cache any expensive gfx cmds.
    render-fn is (f state-clj) but some render commands are functions on the java object."
-  (swing-or-kludge
+  (SwingUtilities/invokeAndWait
     (fn [& args]
       ;; https://stackoverflow.com/questions/1234912/how-to-programmatically-close-a-jframe
       (if-let [old-frame (:JFrame @globals/external-state-atom)]

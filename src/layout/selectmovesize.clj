@@ -208,12 +208,12 @@
 
 (defn seltool-keypress [k-evt s]
   (let [mx (first (:mouse-pos-world s)) my (second (:mouse-pos-world s))] 
-    (cond (and (or (:ControlDown k-evt) (:MetaDown k-evt)) (= (str (:KeyChar k-evt)) (str "c")))
+    (cond (and (ka/c? k-evt) (= (str (ka/lowercase-letter k-evt)) (str "c")))
       (let [ts (gts s) 
             sel (:selected-comp-keys s)]
         (sts s (assoc ts :copied-comps (zipmap sel (map #(get (:components s) %) sel))
-                 :copy-mx mx :copy-my my))) 
-      (and (or (:ControlDown k-evt) (:MetaDown k-evt)) (= (str (:KeyChar k-evt)) (str "v"))) ; paste.
+                 :copy-mx mx :copy-my my)))
+      (and (ka/c? k-evt) (= (str (ka/lowercase-letter k-evt)) (str "v"))) ; paste.
       (let [ts (gts s) dx (- mx (:copy-mx ts))
             dy (- my (:copy-my ts))
             raise-z (inc (- (apply max (mapv :z (vals (:components s))))
