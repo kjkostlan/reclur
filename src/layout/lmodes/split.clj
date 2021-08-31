@@ -1,6 +1,6 @@
 ; Split mode: adding stuff shares space with the components of the matching type within the screen.
 (ns layout.lmodes.split
-  (:require 
+  (:require
     [layout.layoutcore :as lay]
     [layout.lmodes.stack :as stack]))
 
@@ -9,7 +9,7 @@
   (let [x0 (nth xxyy 0) x1 (nth xxyy 1) y0 (nth xxyy 2) y1 (nth xxyy 3)
         xm (* 0.5 (+ x0 x1))]
     [[x0 xm y0 y1] [xm x1 y0 y1]]))
-  
+
 (defn split-v [xxyy]
   "Returns the two xxyys."
   (let [x0 (nth xxyy 0) x1 (nth xxyy 1) y0 (nth xxyy 2) y1 (nth xxyy 3)
@@ -29,7 +29,7 @@
 (defn add-component [s comp kwd]
   "Uses s to position the new comp."
   (let [ty (:type comp) k-screen (lay/most-on-screen s #(= (:type %) ty))]
-    (if k-screen 
+    (if k-screen
       (let [comp-pair (split (get (:components s) k-screen) comp)
             comp0 (first comp-pair) comp1 (assoc (second comp-pair) :z (inc (get comp0 :z 0)))
             comps (:components s)
@@ -43,7 +43,7 @@
         x0 (first xxyy0) x1 (second xxyy0) y0 (nth xxyy0 2) y1 (nth xxyy0 3)
         xxyys (mapv lay/xxyy (vals comps))
         close? #(< (Math/abs (- %1 %2)) 10)
-        align? (fn [c] (let [xxyyc (lay/xxyy c) 
+        align? (fn [c] (let [xxyyc (lay/xxyy c)
                              x0c (first xxyyc) x1c (second xxyyc) y0c (nth xxyyc 2) y1c (nth xxyyc 3)
                              halign? (and (close? y0c y0) (close? y1c y1))
                              valign? (and (close? x0c x0) (close? x1c x1))
@@ -51,12 +51,12 @@
                              vnextto? (or (close? y0c y1) (close? y1c y0))]
                          (or (and halign? hnextto?) (and valign? vnextto?))))
         align-k (first (filter #(and (= (:type comp) (:type (get comps %)))
-                                  (align? (get comps %))) 
+                                  (align? (get comps %)))
                          (keys comps)))
         comps1 (if align-k (let [compa (get comps align-k)
                                  xxyy1 (lay/union-xxyy xxyy0 (lay/xxyy compa))]
                              (assoc comps align-k
-                               (lay/set-xxyy compa xxyy1))) 
+                               (lay/set-xxyy compa xxyy1)))
                   comps)]
     (dissoc comps1 close-k)))
 

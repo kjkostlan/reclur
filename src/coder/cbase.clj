@@ -60,14 +60,14 @@
    For each def, the second element in each of codes if it exists gives the name no matter the language as we read-string that way.
    flatten-classes? flattens java classes and makes each def include the class-name."
   (let [txt (jfile/open fname)
-        _ (if (or (not txt) (not (string? txt))) (throw (Exception. (str "Can't load file:" fname)))) 
+        _ (if (or (not txt) (not (string? txt))) (throw (Exception. (str "Can't load file:" fname))))
         langkwd (file2langkwd fname)]
     (langs/reads-string txt langkwd)))
 
 (defn file2defmap [fname]
   "Returns qual-sym -> source code."
   (let [txt (jfile/open fname)
-        _ (if (or (not txt) (not (string? txt))) (throw (Exception. (str "Can't load file:" fname)))) 
+        _ (if (or (not txt) (not (string? txt))) (throw (Exception. (str "Can't load file:" fname))))
         langkwd (file2langkwd fname)
         codes (try (langs/reads-string txt langkwd)
                 (catch Exception e
@@ -92,7 +92,7 @@
         reads-string-fn #(langs/reads-string % langkwd)
         txt (jfile/open filename)
         _ (if (not txt) (throw (Exception. (str "Cant load file:" filename))))
-        ixs (textparse/wpath-to-string-ixs txt wpath 
+        ixs (textparse/wpath-to-string-ixs txt wpath
               tokenize-ints-fn reads-string-fn)]
     [filename (first ixs) (second ixs)]))
 
@@ -117,7 +117,7 @@
         partial-natives (if (and partial-ns (langs/findable-ns? partial-ns))
                           (mapv #(textparse/qual partial-ns %) (langs/defs partial-ns)) [])
         ^String s (str code-partial-sym)
-        matches (filterv #(.contains ^String (str %) s) 
+        matches (filterv #(.contains ^String (str %) s)
                   (concat valids valid-quals partial-natives))
         matches-qual (mapv #(langs/resolved ns-sym %) matches)]
     (into [] (sort (set matches-qual)))))
@@ -137,7 +137,7 @@
 (defn symaverse []
   "All qualified syms in loaded namespaces builtin and user. About 8 times faster than (set (keys (varaverse)))"
   (let [nms (into [] (langs/get-all-loaded-ns))]
-    (set (apply concat (mapv (fn [ns-sym] 
+    (set (apply concat (mapv (fn [ns-sym]
                                (mapv #(textparse/qual ns-sym %) (keys (ns-interns (find-ns ns-sym))))) nms)))))
 
 (defn nonlocal-syms [code ns-sym]
@@ -151,7 +151,7 @@
   (let [qual-sym (if (textparse/qual? qual-sym) qual-sym (textparse/qual 'clojure.core qual-sym))
         vv (varaverse)
         leaf-sym (textparse/unqual qual-sym)
-        
+
         ; First pass optimization: must contain the unqualed version (except in esoteric cases).
         leaf-syms (str leaf-sym)
         keep-k (filterv #(.contains ^String (str (get vv %)) leaf-syms) (keys vv))
@@ -164,7 +164,7 @@
 
 (defn used-by [qual-sym]
   "Symbols inside this function that refer to defs/defns in this code-base."
-  (let [qual-sym (if (textparse/qual? qual-sym) qual-sym 
+  (let [qual-sym (if (textparse/qual? qual-sym) qual-sym
                    (textparse/qual 'clojure.core qual-sym))
         nms (textparse/sym2ns qual-sym)
         code (langs/var-source qual-sym)

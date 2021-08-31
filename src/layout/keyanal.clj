@@ -1,4 +1,4 @@
-; Simple functions that analyze key events. 
+; Simple functions that analyze key events.
 (ns layout.keyanal
   (:require [clojure.string :as string]))
 
@@ -10,7 +10,7 @@
 (defn normal? [kevt]
   "There may be modifiers on in the background, but this particular keypress would be a key that types some character."
   (or
-   (.contains "`1234567890-=\tqwertyuiop[]\\asdfghjkl;'zxcvbnm,./ ~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>?" 
+   (.contains "`1234567890-=\tqwertyuiop[]\\asdfghjkl;'zxcvbnm,./ ~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>?"
      ^String (str (char (:KeyCode kevt))))
     (= (:KeyCode kevt) 192)))
 
@@ -33,7 +33,7 @@
 
 (defn arrow-key [key-event]
   "Returns the character ^ v < or > for arrow keys. Returns nil otherwise."
-  (let [kc (:KeyCode key-event)] 
+  (let [kc (:KeyCode key-event)]
     (cond (= kc 37) \< (= kc 39) \> (= kc 38) \^ (= kc 40) \v)))
 
 (defn typed-key [key-event]
@@ -51,7 +51,7 @@
 
 (defn match-letter-or-phrase? [kevt txt]
   (let [txtl (.toLowerCase ^String txt)]
-    (or (match-letter? kevt txtl) (match-arrow? kevt txtl) 
+    (or (match-letter? kevt txtl) (match-arrow? kevt txtl)
       (and (enter? kevt) (= txtl "ret"))
       (and (escape? kevt) (= txtl "esc"))
       (and (tab? kevt) (= txtl "tab"))
@@ -68,7 +68,7 @@
     (and piece
         (let [subpieces (string/split piece #"-")
               mods ^String (apply str (butlast subpieces))  ; i.e. "C" or "CM"
-              c=? (b= (c? kevt) (.contains mods "c")) 
+              c=? (b= (c? kevt) (.contains mods "c"))
               a=? (b= (a? kevt) (.contains mods "m"))
               s=? (b= (s? kevt) (.contains mods "s"))
               l=? (match-letter-or-phrase? kevt (last subpieces))]

@@ -7,12 +7,12 @@
 (defn pong-newgame [sz]
   (let [sizex (first sz) starty 100 mass-paddle 3 mass-ball 1 paddle-margin 50
         sizex0 (- sizex paddle-margin)]
-    {:score [0.0 0.0] :paddles [[50 starty 0 0 mass-paddle] [sizex0 starty 0 0 mass-paddle]] 
-     :paddle-margin paddle-margin 
+    {:score [0.0 0.0] :paddles [[50 starty 0 0 mass-paddle] [sizex0 starty 0 0 mass-paddle]]
+     :paddle-margin paddle-margin
      :ai-hardness 1.0 :game-over? false :hi-score 1.0
-     :max-score-diff 1024 
-     :paddle-setpoints [[paddle-margin starty 0 0 1e100] [sizex0 starty 0 0 1e100]] 
-     :ball [(* sizex 0.5) starty 100 25 mass-ball] 
+     :max-score-diff 1024
+     :paddle-setpoints [[paddle-margin starty 0 0 1e100] [sizex0 starty 0 0 1e100]]
+     :ball [(* sizex 0.5) starty 100 25 mass-ball]
      :farlands [[-12.5e6 0 0 0 1e100] [0 12.5e6 0 0 1e100]]}))
 (defn pong-physics [game sz dt]
   "The ball and paddles are electrically charged."
@@ -26,15 +26,15 @@
                          dx (- (nth r2 0) (nth r1 0)) dy (- (nth r2 1) (nth r1 1))
                          dvx (- (nth r2 2) (nth r1 2)) dvy (- (nth r2 3) (nth r1 3))
                          m1 (nth r1 4) m2 (nth r2 4)
-                         
+
                          dist (+ (Math/sqrt (+ (* dx dx) (* dy dy))) 1e-100)
                          force-mag (* k-attract (Math/pow dist pow))
                          force-x (* force-mag (/ dx dist)) force-y (* force-mag (/ dy dist))
                          diverge-v (+ (* dvx (/ dx dist)) (* dvy (/ dy dist)))
                          damp-x (* diverge-v damp (/ dx dist)) damp-y (* diverge-v damp (/ dy dist))
-                         new-r1 (update (update r1 2 #(+ % (* (+ force-x damp-x) (/ m1) dt))) 
+                         new-r1 (update (update r1 2 #(+ % (* (+ force-x damp-x) (/ m1) dt)))
                                   3 #(+ % (* (+ force-y damp-y) (/ m1) dt)))
-                         new-r2 (update (update r2 2 #(- % (* (+ force-x damp-x) (/ m2) dt))) 
+                         new-r2 (update (update r2 2 #(- % (* (+ force-x damp-x) (/ m2) dt)))
                                   3 #(- % (* (+ force-y damp-y) (/ m2) dt)))]
                      (-> state (assoc-in path1 new-r1) (assoc-in path2 new-r2))))
         update-pos (fn [state path]
@@ -67,7 +67,7 @@
   (let [lookahead 1.0
         max-speed 35.0
         lazy-speed-when-far 25.0
-        
+
         ballx (get-in game [:ball 0])
         bally (get-in game [:ball 1])
         ballvx (get-in game [:ball 2])
@@ -77,7 +77,7 @@
         t-to-hit (/ (- paddlex ballx) (if (= ballvx 0) 1e-100 ballvx))
         max-dy (* (if (and (> ballvx 0.0) (< t-to-hit 3.0)) max-speed lazy-speed-when-far) dt)
 
-        targety (if (and (> ballvx 0.01) (< ballx paddlex)) 
+        targety (if (and (> ballvx 0.01) (< ballx paddlex))
                   (+ bally (* lookahead ballvy t-to-hit)) bally)]
         (update-in game [:paddle-setpoints 1 1]
           #(if (< % targety)
@@ -109,27 +109,27 @@
         paddley (get-in game [:paddles ix 1])]
     [[:fillRect [(- paddlex wr) (- paddley hr) (* wr 2) (* hr 2)] {:Color [0.0 (+ 0.2 (* ix 0.25)) 1.0 1.0]}]]))
 (defn pong-render-score [game sz]
-  (let [num2str #(let [s (str (Math/round %))] 
+  (let [num2str #(let [s (str (Math/round %))]
                    (if (> (count s) 3) (str (subs s 0 (- (count s) 3)) "," (subs s (- (count s) 3))) s))
         font 25 texty 30 sc0 (first (:score game)) sc1 (second (:score game))
         margin (+ (:max-score-diff game) sc0 (- sc1))]
-    (if (:game-over? game) 
+    (if (:game-over? game)
       [[:drawString [(str "Game over, AI cheat level: " (num2str (dec (:ai-hardness game)))
-                       " Hi-score: " (num2str (dec (:hi-score game))) " enter to restart") 20 texty] 
+                       " Hi-score: " (num2str (dec (:hi-score game))) " enter to restart") 20 texty]
         {:Color [0.9 0.7 0.8 1.0] :FontSize (* font 0.75)}]]
     [[:drawString [(num2str sc0) 20 texty] {:Color [0.9 0.0 0.8 1.0] :FontSize font}]
      [:drawString [(str "Lives: " (num2str margin)) (* (first sz) 0.375) texty] {:Color [0.8 0.7 0.9 1.0] :FontSize font}]
      [:drawString [(num2str sc1) (- (first sz) 100) texty] {:Color [0.0 1.0 0.0 1.0] :FontSize font}]])))
 (defn pong-render-outline [sz]
-  (collections/vcat
+  (c/vcat
     [[:fillRect [0 0 (first sz) (second sz)] {:Color [0 0 0.2 0.6]}]]
-    (mapv (fn [x] [:drawRect [x x (- (first sz) x x) (- (second sz) x x)] {:Color [0.6 0.3 0.4 1.0]}]) 
+    (mapv (fn [x] [:drawRect [x x (- (first sz) x x) (- (second sz) x x)] {:Color [0.6 0.3 0.4 1.0]}])
             [0 3 6 9])))
 (defn pong-render [box focus?]
   "Pong rendering."
   ;(Thread/sleep 500) ; What happens if rendering is slow?
   (let []
-    (collections/vcat (pong-render-outline (:size box))
+    (c/vcat (pong-render-outline (:size box))
       (pong-render-ball (:game box))
       (pong-render-paddle (:game box) 0)
       (pong-render-paddle (:game box) 1)

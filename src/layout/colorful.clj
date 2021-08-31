@@ -32,10 +32,10 @@
          b (+ (brt rgb) 1e-8); yes you DO need these numbers to be larger than machine eps.
          bmax (/ b cmax) ; maximum brightness that can be achieved with scaling.
          rgbmax (into [] (map #(* % (/ 1 cmax)) rgb)) ; fully scaled colors.
-         bout (nth hsl 2)] 
-    (if (< b bout) 
+         bout (nth hsl 2)]
+    (if (< b bout)
      ; we must make it brighter.
-      (if (> b bmax) 
+      (if (> b bmax)
         ; scaling all colors up will not work. Blend with white (lux = brt = 1 for white).
         ; APPROXIMATE brightness as linear in blending.
         ; Blend the max brightness scaled color with white, higher x menas more white.

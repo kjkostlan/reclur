@@ -2,12 +2,12 @@
 ; 1. Specify paths on the unexpanded code.
 ; 2. Expand some sections of code to reduce the effort in writing type infer fns, etc.
  ; 2.1 Replace fn* with fn to ensure all fns are expanded.
-; 3. Keep track of "where stuff goes". 
+; 3. Keep track of "where stuff goes".
 
 (ns coder.pathedmexp
-  (:require 
+  (:require
     [clojure.walk :as walk]
-    [c] 
+    [c]
     [coder.textparse :as textparse]
     [coder.crosslang.langs :as langs]
     [coder.cnav :as cnav]
@@ -16,14 +16,14 @@
 ;;;;;;;;;;;;;;;;;;;;;;; Library functions ;;;;;;;;;;;;;;;;;;;;;;
 
 (def mexpand-these #{'-> '->> 'as-> 'some-> 'some->> 'cond-> 'cond->>
-                     'fn 'defn 'defn- 'fn* 'defmulti 'defmethod 'definline 
+                     'fn 'defn 'defn- 'fn* 'defmulti 'defmethod 'definline
                      'with-out-str 'with-in-str 'with-precision
                      'let 'letfn 'loop 'when-let 'for 'refer-clojure 'with-bindings 'while
                      'when 'when-not 'if-not 'and 'or 'cond 'condp 'case
                      'pvalues 'locking 'lazy-cat 'dosync
                      'comment})
 
-; Macro-expanding these doesn't help us understand things. 
+; Macro-expanding these doesn't help us understand things.
 ; Most of these are private or call clojure and/or java internals.
 (def dont-bother #{'. '.. 'lazy-seq 'delay 'assert-args 'binding 'sync 'io! 'vswap! 'declare 'doseq 'dotimes
                    'import 'with-open 'doto 'memfn 'def-aset 'with-local-vars 'assert 'amap 'areduce
@@ -43,10 +43,10 @@
     (set? code) (set (mapv pmexpand code))
     (coll? code) (let [code1 (apply list (mapv pmexpand code))
                        symu (textparse/unqual (first code))]
-                   (if (contains? mexpand-these symu) 
+                   (if (contains? mexpand-these symu)
                      ; Call pmexpand again if the code requires it.
                      (let [macroexpand-1+ #(macroexpand-1 (if (= (first %) '*fn) (apply list 'clojure.core/fn (rest %)) %))
-                           code2 (macroexpand-1+ code1)] 
+                           code2 (macroexpand-1+ code1)]
                        (if (= code1 code2) code2 (pmexpand code2)))
                      code1))
     :else code))
@@ -55,7 +55,7 @@
   "Map from nonexpanded code to expanded code. Does not include paths that disappear."
   (let [codeunique (cnav/unique-leaves code exclude-f?)]
     (cnav/leaf-branch-path-map codeunique (pmexpand codeunique))))
-  
+
 
 (defn inv-path-map [code]
   "Map from expanded code to nonexpanded code. Does not include paths that disappear."

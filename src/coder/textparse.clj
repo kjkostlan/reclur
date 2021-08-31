@@ -28,7 +28,7 @@
                  (first (filter #(and (= (nth ty %) targetty) (> (nth en %) ix)) (range (count st)))))]
     (if return-tok-ix?
       (if tok-ix tok-ix (if (< dir 0) 0 (dec (count ty))))
-      (if tok-ix (nth (if (< dir 0) st en) tok-ix) 
+      (if tok-ix (nth (if (< dir 0) st en) tok-ix)
         (if (< dir 0) 0 n)))))
 
 (defn _prevnext-ix [txt ix tok-ints-fn dir targetty]
@@ -65,9 +65,9 @@
         tix-hi (apply min (mapv #(_prevnext-ix1 txt ix 1 % st en ty true) test-set))
         ix-lo (nth en tix-lo)
         ix-hi (nth st tix-hi)
-        
+
         tok-filt (fn [f] (if-let [out (first (filter #(and (f (nth st %) (nth en %))
-                                                        (contains? test-set (nth ty %))) (range (count st))))] 
+                                                        (contains? test-set (nth ty %))) (range (count st))))]
                            out false))
         tokix-2 (tok-filt (fn [a b] (= b ix-lo)))
         tokix-1 (tok-filt (fn [a b] (= b ix)))
@@ -98,9 +98,9 @@
     (if (= ty0 4)
       (loop [ix (inc tok-ix0) lev 1]
         (if (>= ix (dec n)) (dec n)
-          (let [tyi (nth ty ix)] 
+          (let [tyi (nth ty ix)]
             (if (and (<= lev 1) (= tyi 5)) ix
-              (recur (inc ix) 
+              (recur (inc ix)
                 (cond (= tyi 4) (inc lev)
                   (= tyi 5) (dec lev)
                   :else lev))))))
@@ -115,13 +115,13 @@
       (not= tyi 5) [(loop [ix tok-ix]
                       (if (= ix (dec n)) (dec n)
                         (let [tyi (nth ty ix)]
-                          (if (or (= tyi 0) (= tyi 6)) (recur (inc ix)) ix)))) 
+                          (if (or (= tyi 0) (= tyi 6)) (recur (inc ix)) ix))))
                     (_jump+ st en ty tok-ix)]
       :else [(loop [ix (dec tok-ix) lev 1]
                (if (<= ix 0) 0
                  (let [tyi (nth ty ix)]
                    (if (and (= tyi 4) (<= lev 1)) ix
-                     (recur (dec ix) (cond (= tyi 4) (dec lev) (= tyi 5) (inc lev) :else lev)))))) 
+                     (recur (dec ix) (cond (= tyi 4) (dec lev) (= tyi 5) (inc lev) :else lev))))))
              tok-ix])))
 
 (defn trimmed-all-with-path [st en ty tok-ix]
@@ -137,7 +137,7 @@
         tok-ix (apply choice-convention ty tixs)
         char-ix01 (trimmed-all-with-path st en ty tok-ix)
         c0 (first char-ix01) c1 (second char-ix01)
-        
+
         ; Alphanumeric symbols and spaces are pretty universal:
         sym (gensym "IAmUnique")
         txt1 (str (subs txt 0 c0) " " sym " " (subs txt c1))
@@ -182,7 +182,7 @@
             wpaths (mapv #(string-to-wpath txt (inc %) tok-ints-fn reads-string-fn) str-ixs)
             kx (first (filter #(= (nth wpaths %) wpath) (range (count wpaths))))
             _ (if (not kx) (throw (Exception. (str "Cant find this path: " wpath))))
-            
+
             ; From string index to token:
             x (tokenize-vints txt tok-ints-fn) st (first x) en (second x) ty (last x)
             tokixs (tok12345-at-cursor txt (nth str-ixs kx) st en ty)
@@ -216,7 +216,7 @@
 
 (defn unqual [sym-qual]
   "The part after the /"
-  (cond (not (qual? sym-qual)) sym-qual (= sym-qual 'clojure.core//) '/ 
+  (cond (not (qual? sym-qual)) sym-qual (= sym-qual 'clojure.core//) '/
    :else (symbol (last (string/split (str sym-qual) #"\/")))))
 
 (defn rm-lang [sym]
@@ -228,7 +228,7 @@
 (defn sym2ns [qual-sym]
   "Returns the namespace/class. Classes from non-clojure have i.e. !java.my.class rather than my.namespace."
   (cond (or (= qual-sym '/) (= qual-sym "/")) 'clojure.core
-    (.contains ^String (str qual-sym) "/") 
+    (.contains ^String (str qual-sym) "/")
     (symbol (first (string/split (str qual-sym) #"\/")))))
 
 (defn ns2langkwd [ns-sym]

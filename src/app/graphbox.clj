@@ -32,7 +32,7 @@
 (defn set-sym [box sym-qual]
   "Sets the symbol we focus on."
   (let [set-box (fn [t m b e?] (rtext/fit-to-text (assoc box :pieces [{:text t} {:text m} {:text b}] :error? e?
-                                                    :cursor-ix (count t) :selection-start 0 :selection-end 0) 
+                                                    :cursor-ix (count t) :selection-start 0 :selection-end 0)
                                  true true))]
     (cond (and (symbol? sym-qual) (textparse/qual? sym-qual))
       (let [outwards (cbase/uses-of sym-qual)
@@ -59,24 +59,24 @@
   "The down and dirty with positioning, etc."
   (let [cix (:cursor-ix cbox)
         xy (mapv + (rtext/cursor-ix-to-pixel cbox) (:position cbox))
-        box (assoc (set-sym (new-graphbox) (codebox/x-qual-at-cursor cbox)) 
+        box (assoc (set-sym (new-graphbox) (codebox/x-qual-at-cursor cbox))
               :z (+ (:z cbox) 0.01))
         box (rtext/fit-to-text box true true) sz (:size box)
         m 7 ; margin in pixels
-        box (assoc box :position 
+        box (assoc box :position
               (mapv - xy [(* (first sz) 0.5) (+ (second sz) m)]))]
     (selectmovesize/fit-to-screen s box)))
 
 (defn try-to-toggle-graph-box [s]
   (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
     (if (or (= (:type fc) :codebox) (= (:type fc) :orepl))
-      (if-let [gb (add-graph-box s fc)] 
+      (if-let [gb (add-graph-box s fc)]
         (if (get-in s [:components ::graphbox])
-          (update s :components 
+          (update s :components
             #(dissoc % ::graphbox))
-          (assoc-in s [:components ::graphbox] gb)) 
-        (do (println "A nonlocal symbol needs to be aimed at.") s)) 
-      (do (println "A codebox or orepl needs to be selected.") s)) 
+          (assoc-in s [:components ::graphbox] gb))
+        (do (println "A nonlocal symbol needs to be aimed at.") s))
+      (do (println "A codebox or orepl needs to be selected.") s))
     (do (println "No components selected.") s)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -101,14 +101,14 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(def dispatch 
+(def dispatch
   {:mousePressed mouse-pressed
    :mouseDragged rtext/mouse-drag
    :mouseWheelMoved rtext/mouse-wheel
    :keyPressed key-press
    :keyReleased rtext/key-release})
 
-(defn interact-fns [] 
+(defn interact-fns []
   {:dispatch dispatch
    :render rtext/render
    :expandable? expandable?

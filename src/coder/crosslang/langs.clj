@@ -42,7 +42,7 @@
 ;   if x>1:
 ;      return x
 ;   else:
-;      print('hit min') # Open token is the last three spaces before the print 
+;      print('hit min') # Open token is the last three spaces before the print
 ;      return 1.0  # No open token on this line, but a closing one at the '\n' at the end.
 ;   ___  <- above this line are the spaces that indent the if and else. Any other whitespace is an empty token.
 ; __ <- above this line rae the spaces that indent the foo.
@@ -61,7 +61,7 @@
 
 (ns coder.crosslang.langs
   (:require [coder.textparse :as textparse]
-            [coder.crosslang.langparsers.clojure :as clojure] 
+            [coder.crosslang.langparsers.clojure :as clojure]
             [coder.crosslang.langparsers.human :as human]
             [c]
             [clojure.string :as string]
@@ -83,8 +83,8 @@
 
 (defn fn-pack1 [code]
   "Like fn-pack but doesn't act recursively."
-  (if-let [upk (unpacked-fn? code)] 
-    (if (= upk 1) (list (first code) (rest code)) 
+  (if-let [upk (unpacked-fn? code)]
+    (if (= upk 1) (list (first code) (rest code))
       (list (first code) (second code) (rest code))) code))
 (defn fn-pack [code]
   "Makes single-arity functions packed like multi-arity fns.
@@ -111,7 +111,7 @@
   ; TODO: since this depends on namespaces it needs to be incorporated into langs/resolved.
   (if (symbol? sym)
     (try (if (= (type (eval sym)) java.lang.Class)
-           (second (string/split (str (eval sym)) #" "))) 
+           (second (string/split (str (eval sym)) #" ")))
       (catch Exception e nil))))
 
 (defn unmacro-static-java1 [x]
@@ -122,7 +122,7 @@
   (cond (not (c/listy? x)) x
     (not (symbol? (first x))) x
     (= (first x) 'new) (apply list (symbol (str (second x) ".")) (nthrest x 2))
-    (and (= (first x) '.) (clj-resolve-class (second x))) 
+    (and (= (first x) '.) (clj-resolve-class (second x)))
     (apply list (symbol (str (clj-resolve-class (second x)) "/" (c/third x))) (nthrest x 3))
     (clj-resolve-class (textparse/sym2ns (first x)))
     (apply list (symbol (str (clj-resolve-class (textparse/sym2ns (first x))) "/" (textparse/unqual (first x)))) (rest x)) ; resolve
@@ -157,7 +157,7 @@
     (if langkwd langkwd (throw (Exception. (str "unrecognized file exension:" ext))))))
 
 (defn langkwd2fileext [kwd]
-  (let [m {:clojure "clj" :java "java" :javascript "js" :python "py" 
+  (let [m {:clojure "clj" :java "java" :javascript "js" :python "py"
            :haskell "hs" :segfault "cpp" :shell "sh" :human "txt"}]
     (get m kwd :unknown)))
 
@@ -193,7 +193,7 @@
   "Gets information about a var in the form of clojure datastructures.
    source? means look for the source as well, which can be a little slow."
   (let [langkwd (textparse/ns2langkwd (textparse/sym2ns qual-sym))]
-    (if (not (symbol? qual-sym)) (throw (Exception. (str "Qual-sym must be a symbol not a " (type qual-sym))))) 
+    (if (not (symbol? qual-sym)) (throw (Exception. (str "Qual-sym must be a symbol not a " (type qual-sym)))))
     (if (not= langkwd :clojure)
       (errlang "var-info" langkwd)))
   (let [ns-sym (textparse/sym2ns qual-sym) ns-obj (find-ns ns-sym)
@@ -202,7 +202,7 @@
         var-obj (get sym2var (textparse/unqual qual-sym))
         out (meta var-obj) out (assoc out :ns ns-sym)
         out (if (and source? (not (:source out)))
-              (let [src (get-code-clojure (:file out) (:line out) (:column out) false)] 
+              (let [src (get-code-clojure (:file out) (:line out) (:column out) false)]
                 (if src (assoc out :source src) out)) out)
         out (if source? out (dissoc out :source))] ; consistancy.
     out))
@@ -230,9 +230,9 @@
        standard (keys (ns-map 'clojure.core))
        native (defs ns-sym)
        foreign (apply concat
-                 (mapv (fn [stub nms] (mapv #(symbol (str stub "/" %)) 
-                                       (defs nms))) 
-                   (keys as2ns) (vals as2ns)))] 
+                 (mapv (fn [stub nms] (mapv #(symbol (str stub "/" %))
+                                       (defs nms)))
+                   (keys as2ns) (vals as2ns)))]
     (c/vcat native foreign standard)))
 
 (defn defs [ns-sym]
@@ -245,7 +245,7 @@
 
 (defn mexpand [ns-sym code]
   "Performs a macroexpand-all on the function, as well as some other minor steps to make
-   the code easier to work with." 
+   the code easier to work with."
   (let [langkwd (textparse/ns2langkwd ns-sym)]
     (#(if (c/listy? %) (apply list %) %) (fn-pack
       (cond (= langkwd :clojure)
@@ -267,7 +267,7 @@
 
 (defn interstitial-depth [txt langkwd]
   "The depth at all cursor-ix values, with the cursor going between characters.
-   Has one more element than the length of txt. 
+   Has one more element than the length of txt.
    It can see zero-wide gaps in stuff like ()()."
   (cond (= langkwd :clojure) (clojure/interstitial-depth txt)
     (= langkwd :human) (human/interstitial-depth txt)
@@ -281,7 +281,7 @@
     (= langkwd :human) (human/tokenize-ints txt)
     :else (errlang "tokenize-ints" langkwd)))
 
-(defn convert-stack-trace [stack-trace stop-stack langkwd] 
+(defn convert-stack-trace [stack-trace stop-stack langkwd]
   "Converts a stack trace created in language langkwd into a natural clojure data-structure format.
    Stop-stack (which can be empty []) is a vector of stops for the stacktrace."
   (cond (= langkwd :clojure)
@@ -314,7 +314,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;; Functions that work with multiple languages at once ;;;;;;;;;;;;;
 
-(defn get-all-loaded-ns [] 
+(defn get-all-loaded-ns []
   (let [clojures (mapv ns-name (all-ns))]
     ; Will add more in the future.
     clojures))
@@ -332,5 +332,5 @@
                        (println "Failed to load ns (bad clj file?):" %)))
               needed-ns-syms))
         t1 (System/nanoTime)]
-    (println "Langs/ensure-src-ns-loaded! Loaded: " (count loaded-ns-syms) 
+    (println "Langs/ensure-src-ns-loaded! Loaded: " (count loaded-ns-syms)
       "Elapsed time (s):" (/ (- t1 t0) 1.0e9))))

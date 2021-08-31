@@ -1,10 +1,10 @@
 ; Code NAVigation
 
 (ns coder.cnav
-  (:require [clojure.walk :as walk] 
+  (:require [clojure.walk :as walk]
     [clojure.set :as set]
     [clojure.string :as string]
-    [coder.textparse :as textparse] 
+    [coder.textparse :as textparse]
     [c]))
 
 ;;;;;;;; Support fns ;;;;;;;;;
@@ -60,26 +60,26 @@
   (let [lget-in (fn [x ph] (let [yi (c/cget-in x ph)
                                  lm (:leaf-meta (meta yi))]
                              (cond (not (coll? yi)) yi lm lm :else false)))
-        leaf2py (reduce #(let [v (lget-in y %2)] 
+        leaf2py (reduce #(let [v (lget-in y %2)]
                            (if v (assoc %1 v %2) %1)) {} (c/paths y))]
     (reduce #(let [xi (lget-in x %2)]
-               (if (get leaf2py xi) (assoc %1 %2 (get leaf2py xi)) %1)) 
+               (if (get leaf2py xi) (assoc %1 %2 (get leaf2py xi)) %1))
       {} (c/paths x))))
 
 (defn leaf-branch-path-map [x y]
   "Not just leaves."
   (let [lpm (leaf-path-map x y)
-        
+
         max-depth (apply max (mapv count (keys lpm)))
         cut (fn [v n-cut]
               (if (>= (count v) n-cut) (subvec (into [] v) 0 (- (count v) n-cut))))
         no-nil (fn [m] (select-keys m (filter #(and % (get m %)) (keys m))))
         ; Sucessively more stubby branch-maps:
         branch-phms (mapv (fn [n-cut] (no-nil (zipmap (mapv #(cut % n-cut) (keys lpm))
-                                                (mapv #(cut % n-cut) (vals lpm))))) 
+                                                (mapv #(cut % n-cut) (vals lpm)))))
                       (range max-depth))
         phx (c/paths x)
-        get-ph (fn [px] 
+        get-ph (fn [px]
                  (let [phs (mapv #(get % px) branch-phms)]
                    (first (filterv #(and % (= (c/cget-in x px) (c/cget-in y %))) phs))))
         paths-x (c/paths x)]
@@ -171,7 +171,7 @@
         fn-packed? (contains? #{`fn `fn* 'fn} (first? (c/cget-in code (drop-last 3 path))))
         in-vector? (vector? (c/cget-in code (drop-last 1 path)))
         second? (= (last (butlast path)) 1)]
-    (cond 
+    (cond
       (< (count path) 2) false (not (symbol? x)) false (not in-vector?) false (not second?) false
       (or (and pairbind? (even? (last path)))
         fn-unpacked? fn-packed?) true
@@ -197,18 +197,18 @@
    It will be tricked by some bad coding styles such as functions that shadow clojure.core.
    The path takes us to the whole function call, i.e (foo/bar 1 2 3)."
   (let [path-atom (atom []) ns-sym (first ns-sym)
-        ns-ob (cond (not ns-sym) (find-ns 'clojure.core) 
+        ns-ob (cond (not ns-sym) (find-ns 'clojure.core)
                 (symbol? ns-sym) (find-ns ns-sym) :else ns-sym)
         walk-fn (fn [path x]
                   (if (c/listy? x)
                     (let [x0 (first x)]
                       (cond (not (symbol? x0)) "Not a symbol"
                         (string/includes? (str x0) "clojure.core/") "We ignore the core namespace"
-                        (or (string/starts-with? (str x0) "Math/") 
+                        (or (string/starts-with? (str x0) "Math/")
                           (string/starts-with? (str x0) "java.lang.Math/")) "We ignore java.lang/Math"
                         (textparse/qual? x0) (swap! path-atom #(conj % path))
-                        (let [symr (ns-resolve ns-ob x0)] 
-                          (or (not symr) (string/includes? (str symr) "clojure.core/"))) "Local sym OR clojure.core sym" 
+                        (let [symr (ns-resolve ns-ob x0)]
+                          (or (not symr) (string/includes? (str symr) "clojure.core/"))) "Local sym OR clojure.core sym"
                         :else (swap! path-atom #(conj % path)))
                       x) x))]
     (c/pwalk walk-fn code) @path-atom))
@@ -222,7 +222,7 @@
                 (mapv (c/vcat [ix] ipaths)))
               (and (c/listy? codei) (contains? def-variants (first codei)))
               [[ix]]
-              :else [])) 
+              :else []))
       codes (range))))
 
 (defn local-downhills [cpath code-fully-qual]
@@ -246,7 +246,7 @@
         target (c/cget-in codeu path)]
     (if (symbol? target)
       (let [first-use (first (filter #(= (c/cget-in codeu %) target) (c/paths codeu)))]
-        (if (and (sym-def? codeu first-use) (and (not= path first-use))) 
+        (if (and (sym-def? codeu first-use) (and (not= path first-use)))
           (c/vcat [sym-qual] first-use) false))
       false)))
 
@@ -304,7 +304,7 @@
               (swap! ubs #(conj % x)))
             (if (and (c/listy? x) (symbol? (first x)))
               (swap! blacklist #(conj % (first x)))) x)
-        _ (locals-walk f x #{})] 
+        _ (locals-walk f x #{})]
     (set/difference @ubs @blacklist)))
 
 (defn unbound-syms [x]
@@ -317,7 +317,7 @@
                   (not (string/includes? (str x) "/"))
                   (not (string/starts-with? (str x) "clojure.core/")))
               (swap! ubs #(conj % x))) x)
-        _ (locals-walk f x #{})] 
+        _ (locals-walk f x #{})]
     (set/difference @ubs @blacklist)))
 
 ;;;;;;;; Summary fns, mainly for debugging ;;;;;;;;;
@@ -327,17 +327,17 @@
   (let [p0 (first path) pr (if (> (count path) 0) (into [] (rest path)))
         myst-char \u2601 ; clouds obscure whatever is beneath.
         myst-str (symbol (apply str (repeat 3 myst-char)))
-        empty-coll (fn [x] 
+        empty-coll (fn [x]
                      (cond (set? x) #{myst-str}
                        (map? x) {myst-str myst-str}
                        (vector? x) [myst-str]
                        :else (list myst-str)))
-        lb1 (if (and (coll? code) p0) 
+        lb1 (if (and (coll? code) p0)
               (lucky-branch (c/cget code p0) pr))]
     (if (not p0) code
-      (c/vmap #(cond (= %2 p0) lb1 
+      (c/vmap #(cond (= %2 p0) lb1
                            (coll? %1) (empty-coll %1)
-                           :else %1) 
+                           :else %1)
         code (c/ckeys code)))))
 
 (defn lucky-leaf [code search-key]

@@ -6,7 +6,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Other ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(def ^:dynamic *max-text-length* 10000) 
+(def ^:dynamic *max-text-length* 10000)
 
 (declare interact-fns) ; Possible dependency cycle with the new function being used by some interact fns.
 
@@ -30,13 +30,13 @@
         ; Remove old stuff:
         starting-ixs (into [] (reductions + (mapv #(count (:text %)) pieces1)))
         cut-ix (- (last starting-ixs) *max-text-length*) ; stuff before this gets cut.
-        
-        pieces2 (mapv (fn [st p] (update p :text #(subs % (min (count %) (max 0 (- cut-ix st)))))) 
+
+        pieces2 (mapv (fn [st p] (update p :text #(subs % (min (count %) (max 0 (- cut-ix st))))))
                    starting-ixs pieces1)
         first-nz-ix (if-let [x (first (filter #(> (count (:text (nth pieces2 %))) 0) (range (count pieces2))))] x (count pieces2))
         gran (colorful/num-cmd-cycle)
         pieces3 (into [] (subvec pieces2 (* (int (/ (int first-nz-ix) (int gran))) (int gran))))
-        
+
         console1 (assoc console :pieces pieces3 :scroll-top 1000000000000)]
     (rtext/scroll-bound console1)))
 
@@ -57,13 +57,13 @@
 
 (defn dispatch-heavy [evt s s1 k]
   "Running the repl may affect s, depending on the command. Running is agnostic to which repl is focused, i.e the k value."
-  (cond 
+  (cond
     (and (= (:type evt) :mousePressed)
       (= (:ClickCount evt) 2))
     (orepl/dispatch-heavy-doubleclick s s1 k)
     :else s1))
 
-(def dispatch 
+(def dispatch
   (plurality/->simple-multi-fn
     {:mousePressed rtext/mouse-press
      :mouseDragged rtext/mouse-drag
@@ -73,8 +73,8 @@
      (fn [e-clj comp] comp)
      (fn [e-clj comp] (:type e-clj))))
 
-(defmacro updaty-fns [code] 
-  (let [a1 (gensym 'args)] 
+(defmacro updaty-fns [code]
+  (let [a1 (gensym 'args)]
     (zipmap (keys code) (mapv #(list `fn ['& a1] (list `apply % a1)) (vals code)))))
 (defn interact-fns [] (updaty-fns
   {:dispatch dispatch

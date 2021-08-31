@@ -1,7 +1,7 @@
 ; Higher level logging functions.
 
 (ns coder.profiler
-  (:require 
+  (:require
     [clojure.set :as set]
     [clojure.string :as string]
     [clojure.main :as main]
@@ -35,17 +35,17 @@
         cut #(if (> (count %) ndim) (subvec % 0 ndim) %)
         paths-short (set (filterv #(>= (count %) ndim) (mapv cut paths)))
         ; dim-source [1 [2 3] 2]
-        old2new (reduce (fn [acc ix] 
-                          (reduce #(assoc %1 %2 ix) 
+        old2new (reduce (fn [acc ix]
+                          (reduce #(assoc %1 %2 ix)
                             acc (nth dim-source ix)))
                   {} (range (count dim-source))) ; Old path index to new path index collapsed.
         map2vec (fn [m] (mapv #(get m %) (sort (keys m))))
         change-ph (fn [ph] ; Change from old to new path.
                     (mapv #(if (= (count %) 1) (first %) %)
                       (map2vec (reduce #(let [jx (get old2new %2)]
-                                          (m-conj %1 jx (nth ph %2))) 
+                                          (m-conj %1 jx (nth ph %2)))
                                  {} (range (count ph))))))
-        xr (reduce 
+        xr (reduce
              (fn [acc ph]
                (let [add (collections/cget-in x ph)]
                  (assoc-in acc (change-ph ph) add)))
@@ -54,16 +54,16 @@
         convert?s (first convert-dims-to-vector-form?s)]
     (if (map? convert?s) (throw (Exception. "convert-dims-to-vector-form?s, if supplied, must be a vector.")))
     (if (not convert?s) xr
-      (collections/dpwalk 
+      (collections/dpwalk
         (fn [path val]
           (let [depth (count path)]
             (if (and (map? val) (get convert?s depth))
               (map2vec val) val))) xr (count convert?s)))))
 
-(defn _dim-split1 [x] 
+(defn _dim-split1 [x]
   (cond (not (map? x)) x
     (= (count x) 0) x
-    :else 
+    :else
     (let [kys (into [] (keys x))
           nk (mapv count kys)
           c0 (apply min nk) c1 (apply max nk)]
@@ -73,21 +73,21 @@
 (defn dim-split [x dims]
   (let [max-dim (apply max 0 dims)
         split?s (reduce #(assoc %1 %2 true) (into [] (repeat max-dim false)) dims)]
-    (collections/dpwalk (fn [ph x] (if (get split?s (count ph)) (_dim-split1 x) x)) 
+    (collections/dpwalk (fn [ph x] (if (get split?s (count ph)) (_dim-split1 x) x))
       x max-dim)))
 
 (defn dim-map2vec [x dims]
-  "Converts maps to vectors at specified nesting levels. 
+  "Converts maps to vectors at specified nesting levels.
    Maps must have integer keys."
   (let [max-dim (apply max 0 dims)
         vec?s (reduce #(assoc %1 %2 true) (into [] (repeat max-dim false)) dims)]
-    (collections/dpwalk (fn [ph x] 
+    (collections/dpwalk (fn [ph x]
                           (if (or (not (map? x)) (not (get vec?s (count ph)))) x
                             (let [kys (into [] (keys x)) max-k (apply max kys)]
                               (if (first (remove integer? kys))
                                 (throw (Exception. "Map key not an integer or long for converting to vector.")))
-                              (reduce #(assoc %1 %2 (get x %2)) 
-                                (into [] (repeat max-k false)) kys)))) 
+                              (reduce #(assoc %1 %2 (get x %2))
+                                (into [] (repeat max-k false)) kys))))
       x max-dim)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Support functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -154,7 +154,7 @@
           (coll? code-ex)
           (let [c0 (first code-ex) c1 (second code-ex)
                 forbid1 (forbidden-paths (into [] code-ex))
-                forbid  (cond 
+                forbid  (cond
                           (contains? #{'def} c0) [[] [0] [1]] ; (def x ...)
                           (and (contains? #{`fn 'fn 'fn*} c0) (vector? c1)) ; (fn [a b] ...)
                           (conj (prepends 1 (mapv vector (range (count c1)))) [1])
@@ -215,7 +215,7 @@
         no-paths-ex (set (forbidden-paths code-ex))
         log-paths-ex (set/difference ipaths no-paths-ex)
         log-paths (_path-remap code log-paths-ex)
-        _ (if (empty? (set/difference log-paths (set (collections/paths code)))) "Good" 
+        _ (if (empty? (set/difference log-paths (set (collections/paths code)))) "Good"
             (throw (Exception. "Log-paths point to non-existant code paths.")))
         _ftmp #(if include-code-ex? (assoc % :code-ex code-ex) %)
         apaths (alternative-paths code-ex no-paths-ex)]
@@ -240,7 +240,7 @@
       (mapv (fn [err? lsym lphs] ; Throws an exception if there is an error.
               ; TODO: this only checks runtime exceptions!
               (if err? (println "Warning! we only will detect compile time bad log paths!"))
-              (if err? (logger/find-bad-logpaths sym-qual lsym lphs false true nil))) 
+              (if err? (logger/find-bad-logpaths sym-qual lsym lphs false true nil)))
         err?s log-syms log-pathss)
       logss)))
 
@@ -251,7 +251,7 @@
                   (let [ph (:path log) val (:value log)
                         logf-sym (first ph) path-in-code (into [] (rest ph))
                         good2bad (get good2bad-pathss logf-sym)
-                        acc1 (if-let [code-ph-bad (get good2bad path-in-code)] 
+                        acc1 (if-let [code-ph-bad (get good2bad path-in-code)]
                                (m-conj acc (collections/vcat [logf-sym] code-ph-bad) val) acc)]
                     (m-conj acc1 ph val)))
           {} logs))
@@ -274,12 +274,12 @@
       (let [;_ (println "Deep profile covering:" (mapv textparse/unqual log-syms))
             codes (mapv langs/var-source log-syms)
             anals (mapv path-anal codes)
-            
+
             pathss-ex (mapv :ipaths-ex anals)
             bad-pathss-ex (mapv :notpaths-ex anals)
             log-pathss-ex (mapv :lpaths-ex anals)
-            log-pathss (mapv :lpaths anals) ; Log the UNexpanded code.          
-            
+            log-pathss (mapv :lpaths anals) ; Log the UNexpanded code.
+
             logs (apply collections/vcat (_logss-with-debug! log-syms log-pathss sym-qual runs))
             good2bad-pathss (zipmap log-syms (mapv :good2bad anals))]
         (_log-organize logs good2bad-pathss)))))
@@ -292,10 +292,10 @@
         log-syms (apply set/union (mapv set (cbase/deep-used-by sym-qual)))
         log-ns-objs (mapv #(find-ns (textparse/sym2ns %)) log-syms)
         codes (mapv langs/var-source log-syms)
-       
+
         fncall-pathss (mapv #(logger/fncall-logpaths %1 (textparse/sym2ns %2)) codes log-syms) ; [sym][which path][path]
 
-        log-pathsss (mapv (fn [code fncall-paths] 
+        log-pathsss (mapv (fn [code fncall-paths]
                             (mapv (fn [fn-path]
                                     (let [form (collections/cget-in code fn-path)]
                                       (mapv #(conj fn-path %) (range 1 (count form)))))
@@ -323,10 +323,10 @@
                                      called-sym-qual)
                              logpaths)) ; mapping from log path to whatever fn sym was called in the log.
         logpath2argix (zipmap logpaths (mapv #(dec (last %)) logpaths))
-                
+
         ; Logs that share butlast path will occur together in time as a pack:
         nlog (count logs)
-        vassoc (fn [maybe-v ix v] ; fills with "false" up to v. Treats nil maybe-v as [] 
+        vassoc (fn [maybe-v ix v] ; fills with "false" up to v. Treats nil maybe-v as []
                  (let [v (if maybe-v maybe-v [])
                        v1 (reduce conj v (range (max 0 (inc (- ix (count v))))))]
                    (assoc v1 ix v)))
@@ -337,7 +337,7 @@
                             noleaf (apply str (butlast ph))
                             arg-ix (dec (last ph))
                             called-sym (get logpath2calledsym ph)]
-                        (recur (update-in acc [called-sym noleaf arg-ix] #(conj (if % % []) lg)) 
+                        (recur (update-in acc [called-sym noleaf arg-ix] #(conj (if % % []) lg))
                           (inc ix)))))
         fdprofile1 (dim-mix fdprofile [[0] [1 3] [2]])] ;{fn-sym}{path-as-str+chronological}{wrt-ix}
     (zipmap
@@ -357,7 +357,7 @@
   ; NOTE: this function is kind-of deprecated."
   (let [paths (keys profile)
         ; out logs hit the symbols in the [x y z] fn args.
-        ; Since alternative-paths fills in paths we can't log, we should have this in the profile.   
+        ; Since alternative-paths fills in paths we can't log, we should have this in the profile.
         outer-log? #(let [cp (into [] (rest %))]
                       (and (= (first cp) 2)
                         (> (second cp) 0)
@@ -365,7 +365,7 @@
                         (get cp 3)))
         kys-to-fn (filterv outer-log? (keys profile))
         sym+2argss (reduce (fn [acc ph]
-                          (let [sym-qual (first ph) argpak-ix (- (second ph) 2) 
+                          (let [sym-qual (first ph) argpak-ix (- (second ph) 2)
                                 arg-ix (last ph)
                                 log-vals (get profile ph)]
                             (assoc-in acc [sym-qual argpak-ix arg-ix] log-vals)))

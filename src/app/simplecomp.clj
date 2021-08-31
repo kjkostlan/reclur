@@ -20,8 +20,8 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-#_(defmacro updaty-fns [code] 
-  (let [a1 (gensym 'args)] 
+#_(defmacro updaty-fns [code]
+  (let [a1 (gensym 'args)]
     (zipmap (keys code) (mapv #(list `fn ['& a1] (list `apply % a1)) (vals code)))))
 (defn interact-fns []
   {:mousePressed rtext/mouse-press

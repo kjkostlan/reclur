@@ -8,7 +8,7 @@
 
 (ns core
   (:import [java.awt.image BufferedImage])
-  (:require 
+  (:require
     [clojure.string :as string]
     [clojure.set :as set]
     [javac.cpanel :as cpanel]
@@ -19,11 +19,11 @@
     [layout.layouts :as layouts]
     [layout.undo :as undo]
     [app.orepl :as orepl]
-    [app.fbrowser :as fbrowser] 
+    [app.fbrowser :as fbrowser]
     [app.codebox :as codebox]
     [app.siconsole :as siconsole]
-    [app.multicomp :as multicomp] 
-    [app.multisync :as multisync] 
+    [app.multicomp :as multicomp]
+    [app.multisync :as multisync]
     [app.iteration :as iteration]
     [layout.keyanal :as ka]
     [layout.hotkey :as hk]
@@ -42,7 +42,7 @@
 ;;;;;;;;;;;;;;;; Library of commands ;;;;;;;;;;;;;;;;;;;;;
 
 (declare get-tools) ; avoids a circular dependency with get-tools bieng used by the other fns.
-(defn use-tool [s tool-kwd] 
+(defn use-tool [s tool-kwd]
   (let [tool (first (filter #(= (:name %) tool-kwd) (get-tools)))]
     (if tool (assoc s :active-tool tool)
       (throw (Exception. (str "no tool with :name " tool-kwd))))))
@@ -60,7 +60,7 @@
   "Calls f on args. But f can be code, which makes serialization easier."
   (apply (to-f f-or-code) args))
 
-(defn simple-dispatch-call [f-or-map evt box] 
+(defn simple-dispatch-call [f-or-map evt box]
   "Applies dispatch multi-methods."
   (let [f-or-map (if (map? f-or-map) (zipmap (keys f-or-map) (mapv to-f (vals f-or-map)))
                    (to-f f-or-map))
@@ -69,17 +69,17 @@
                                 (fn [e-clj box] (:type e-clj))) f-or-map)]
     (f evt box)))
 
-(defn diff-checkpoint [s f] 
+(defn diff-checkpoint [s f]
   "Runs f on s, syncing the components unless f doesn't change the components or flags [:precompute :desync-safe-mod?] to true.
    Also updates the tags in all cases."
   (let [s (assoc-in (assoc-in s [:precompute :desync-supersafe-mod?] false)
                     [:precompute :desync-safe-mod?] false) ; safe until "proven" fast.
         s1 (f s) ; f has a chance to set :desync-safe-mod? for optimization.
-        sync-f (cond (or (get-in s1 [:precompute :desync-supersafe-mod?]) 
+        sync-f (cond (or (get-in s1 [:precompute :desync-supersafe-mod?])
                        (multisync/comps-eq? (:components s) (:components s1)))
                      (fn [comps0 comps1] comps1)
                      (get-in s1 [:precompute :desync-safe-mod?])
-                     multisync/update-keytags 
+                     multisync/update-keytags
                      :else multisync/comprehensive-sync)] ; the comprehensive sync comes with update-keytags.
     (assoc s1 :components (sync-f (:components s) (:components s1)))))
 
@@ -95,10 +95,10 @@
     s2))
 
 (defn single-comp-dispatches [evt-c s]
-  (let [sel (set/intersection (apply hash-set (keys (:components s))) 
+  (let [sel (set/intersection (apply hash-set (keys (:components s)))
               (apply hash-set (:selected-comp-keys s)))] ; normalize this.
-    (reduce 
-      (fn [s k] (binding [*comp-k* k] (single-comp-dispatch evt-c s k))) 
+    (reduce
+      (fn [s k] (binding [*comp-k* k] (single-comp-dispatch evt-c s k)))
          (assoc s :selected-comp-keys sel) sel)))
 
 (defn dispatch-hot-events [s evt-c]
@@ -111,8 +111,8 @@
    These events trigger even if the boxes aren't selected."
   (let [hot-fns #{:everyFrame :mouseMoved}
         boxes (:components s)
-        has-dispatch-fn? (fn [box-k fn-k] 
-                            (let [dispatch (get-in boxes [box-k :dispatch])] 
+        has-dispatch-fn? (fn [box-k fn-k]
+                            (let [dispatch (get-in boxes [box-k :dispatch])]
                               (and (map? dispatch) (contains? dispatch fn-k))))
         hot? (fn [box-k] (boolean (first (filter #(has-dispatch-fn? box-k %) hot-fns))))]
    (assoc s :hot-boxes (set (filterv hot? (keys boxes))))))
@@ -124,12 +124,12 @@
     (fbrowser/open-file-attempt evt s compk (codebox/new-codebox) codebox/from-text)))
 
 (defn update-mouse [evt-g evt-c s k]
-  (if (or (= k :mouseMoved) (= k :mouseDragged)) 
+  (if (or (= k :mouseMoved) (= k :mouseDragged))
     (assoc s :mouse-pos-world [(:X evt-c) (:Y evt-c)]) s))
 
 (defn expand-child [mevt-c s]
-  (let [x (:X mevt-c) y (:Y mevt-c) comps (:components s)] 
-    (if-let [target-key (selectmovesize/under-cursor x y comps)] 
+  (let [x (:X mevt-c) y (:Y mevt-c) comps (:components s)]
+    (if-let [target-key (selectmovesize/under-cursor x y comps)]
       (multicomp/expand-child target-key (gensym "child") mevt-c s) s)))
 
 (defn expand-child-tool []
@@ -139,7 +139,7 @@
   {:mousePressed (fn [mevt-c s]
                    (diff-checkpoint s #(maybe-open-file mevt-c % (first (:selected-comp-keys s)))))})
 
-(defn single-select [mevt-c s] 
+(defn single-select [mevt-c s]
   (let [mp (:mousePressed (selectmovesize/get-selection-tool))
         s1 (selectmovesize/clear-selection s)]
     (mp mevt-c s1)))
@@ -147,7 +147,7 @@
 ;;;;;;;;;;;;;;;; High level control flow ;;;;;;;;;;;;;;;;;;;;;
 
 (defn hotkey-cycle [evt-g evt-c s k]
-  "The emacs-like command's counter (per-command) gets incremented for multi-key commands. 
+  "The emacs-like command's counter (per-command) gets incremented for multi-key commands.
    Any commands that are triggered reset all counters."
   (if (and (= k :keyPressed) (or (ka/normal? evt-g) (ka/escape? evt-g) (ka/backspace? evt-g) (ka/enter? evt-g)))
     (let [hotkey-map (hk/hotkeys) hotlist (keys hotkey-map)
@@ -177,7 +177,7 @@
         sms (selectmovesize/get-selection-tool)
         cam (selectmovesize/get-camera-tool)
         ut #(maybe-use-tool evt-c s %)
-        
+
         click-target (if (= ek :mousePressed) (selectmovesize/under-cursor (:X evt-c) (:Y evt-c) (:components s)))
         double? (and (= ek :mousePressed) (= (:ClickCount evt-c) 2))
         shift? (:ShiftDown evt-c)
@@ -195,7 +195,7 @@
 (defn on-quit-attempt [evt-q s]
   (let [fs (iteration/file-status s)
         n (apply + (mapv count [(:new-files fs) (:changed-files fs) (:deleted-files fs) (:renamed-map fs)]))]
-    (if (= n 0) ; no disk changes. 
+    (if (= n 0) ; no disk changes.
       (let [choice? (warnbox/yes-no? "quit?" false)]
         (if choice? (System/exit 0) (do (println "Quit cancelled by user.") s)))
       (let [choice (warnbox/choice (str n " files added/changed/renamed/deleted, save?") [:yes :no :cancel] :cancel)]
@@ -203,10 +203,10 @@
           (= choice :no) (System/exit 0)
           (= choice :yes) (do (iteration/save-state-to-disk!! s) (System/exit 0)))))))
 
-(defn dispatch-listener [evt-g s] 
+(defn dispatch-listener [evt-g s]
   "Transforms and dispatches an event (that doesn't change :typing-mode? and :active-tool).
    Only certain changes to f need diff checking."
-  (cond 
+  (cond
     (= (:type evt-g) :everyFrame)
     (if (> (count (:hot-boxes s)) 0) (let [evt-c evt-g] (dispatch-hot-events s evt-c)) s)
     (= (:type evt-g) :mouseMoved)
@@ -223,7 +223,7 @@
               (let [txt (:contents evt-g)]
                 (try (eval (read-string txt))
                   (catch Exception e
-                    (throw (Exception. (str "Eval of: " txt "\n Produced this error: " (.getMessage e)))))))) 
+                    (throw (Exception. (str "Eval of: " txt "\n Produced this error: " (.getMessage e))))))))
           s (if x (siconsole/log s (str "Parent command result:\n" x)) s)
           s (update-mouse evt-g evt-c s k)
           s (diff-checkpoint s #(hotkey-cycle evt-g evt-c % k))
@@ -233,10 +233,10 @@
         (if hk? s ; hotkeys block other actions.
             (let [; Typing mode forces single component use.
                   s (if (and (:typing-mode? s) (= k :mousePressed)) (single-select evt-c s) s)
-                  s (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c))) 
+                  s (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c)))
                       (maybe-use-tool evt-c s (selectmovesize/get-camera-tool))
                       (:typing-mode? s) (diff-checkpoint s #(single-comp-dispatches evt-c %))
-                      :else (diff-checkpoint s #(maybe-common-tools evt-c %)))        
+                      :else (diff-checkpoint s #(maybe-common-tools evt-c %)))
                   ] s))))))
 
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
@@ -255,31 +255,31 @@
         bound-xxyy [(- (* 0.5 bg-scale0 (first bg-size))) (* 0.5 bg-scale0 (first bg-size))
                     (- (* 0.5 bg-scale0 (second bg-size))) (* 0.5 bg-scale0 (second bg-size))]
         cam-limit (layoutcore/visible-xxyy-to-cam bound-xxyy)
-        
+
         min-zoom (nth cam-limit 2)
         max-zoom 64.0
         zoom (* 0.5 (+ (nth cam 2) (nth cam 3)))
         zoom1 (max min-zoom (min max-zoom zoom))
-        
+
         cam-xxyy0 (layoutcore/visible-xxyy cam)
         mX (* 0.5 (+ (nth cam-xxyy0 0) (nth cam-xxyy0 1)))
         mY (* 0.5 (+ (nth cam-xxyy0 2) (nth cam-xxyy0 3)))
         rzoom (/ max-zoom zoom)
-        cam1 (if (> zoom max-zoom) 
+        cam1 (if (> zoom max-zoom)
               (xform/xx cam [(* mX (- 1 rzoom)) (* mY (- 1 rzoom)) zoom1 zoom1]) cam)
-        
+
         cam-xxyy (layoutcore/visible-xxyy cam1)
-        
+
         ; It works "backwards":
         move+x (* (- (nth cam-xxyy 1) (nth bound-xxyy 1)) zoom1)
         move-x (* (- (nth bound-xxyy 0) (nth cam-xxyy 0)) zoom1)
         move+y (* (- (nth cam-xxyy 3) (nth bound-xxyy 3)) zoom1)
         move-y (* (- (nth bound-xxyy 2) (nth cam-xxyy 2)) zoom1)
-                
+
         conflictx (max 0.0 (* 0.5 (+ move-x move+x))) conflicty (max 0.0 (* 0.5 (+ move-y move+y)))
         move+x (- move+x conflictx) move-x (- move-x conflictx)
         move+y (- move+y conflicty) move-y (- move-y conflicty)
-        
+
         ;_ (println "Stuff:" cam-xxyy bound-xxyy move+x move-x move+y move-y)
         ;move+x 0 move-x 0 move+y 0 move-y 0
         cam2x (cond (> move+x 0) (+ (first cam1) move+x) (> move-x 0) (- (first cam1) move-x) :else (first cam1))
@@ -290,29 +290,29 @@
 (defn globalize-gfx [comps cam local-comp-renders selected-comp-keys tool-sprite sel-move-sz-sprite typing?]
   "Takes the local gfx of components as well as tool information to make the global gfx"
   (let [sel-keys (apply hash-set selected-comp-keys)
-        comp-sprites (zipmap (keys comps) 
-                       (mapv (fn [k] 
+        comp-sprites (zipmap (keys comps)
+                       (mapv (fn [k]
                                (let [c (get comps k)
                                      cam1 (xform/xx cam (xform/pos-xform (:position c)))]
                                  {:bitmap-cache? true :camera cam1 :gfx (get local-comp-renders k) :z (:z c)}))
                              (keys comps)))
         bg {:camera cam :z -1e100
-            :gfx [[:bitmap [(* bg-scale (* -0.5 (first bg-size))) 
+            :gfx [[:bitmap [(* bg-scale (* -0.5 (first bg-size)))
                             (* bg-scale (* -0.5 (second bg-size)))
                             bg-scale bg-perspective-effect bg-filename]]]}
         sel-sprite {:camera cam :z 2e10
                     :gfx (into [] (apply concat (mapv #(multicomp/draw-select-box comps % [0 0 1 1]) sel-keys)))}
         haze-sprite {:camera [0 0 1 1] :z -1e99
                      :gfx (if typing? [[:fillRect [0 0 1500 1500] {:Color [0 0 0 0.333]}]] [])}]
-    (assoc comp-sprites ::TOOL-SPRITE-CORE tool-sprite ::TOOL-SMS-SPRITE sel-move-sz-sprite ::TOOL-SEL-SPRITE sel-sprite 
+    (assoc comp-sprites ::TOOL-SPRITE-CORE tool-sprite ::TOOL-SMS-SPRITE sel-move-sz-sprite ::TOOL-SEL-SPRITE sel-sprite
     ::BACKGROUND-SPRITE bg ::HAZE-SPRITE haze-sprite)))
 
 (defn draw-component-l [comp focused?]
   (if (nil? comp) (throw (Exception. "nil component")))
   (if (not (map? comp)) (throw (Exception. "Non-map component")))
   (let [gfx (try ((:render comp) (dissoc comp :position) focused?)
-              (catch Exception e 
-                (gfxcustom/err-gfx e "The :render fn crashed for this box.")))] 
+              (catch Exception e
+                (gfxcustom/err-gfx e "The :render fn crashed for this box.")))]
         (if (= (count gfx) 0) (println "WARNING: no graphics drawn."))
     gfx))
 
@@ -324,19 +324,19 @@
         _ (multisync/nil-assert comps "The update-gfx fn is missing comps")
         old-comps (if-let [x (get precompute :comps-at-render)] x {})
         old-compgfx (if-let [x (get precompute :comp-renders)] x {})
-        draw-or-reuse (fn [k] (let [c (get comps k) c0 (get old-comps k) g0 (get old-compgfx k)] 
+        draw-or-reuse (fn [k] (let [c (get comps k) c0 (get old-comps k) g0 (get old-compgfx k)]
                                 ; Cant use comp-eq? b/c comp-eq? is only for the :pieces not the gfx.
                                 (if (and (:pure-gfx? (:optimize c)) (= (dissoc c0 :position) (dissoc c :position)))
                                   g0 (draw-component-l c true))))
         gfx-comps-l (zipmap (keys comps) (mapv draw-or-reuse (keys comps)))
         precompute1 (assoc precompute :comps-at-render comps :comp-renders gfx-comps-l)
         s1 (assoc-in s [:precompute :gfx] precompute1)
-        
+
         tool (:active-tool s) ; don't precompute the tools, not necessary, at least for now.
         ; TODO: use the cam or use no cam?
         tool-sprite {:camera cam :gfx (if-let [rf (:render tool)] (rf s) [])}
-        
-        sel-move-sz-sprite (if (:typing-mode? s) {:camera [0 0 1 1] :gfx []} 
+
+        sel-move-sz-sprite (if (:typing-mode? s) {:camera [0 0 1 1] :gfx []}
                              {:camera cam :gfx ((:render (selectmovesize/get-selection-tool)) s) :z 1e10})
         ;tool-hud-sprite {:camera [0 0 1 1] :z 1e100
         ;                 :gfx (multicomp/which-tool-hud s)}
@@ -364,7 +364,7 @@
   (print "ATTEMPT REPAIR" (keys s) "\n")
   (let [ensure-place #(let [c1 (if (:position %) % (assoc % :position [0.0 0.0]))
                             c2 (if (:size c1) c1 (assoc c1 :size [800.0 600.0]))
-                            c3 (if (:z c2) c2 (assoc c2 :z 0.0))] c3) ; Easily forgotten. 
+                            c3 (if (:z c2) c2 (assoc c2 :z 0.0))] c3) ; Easily forgotten.
         s (update-in s [:components] #(zipmap (keys %) (mapv ensure-place (vals %))))]
     s))
 
@@ -375,7 +375,7 @@
         s1-or-ex (binding [*out* outs] (try (apply f s args) (catch Exception e e)))
         txt (clojurize/extract! outs)
         _ (if (> (count txt) 0) (println txt)) ; mirror the output in the real console.
-        err? (instance? java.lang.Exception s1-or-ex) 
+        err? (instance? java.lang.Exception s1-or-ex)
         s2 (if err? s s1-or-ex)
         s3 (if (= (count txt) 0) s2 (siconsole/log s2 txt))
         s4 (limit-cam s3)

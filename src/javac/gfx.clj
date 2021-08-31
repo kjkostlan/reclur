@@ -11,8 +11,8 @@
 ; Each object element of the graphics vector is a vector of commands:
 ; [:drawOval, [10 10 20 20]]. Most commands must take clojure structures.
 ; [:fillRect, [10 10 20 20] ; when no third argument is supplied, uses defaults for everything, including color, etc.
-; [:drawOval, [10 10 20 20], {:Color [0 1 0], :Stroke [...]}] ; overrides the defaults, ONLY for this one call. 
-; [:java (fn [^java.awt.Graphics2D g] ...)] ; Puncture the abstraction and call java commands directly on the graphics object. 
+; [:drawOval, [10 10 20 20], {:Color [0 1 0], :Stroke [...]}] ; overrides the defaults, ONLY for this one call.
+; [:java (fn [^java.awt.Graphics2D g] ...)] ; Puncture the abstraction and call java commands directly on the graphics object.
      ; If this changes graphis's settings it will affect downstream calls until any changes get overriden.
 ; The first element is the java argument in keyword form.
 ; The second is the vector of stuff passed to the java arguments.
@@ -22,14 +22,13 @@
 ; TODO: eventually write compiler macros for the gfx commands for even faster results.
 (ns javac.gfx
   (:import [java.awt.image BufferedImage]
-    [java.awt Graphics2D Font Transparency Color GraphicsEnvironment GraphicsDevice GraphicsConfiguration RenderingHints BasicStroke] 
-    [javax.swing SwingUtilities]
+    [java.awt Graphics2D Font Transparency Color GraphicsEnvironment GraphicsDevice GraphicsConfiguration RenderingHints BasicStroke]
     [java.awt.image BufferedImage]
     [java.awt.geom AffineTransform])
   (:require [clojure.set :as set] [clojure.string :as string]
     [crossplatform.cp :as cp]
     [layout.xform :as xform]
-    [javac.gfxcustom :as gfxcustom]))
+    [javac.gfxcustom :as gfxcustom] [javac.thread :as jthread]))
 
 (def ^:dynamic *sprite-cache-ms* 500) ; render components as sprites when we aren't actively using them, unless the no-sprite flag is used.
 
@@ -51,14 +50,14 @@
    :Stroke '(java.awt.BasicStroke. (float (first x)) (int (second x)) (int (nth x 2)) (float (nth x 3)))})
 
 (def simple-getters
-  {:getColor '(fn [^java.awt.Graphics2D g] 
-                (let [c (.getColor g)] 
+  {:getColor '(fn [^java.awt.Graphics2D g]
+                (let [c (.getColor g)]
                   [(/ (.getRed c) 255.0) (/ (.getGreen c) 255.0) (/ (.getBlue c) 255.0) (/ (.getAlpha c) 255.0)]))
-   :getAffineTransform '(fn [^java.awt.Graphics2D g] 
+   :getAffineTransform '(fn [^java.awt.Graphics2D g]
                           (let [t (.getTransform g)]
                             [(.getScaleX t) (.getShearY t) (.getShearX t) (.getScaleY t) (.getTranslateX t) (.getTranslateY t)]))
    ; Only basic strokes are supported (unless you use the generic :java option).
-   :getStroke '(fn [^java.awt.Graphics2D g] 
+   :getStroke '(fn [^java.awt.Graphics2D g]
                  (try (let [s (java.awt.BasicStroke (.getStroke g))]
                         [(.getLineWidth s) (.getEndCap s) (.getLineJoin s) (.getMiterlimit s)])
                    (catch Exception e [1 1 1 1])))})
@@ -88,13 +87,13 @@
         classes (mapv #(mapv (fn [x] (cl2str x)) (.getParameterTypes %)) methods)]
     (zipmap (mapv #(vector (keyword %1) (count %2)) names classes) classes)))
 
-(def java-draw-commands 
+(def java-draw-commands
   "Map from [keyword arity] to vectors. The keyword is the method name and
   the vector is a vector of class arguments in string form.
   Only includes commands that directly draw stuff, not setters of graphics, etc.
   Arguments of the same arity will shadow, this is uasually not a big deal."
   (let [methods (.getMethods java.awt.Graphics2D)
-        draw-methods (filterv #(let [n (.getName %) s (subs (str n "   ") 0 3)] 
+        draw-methods (filterv #(let [n (.getName %) s (subs (str n "   ") 0 3)]
                                  (or (and (not (get tform-names n)) (not= s "get") (not= s "set")
                                    (not= n "wait") (not= n "notify") (not= n "notifyAll")
                                    (= (str (.getReturnType %)) "void")) (.startsWith n "draw")))
@@ -105,7 +104,7 @@
   "Set commands, the same format as java-draw-commands, except that the prefix set is removed from the keywords.
    (the user commands don't use the prefix set)."
   (let [methods (.getMethods java.awt.Graphics2D)
-        draw-methods (filterv #(let [n (.getName %) s (subs (str n "   ") 0 3)] 
+        draw-methods (filterv #(let [n (.getName %) s (subs (str n "   ") 0 3)]
                                  (or (= s "set") (get tform-names n)))
                        methods)
         pack-m (_pack-methods draw-methods)]
@@ -116,7 +115,7 @@
   "Set commands, the same format as java-draw-commands.
    Unlike the set commands the prefix is NOT removed (getters are only used internally)."
   (let [methods (.getMethods java.awt.Graphics2D)
-        draw-methods (filterv #(let [n (.getName %) s (subs (str n "   ") 0 3)] 
+        draw-methods (filterv #(let [n (.getName %) s (subs (str n "   ") 0 3)]
                                  (= s "get")) methods)]
     (_pack-methods draw-methods)))
 
@@ -132,18 +131,18 @@
     (sequential? c) (apply list (mapv #(_xn % ix) c)) :else c))
 (def _cmd-bank ; auto-generated hash-map of reflection-free functions that call Graphics2D methods.
   (let [ks0 (mapv first (keys java-get-commands))
-        m #(with-meta %1 {:tag (symbol (if (instance? java.lang.Class %2) (cl2str %2) (str %2)))}) 
+        m #(with-meta %1 {:tag (symbol (if (instance? java.lang.Class %2) (cl2str %2) (str %2)))})
         mg #(m % java.awt.Graphics2D)
         cl-leaf (fn [cl] (keyword (last (string/split (str cl) #"\."))))
-        getters (zipmap (concat ks0 (keys simple-getters)) 
+        getters (zipmap (concat ks0 (keys simple-getters))
                   (concat (mapv #(list 'fn [(mg 'g)] (list (symbol (str ".get" (subs (str %) 4))) 'g )) ks0) (vals simple-getters)))
         con (fn [cl] (get simple-constructors (cl-leaf cl)))
         ks0 (mapv first (keys java-set-commands)) cls (mapv #(first (get java-set-commands [% 1])) ks0)
         setters (zipmap ks0
                   (mapv #(let [c (con %1)] ; constructor.
-                           (list 'fn [(mg 'g) (if (or c (not %1)) 'x (m 'x %1))] 
+                           (list 'fn [(mg 'g) (if (or c (not %1)) 'x (m 'x %1))]
                              (list (symbol (str ".set" (subs (str %2) 1))) 'g (if c c 'x)))) cls ks0))
-        ks (keys java-draw-commands)             
+        ks (keys java-draw-commands)
         mkd (fn [kwd cls] ; make a command code from a keyword and a class.
               (apply list (symbol (str "." (subs (str kwd) 1))) 'g
                 (mapv #(let [c (get simple-constructors (cl-leaf %1))
@@ -159,18 +158,18 @@
                   (mapv (fn [k] (let [ars (get arities k) codecs (mapv #(get drawers-l [k %]) ars)]
                                   (list 'fn '[^java.awt.Graphics2D g x]
                                     (list 'let ['ar '(count x)]
-                                      (apply list 
+                                      (apply list
                                         (concat ['cond] (interleave (map #(list '= 'ar %) ars) (map #(get drawers-l [k %]) ars))
-                                          (list ':else (list 'throw (list 'Exception. (list 'str "Unrecognized arity for " k "(" 'ar ")")))))))))) 
+                                          (list ':else (list 'throw (list 'Exception. (list 'str "Unrecognized arity for " k "(" 'ar ")"))))))))))
                     (keys arities)))]
-    (strip-line-col 
+    (strip-line-col
       (zipmap (concat (keys getters) (keys setters) (keys drawers))
         (concat (vals getters) (vals setters) (vals drawers))))))
 
 (def cmd-bank ; command bank with type-hinted functions, calculated from _cmd-bank with eval.
               ; same anem as java fns except keywords and setters i.e. setColor is replaced with :Color.
               ; and getters are :defaultColor, etc since they only apply on defaults.
-  (zipmap (concat (keys _cmd-bank) (keys gfxcustom/custom-cmds)) 
+  (zipmap (concat (keys _cmd-bank) (keys gfxcustom/custom-cmds))
           (concat (mapv eval (vals _cmd-bank)) (vals gfxcustom/custom-cmds))))
 
 ;(require '[clojure.pprint]) (binding [*print-meta* true] (println (clojure.pprint/pprint _cmd-bank)))
@@ -191,7 +190,7 @@
   (let [^RenderingHints rh (RenderingHints. ^java.awt.RenderingHints.Key (RenderingHints/KEY_INTERPOLATION) ^java.awt.RenderingHints.Key (RenderingHints/VALUE_INTERPOLATION_BILINEAR))]
     (.setRenderingHints g rh)))
 
-(defn healthy-stroke! [^Graphics2D g] 
+(defn healthy-stroke! [^Graphics2D g]
   "More than 1 is enough so that downscaled images don't look so horrible, at least with bilinear interp.
    Does not affect fonts, but as long as fonts render thick enough it should be OK."
   (.setStroke g ^BasicStroke (BasicStroke. (float *image-scaleup*))))
@@ -212,18 +211,18 @@
   (let [x (first xform) y (second xform) sx (nth xform 2) sy (nth xform 3)]
     (cond (and (= x 0) (= y 0) (= sx 1) (= sy 1)) old-loc ; no change if not bieng transformed.
       (or (= name-kwd :drawBytes) (= name-kwd :drawChars)) ; don't know how to size these.
-      [(first old-loc) (second old-loc) (nth old-loc 2) 
+      [(first old-loc) (second old-loc) (nth old-loc 2)
        (+ (* (nth old-loc 3) sx) x) (+ (* (nth old-loc 4) sy) y)]
       (= name-kwd :drawImage)
       (cond (< (count old-loc) 6) (throw (Exception. ":drawImage must use a form that specifies the width and height."))
         (< (count old-loc) 8) ; unscaled form, must scale it.
-        (into [] 
+        (into []
           (concat
             [(first old-loc) (+ (* (second old-loc) sx) x) (+ (* (nth old-loc 2) sy) y)
              (+ (* (+ (second old-loc) (nth old-loc 3)) sx) x)
              (+ (* (+ (nth old-loc 2) (nth old-loc 4)) sy) y)] (subvec old-loc 5)))
         :else
-        (into [] 
+        (into []
           (concat [(first old-loc) (+ (* (second old-loc) sx) x) (+ (* (nth old-loc 2) sy) y)
                    (+ (* (nth old-loc 3) sx) x) (+ (* (nth old-loc 4) sy) y)]
            (subvec old-loc 5))))
@@ -238,7 +237,7 @@
       (= name-kwd :drawString)
       [(first old-loc) (+ (* (second old-loc) sx) x) (+ (* (nth old-loc 2) sy) y)]
       :else ; guessing, this list isn't complete.
-      (mapv #(cond (not (number? %1)) %1 
+      (mapv #(cond (not (number? %1)) %1
               (even? %2) (+ (* %1 sx) x)
               :else (+ (* %1 sy) y)) old-loc (range)))))
 
@@ -276,7 +275,7 @@
         n (count cmds)
         acf #(if-let [x (do (if last-cmd-atom (reset! last-cmd-atom %)) (get % 2))] (keys x) [])
         ever-changed (apply hash-set (apply concat (mapv acf cmds))) ; #{:Color, :Stroke, etc}
-        intro (mapv #(keyword (str "get" (subs (str %) 1))) ever-changed)] 
+        intro (mapv #(keyword (str "get" (subs (str %) 1))) ever-changed)]
     {:intro intro :cmds
       (loop [acc [] non-defaults {} ix 0]
         (if (= ix (count cmds)) acc
@@ -288,15 +287,15 @@
                                    (cond (or (identical? sp old) (= sp old)) ; identical? used as well to avoid reflection when we have java objects (assuming references are reused).
                                      (dissoc %1 %2) (not sp) (assoc %1 %2 :default) :else (assoc %1 %2 sp)))
                           specs (keys non-defaults))] ; changes to the :Color, etc.
-            (recur (conj (apply conj acc (mapv vector (keys changes) (vals changes))) [(first cmd) (second cmd)]) ; changes then 
+            (recur (conj (apply conj acc (mapv vector (keys changes) (vals changes))) [(first cmd) (second cmd)]) ; changes then
               specs (inc ix)))))})) ; at each step the non-defaults going in are the specs from the last step.
 
 (defn update-graphics! [java-ob old-clj-gfx new-clj-gfx & force-repaint]
   "Updates the graphics, calling a .repaint if needed. See doc at top of this file for the format of clj-gfx."
-  (if (or (not= old-clj-gfx new-clj-gfx) (first force-repaint)) ; change detected or forced. 
-    (SwingUtilities/invokeLater
-      (fn [& args] (do (.putClientProperty java-ob "repaintCmds" new-clj-gfx)
-                     (.revalidate java-ob) (.repaint java-ob))))))
+  (if (or (not= old-clj-gfx new-clj-gfx) (first force-repaint)) ; change detected or forced.
+    (jthread/swing-later ; Never wait for a repaint, see https://stackoverflow.com/questions/5133429/waiting-for-swings-elements-repaint-completion.
+      (do (.putClientProperty java-ob "repaintCmds" new-clj-gfx)
+                     (.revalidate java-ob) (.repaint java-ob)))))
 
 (defn report-e [m-extra e] "Reports an exception and throws it, with m-extra as extra message."
   (throw (RuntimeException. (str m-extra " " (.getMessage e)) e)))
@@ -307,14 +306,13 @@
 
 (defn draw1! [^Graphics2D g cmd defaults]
    (let [k (first cmd) bank cmd-bank sg-map set-get-map ; kc (k bank)
-         g-code (fn [k] (binding [*print-meta* true] (pr-str (k _cmd-bank)))) ; for error reporting.
-         ]
+         g-code (fn [k] (binding [*print-meta* true] (pr-str (k _cmd-bank))))] ; for error reporting.
      ; sg-map is Setting keywords -> getting keywords.
      (if (not (keyword? k)) (throw (Exception. (str "Gfx option keyword not a keyword:" k))))
      (if (= k :java)
        (try ((second cmd) g) (catch Exception e (report-e "Custom user graphics call error: " e)))
        (let [kc (k bank)]
-         (if kc 
+         (if kc
            (let [arg (second cmd) f (k bank)]
              (cond (nil? arg) (throw (RuntimeException. (str "Nil value for draw command: " k)))
                (nil? f) (throw (RuntimeException. (str "Unrecognized draw command or setting: " k)))
@@ -351,7 +349,7 @@
            cmds-xf-or-err-ix (try (mapv #(xgfx camera % true) cmds)
                                (catch Exception e
                                  (first (filter identity (mapv #(try (do (xgfx camera (nth cmds %) true) false)
-                                                                       (catch Exception e 
+                                                                       (catch Exception e
                                                                          (do (reset! e-atom e) %))) (range (count cmds)))))))]
        (if (number? cmds-xf-or-err-ix)
          (_paint-gfx-fairweather! g camera (gfxcustom/err-gfx @e-atom (str "Applying camera xform failed on: " (nth cmds cmds-xf-or-err-ix))) true)
@@ -361,21 +359,21 @@
              (try (_paint-gfx-fairweather! g nil cmds-or-err false)
                (catch Exception e
                  (_paint-gfx-fairweather! g camera (gfxcustom/err-gfx e "GFX cmds could be converted, but rendering failed.") true)))
-             (_paint-gfx-fairweather! g camera (gfxcustom/err-gfx cmds-or-err 
+             (_paint-gfx-fairweather! g camera (gfxcustom/err-gfx cmds-or-err
                                                   (str "GFX cmd could not be converted: " @debug-atom)) true))))))))
 
 (defn make-imagep [cmds]
   "Makes a single image's gfx cmds along with it's xform. This is before any camera translation.
    Returns [image xf] where xf is the xform that is applied to the image's graphics (xk needs to be inverted)."
-  (let [xxyy (xform/xxyy-gfx-bound cmds) 
+  (let [xxyy (xform/xxyy-gfx-bound cmds)
         pad 5 ; padding since gfx-bound isn't perfect. Accuracy vs performance.
         x0 (- (first xxyy) pad) x1 (+ (second xxyy) pad) y0 (- (nth xxyy 2) pad) y1 (+ (nth xxyy 3) pad)
-        
+
         scaleup *image-scaleup* ; scaleup so the image is higher fidelity.
         xf [(- (* x0 scaleup)) (- (* y0 scaleup)) scaleup scaleup] ; xform to not cut off the up or left and to scale up.
-        
+
         sx (* scaleup (- x1 x0)) sy (* scaleup (- y1 y0))
-  
+
         ; Not sure how much createCompatibleImage helps, but seems to be the standard practice:
         ; https://stackoverflow.com/questions/2374321/how-can-i-create-a-hardware-accelerated-image-with-java2d?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
         ^GraphicsEnvironment ge (GraphicsEnvironment/getLocalGraphicsEnvironment);
@@ -387,7 +385,7 @@
         _ (healthy-stroke! g)]
     (cp/fixed-width-font! g)
     (paint-gfx! g xf cmds) [img xf]))
-  
+
 (defn add-image! [^Graphics2D g ^BufferedImage sprite-im im-xform camera]
   "Adds the image to g with the xform applied from the camera."
   ; TODO: only draw images that partially or fully fit on the screen [not needed if the gfx does this optimization for us].
@@ -397,7 +395,7 @@
         ; AffineXforms work backwards from our system, thus the translate bf scale.
         _ (.translate affineXform (double (nth xf 0)) (double (nth xf 1)))
         _ (.scale affineXform (double (nth xf 2)) (double (nth xf 3)))
-        ^ImageObserver null-observer nil]       
+        ^ImageObserver null-observer nil]
     (.drawImage g sprite-im affineXform null-observer)))
 
 (defn global-paint! [^Graphics2D g sprites-oldp cmds-old cmds]
@@ -422,9 +420,9 @@
                              (if (and sp? sp-old (= gc-old gc)) sp-old
                                (if sp? (make-imagep gc)))) kys vls))]
     (mapv #(let [sp (get sprites1p %) cam (get cameras %)]
-             (if sp 
+             (if sp
                (add-image! g (first sp) (xform/x-1 (second sp)) cam)
-               (let [cmds-this-box (get gfx-cmds %)] 
+               (let [cmds-this-box (get gfx-cmds %)]
                  (paint-gfx! g cam cmds-this-box)))) kys)
     sprites1p))
 
@@ -433,7 +431,7 @@
    Uses the repaintCmds client property.
    does NOT include the proxy-super, so you need to:
    (proxy-super paintComponent g) (gfx/defaultPaintComponent! g this)"
-  (if-let [cmds (.getClientProperty this-obj "repaintCmds")] 
+  (if-let [cmds (.getClientProperty this-obj "repaintCmds")]
     (let [^Graphics2D g g
           _ (.setColor g ^Color (Color. (float 0) (float 0) (float 0) (float 1)))
           _ (.fillRect g (int 0) (int 0) (int 2000) (int 2000))
@@ -441,7 +439,7 @@
           old-cmds (if-let [x (.getClientProperty this-obj "precomputeGfxCmds")] x {})
           ; Put the timestamps on the new commands, restamping those that change:
           now (System/nanoTime)
-          cmds (zipmap (keys cmds) 
+          cmds (zipmap (keys cmds)
                  (mapv (fn [k cmd]
                          (let [cmd-old (get old-cmds k) ptime-old (::paint-time cmd-old)
                                ptime (if (and ptime-old (= (:gfx cmd) (:gfx cmd-old))) ptime-old now)] ; use the old cmd ptime if things havent changed.

@@ -13,13 +13,13 @@
     [layout.keyanal :as ka] [layout.mouseanal :as ma]))
 
 ; Variables stored here:
-; :pieces = a vector of 
+; :pieces = a vector of
    ; :text = the pieces rendered text value.
    ; <other stuff> user data.
 ; :cursor-ix is the current cursor index, counting the space between the pieces.
 ; :font-size is the font size. The actual font size can be different because of physics-induced compression, etc.
 ; :selection-start and :selection-end are the selected text range, inclusive.
-  ; Dragging the cursor to location x makes :selection-end x. 
+  ; Dragging the cursor to location x makes :selection-end x.
 ; :scroll-top and :scroll-left = upper left corner scroll position.
 ; :size is a two element vector in pixels.
 ; TODO: maybe use inclusive-exclusive patterns for ranges.
@@ -31,7 +31,7 @@
 
 ;;;;;;;;;;;;;;;;;;;; Defaults ;;;;;;;;;;;;;;;;
 
-(def ^{:dynamic true} *text-params* 
+(def ^{:dynamic true} *text-params*
   {:margin 2 ; Padding when there is no scrollbar.
    :font-linespace-to-size 0.85 ; Not quite as high as advertized.
    :font-width-to-size 0.6; could also be gotten from the font metrics.
@@ -45,13 +45,13 @@
    :fit-to-text-margin 1}) ; extra space so that the text doesn't get cutoff. Only used in the fit-to-text fn.
 
 (defn remove-empty [pieces]
-  "Removes empty pieces, always keeping one piece. 
+  "Removes empty pieces, always keeping one piece.
    This is only used for the defult edit functions, you may want different behavior."
   (let [p1 (filterv #(> (count (:text %)) 0) pieces)]
     (if (> (count p1) 0) p1 [(first pieces)])))
 
 (defn default-insert [box x stats str?]
-  "inserts x (a string or vector of pieces) into box with the help of stats and maybe in place of a selection. 
+  "inserts x (a string or vector of pieces) into box with the help of stats and maybe in place of a selection.
    str? is true when x is a string."
   (let [px-0 (:piece-0 stats) px+0 (:piece+0 stats) px-1 (:piece-1 stats) px+1 (:piece+1 stats)
         jx-0 (:jx-0 stats) jx+0 (:jx+0 stats) jx-1 (:jx-1 stats) jx+1 (:jx+1 stats)
@@ -66,7 +66,7 @@
    (if (and (>= px+0 np) (< px-1 0)) ; corner case with empty box, both directions overflow.
       (if str? (assoc-in box [:pieces 0 :text] (str x)) (assoc box :pieces xv))
       (if (and same-piece? (or str? copy11?)) ; in-place modification of the string.
-        (let [px (max 0 px-1) ; can use :piece+0 and :piece-1, which will allocate the insertion differently on the boundaries. 
+        (let [px (max 0 px-1) ; can use :piece+0 and :piece-1, which will allocate the insertion differently on the boundaries.
               jx0 (cond (= px-0 px) jx-0 (>= px+0 px) jx+0 :else (throw (Exception. "coding error here bad choice of px")))
               jx1 (cond (= px-1 px) jx-1 (>= px+1 px) jx+1 :else (throw (Exception. "coding error here bad choice of px.")))]
         (update-in box [:pieces px :text]
@@ -79,13 +79,13 @@
    (default-insert box "" stats true)) ; empty insert.
 
 (defn default-doubleclick [box c-ix p-ix jx]
-  "c-ix = cursor ix, p-ix = piece ix at cursor, jx = location within piece at cursor. 
+  "c-ix = cursor ix, p-ix = piece ix at cursor, jx = location within piece at cursor.
    The indexes round up. We select the piece."
   (if-let [p (:text (get (:pieces box) p-ix))]
-    (let [sel-end (+ (- c-ix jx) (count p))] 
+    (let [sel-end (+ (- c-ix jx) (count p))]
      (assoc box :selection-start (- c-ix jx) :selection-end sel-end :cursor-ix sel-end)) box))
 
-(defn default-partial-grab [x txt ix01] 
+(defn default-partial-grab [x txt ix01]
   "Gets a single piece given a piece, the grabbed text, and the indexes of the text."
   (assoc x :text txt))
 
@@ -122,10 +122,10 @@
 
 (defn gran2 [box]
   "[horizontal vertical] size needed per character in pixels.
-   This determinies the grid size, the actual character size depends on the 
+   This determinies the grid size, the actual character size depends on the
    graphic's rendering and *text-params* that scale it for a fit."
   (if (nil? (:font-size box)) (throw (Exception. (str "you gave us: " (keys box) " instead of the box."))))
-  [(* (:font-size box) (:font-width-to-size *text-params*)) 
+  [(* (:font-size box) (:font-width-to-size *text-params*))
    (* (:font-size box) (:font-linespace-to-size *text-params*))])
 
 ;;;;;;;;;;;;;;;;;;;; Helper functions ;;;;;;;;;;;;;;;;
@@ -150,11 +150,11 @@
    piece-ix0 rounds up and piece-ix1 rounds down when it lands on the boundary.
    This means piece-ix0 can be length and piece-ix1 can be -1. The j's are zero in those cases."
   (let [pd (pieces-digest pieces) nb4 (:num-b4 pd)
-        n (:npieces pd) counts (:counts pd) 
+        n (:npieces pd) counts (:counts pd)
         mx (:nchars pd) ix0 (min (max ix0 0) mx) ix1 (min (max ix1 0) mx) ; clamp.
         cix0 (last (filter #(> % -1) (map #(if (<= (nth nb4 %) ix0) % -1) (range (inc n)))))
         cix1 (if (= ix1 0) -1
-               (first (filter #(> % -1) 
+               (first (filter #(> % -1)
                         (map #(if (>= (+ (nth nb4 %1) %2) ix1) %1 -1) (range (inc n)) (conj counts 1e200)))))
         ;cix1 (inc (last (filter #(> % -1) (map #(if (<= (nth nb4 %) ix1) % -1) (range (inc n)))))) ; thus the 1e100 conj to nb4
         jx0 (if (< cix0 n) (- ix0 (nth nb4 cix0)) 0); subs indexes, jx0 incusive jx1 exclusive.
@@ -162,34 +162,34 @@
    [cix0 cix1 jx0 jx1]))
 
 (defn _grab-selection-by [pieces ix0 ix1 partial-grab-f]
-   "Returns the selection given ix0 and ix1 on the rendered string 
+   "Returns the selection given ix0 and ix1 on the rendered string
       ix0 and ix1 correspond to the standard inclusive, exclusive pattern which is equivalent to the cursor being at ix0 and ix1.
     partial-grab-fn tells us how to handle partial selections of x, i.e. what to do to the user data.
-      first arg = the thing being selected, second arg = the piece of the :text 
+      first arg = the thing being selected, second arg = the piece of the :text
       third arg = the [ix0 ix1] within the text that is being selected.
       Returns the modified x."
   (if (= (count pieces) 0) (throw (Exception. "# of pieces must be > 0.")))
   (if (or (< ix0 0) (< ix1 0)) (throw (Exception. "The indexes must be >= 0")))
   (let [pd (pieces-digest pieces)
-        counts (:counts pd) n (:npieces pd) nb4 (:num-b4 pd) 
+        counts (:counts pd) n (:npieces pd) nb4 (:num-b4 pd)
         cij (ixjx-pieces pieces ix0 ix1) cix0 (first cij) cix1 (second cij) jx0 (nth cij 2) jx1 (nth cij 3) ; indexes.
-        pgf (fn [piece j0 j1] (partial-grab-f piece (subs (:text piece) j0 j1) [j0 j1]))] 
+        pgf (fn [piece j0 j1] (partial-grab-f piece (subs (:text piece) j0 j1) [j0 j1]))]
     (cond (= (count counts) 0) (throw (Exception. "zero-length :pieces array."))
       (> cix0 cix1) [] ; both cursors on a boundary (eq to ix0 = ix1), grab nothing.
       (= cix0 cix1) ; part of a single selection, pieces[cix0] is never empty.
       [(pgf (nth pieces cix0) jx0 jx1)]
       :else ; cix0 < cix1, can do selection safely w/o out of bounds.
-      (into [] (concat [(pgf (nth pieces cix0) jx0 (nth counts cix0))] 
-                 (subvec pieces (inc cix0) cix1) 
+      (into [] (concat [(pgf (nth pieces cix0) jx0 (nth counts cix0))]
+                 (subvec pieces (inc cix0) cix1)
                  [(pgf (nth pieces cix1) 0 jx1)])))))
-(defn grab-selection-by 
+(defn grab-selection-by
   "Optional partial grab function, the default is used otherwise."
   ([pieces ix0 ix1] (_grab-selection-by pieces ix0 ix1 default-partial-grab))
   ([pieces ix0 ix1 partial-grab-f] (_grab-selection-by pieces ix0 ix1 partial-grab-f)))
 
 (defn index-stats [pieces ix0 ix1 partial-grab-f]
   "Use this function instead of rolling your own tedious stat tracking.
-   :b4, :in, :afr = everything before, inside, and after the selection (both vectors of pieces). 
+   :b4, :in, :afr = everything before, inside, and after the selection (both vectors of pieces).
    :ix0, :ix1 = cursor indexes, if ix1>ix0 this means the stuff between should be deleted.
    :piece-0, :piece-1 = index of which pieces are affected, rounding down when the cursor is between pieces, can be -1
    :piece+0, :piece+1 is rounding up, digit is beginning 0 vs end 1 of cursor, can be length, and more than one more the the -0 and -1 case.
@@ -205,11 +205,11 @@
         counts (:counts pd) n (count counts)
 
         ; Are we on a boundary or not?
-        ;boundary-0? (boolean (first (filter #(= (nth numb4 %) ix0) (range (count numb4))))) 
+        ;boundary-0? (boolean (first (filter #(= (nth numb4 %) ix0) (range (count numb4)))))
         ;boundary-1? (boolean (first (filter #(= (nth numb4 %) ix1) (range (count numb4)))))
         ; Edge pieces (may be nil if no selection):
         last0 (last stuff-before) first1 (first stuff-after)
-        ;ninsert (cond (map? insert) (count (:text insert)) ; number of characters inserted. 
+        ;ninsert (cond (map? insert) (count (:text insert)) ; number of characters inserted.
         ;          (coll? insert) (apply + (mapv count (mapv :text insert))) :else (count (str insert)))
 
         ; full-last before and after (i.e. the cursor is not cutoff)
@@ -232,14 +232,14 @@
    :scroll-top (- (:lines-above-top-allowed *text-params*)) :scroll-left 0 :pieces [{:text ""}] :size [600 400] :read-only? #{}
    :partial-grab-fn default-partial-grab
    :selection-color [0.5 0.8 1 1]
-   :outline-color [0 0 1 1] :background-color [0 0 0 0.655] 
+   :outline-color [0 0 1 1] :background-color [0 0 0 0.655]
    :path "nopath"
    :line-num-start 1
    :show-line-nums? true
-   :optimize {:pure-gfx? true} ; not quite true (the cursor blink) but one day we will fix this. 
+   :optimize {:pure-gfx? true} ; not quite true (the cursor blink) but one day we will fix this.
    :insert-fn default-insert :delete-fn default-delete
    :colorize-fn default-colorize})
-   
+
 ;;;;;;;;;;;;;;;;;;;; Mutable:
 
 ; On copy: store here and put the rendered string into the clipboard (for other apps).
@@ -291,17 +291,17 @@
   "Two vectors, the first is the char ix at the start of the line.
    The second is the first + # chars in line + 1 if add-one-on-right?"
   (let [box (v box) d (string-digest (rendered-string box))
-        v-range (view-range box) top (first v-range) bottom (second v-range) 
+        v-range (view-range box) top (first v-range) bottom (second v-range)
         add-me (if add-one-on-right? 1 0)
         num-b4 (:num-b4 d) nlines (:nlines d) line-counts (:counts d) nc (:nchars d)]
     (if (= nlines 0) [[][]]
-      [(mapv #(cond (< % 0) -1 
+      [(mapv #(cond (< % 0) -1
                 (>= % nlines) nc
-                :else (nth num-b4 %)) 
+                :else (nth num-b4 %))
          (range top (inc bottom)))
-       (mapv #(cond (< % 0) -1 
+       (mapv #(cond (< % 0) -1
                 (>= % nlines) (+ nc add-me)
-                :else (+ (nth num-b4 %) (nth line-counts %) add-me)) 
+                :else (+ (nth num-b4 %) (nth line-counts %) add-me))
          (range top (inc bottom)))])))
 
 (defn cursor-pixel-to-ugrid [box pixel-x pixel-y]
@@ -320,7 +320,7 @@
 
 (defn cursor-pixel-to-grid [box pixel-x pixel-y]
   "More useful than the ugrid version."
-  (let [xy (cursor-pixel-to-ugrid box pixel-x pixel-y)] 
+  (let [xy (cursor-pixel-to-ugrid box pixel-x pixel-y)]
     [(+ (first xy) (:scroll-left box)) (+ (second xy) (:scroll-top box))]))
 
 (defn cursor-ugrid-to-pixel [box grid-x grid-y]
@@ -329,7 +329,7 @@
         naive-mid [(+ m (* sx grid-x)) (+ m (* sy grid-y))] ft-pts (:font-size box)
         naive-bottom (vector (first naive-mid) (+ (second naive-mid) (* 0.5 ft-pts)))
         ; shx and shy are in addition to the margin.
-        shx (* (:font-xshift-to-size *text-params*) ft-pts) ; tweak all characters the same slight amount. 
+        shx (* (:font-xshift-to-size *text-params*) ft-pts) ; tweak all characters the same slight amount.
         shy (* (:font-yshift-to-size *text-params*) ft-pts)]
     [(+ (first naive-bottom) shx) (+ (second naive-bottom) shy)]))
 
@@ -341,7 +341,7 @@
       (let [y (max 0 (min y (dec n)))]
         (min (+ (nth lst y) x1) (nth len y))))))
 
-(defn cursor-ugrid-to-ix [box x y] 
+(defn cursor-ugrid-to-ix [box x y]
   (let [sd (string-digest (rendered-string box))
         n-b4 (:num-b4 sd)
         y-clamp (max (min y (dec (count n-b4))) 0)
@@ -354,7 +354,7 @@
   (let [uxy (cursor-pixel-to-ugrid box pixel-x pixel-y)] ; don't do scrolling yet.
     (cursor-grid-to-ix box (first uxy) (second uxy)))) ; scrolling is accounted for here.
 
-(defn cursor-ix-to-ugrid [box] 
+(defn cursor-ix-to-ugrid [box]
   "Gets the x and y global grid, never nil and out-of-bounds cursors are clamped.
    no scrolling is applied."
   (let [d (string-digest (rendered-string box)) nb4 (:num-b4 d)
@@ -364,13 +364,13 @@
 
 (defn cursor-ix-to-lix [box] (second (cursor-ix-to-ugrid box))) ; convience.
 
-(defn cursor-ix-to-grid [box & off-screen?] 
+(defn cursor-ix-to-grid [box & off-screen?]
   "Gets the x and y grid as on the screen, returns nil if they aren't on the screen unless off-screen?."
   (let [xy (cursor-ix-to-ugrid box) sl (:scroll-left box) st (:scroll-top box)]
     (if xy
       (let [gx (- (first xy) sl) gy (- (second xy) st)
             wh (view-wh box) w (first wh) h (second wh)]
-        (if (or (first off-screen?) 
+        (if (or (first off-screen?)
               (and (>= gx 0) (>= gy 0) (<= gx (inc w)) (<= gy (inc h)))) [gx gy])))))
 
 (defn cursor-ix-to-pixel [box]
@@ -404,25 +404,25 @@
     (if (> ix1 ix0)
       (let [g2 (gran2 box) sx (first g2) sy (second g2) v-range (view-range box)
             n-x (- (nth v-range 3) (nth v-range 2))
-            
+
             m (:margin *text-params*)
-            
+
             st-en (vis-line-char-ixs box false) starts (first st-en) ends (second st-en) nl (count starts)
             line0 (if (> nl 0) (first (filter #(>= (nth ends %) ix0) (range nl))))
             line1 (if line0 (first (filter #(<= (nth starts %) ix1) (range (dec nl) -1 -1))))]
          (if (and line0 line1)
-            (let [xys (filterv #(and % (>= (first %) 0) (<= (first %) n-x)) 
-                        (apply concat 
-                          (mapv (fn [y] 
+            (let [xys (filterv #(and % (>= (first %) 0) (<= (first %) n-x))
+                        (apply concat
+                          (mapv (fn [y]
                                   (let [st (nth starts y) en (nth ends y)]
-                                    (mapv #(if (and (>= % ix0) (< % ix1)) 
+                                    (mapv #(if (and (>= % ix0) (< % ix1))
                                              [(- % st left) y])
                                       (range st en))))
                           (range line0 (inc line1)))))]
              (mapv #(vector (+ m (* sx %1)) (+ m (* sy %2)) (+ sx 1.001) (+ sy 1.001)) (mapv first xys) (mapv second xys)))
           [])) [])))
 
-(defn exon [box] 
+(defn exon [box]
   "Gets the excised region upon a keypress, [ix0 ix1] inclusive-exclusive pattern.
    [:selection-start :selection-end] in some cases, but the :cursor-ix also can influence things."
   (let [sel0 (:selection-start box) sel1 (:selection-end box) ; inclusive.
@@ -441,11 +441,11 @@
   (let [get-n #(cond (number? %) % (string? %) (count %) (map? %) (count (:text %)))
         n0s (mapv get-n pieces0) n1s (mapv get-n pieces1)
         baux {:pieces (mapv #(hash-map :text (apply str (repeat % "."))) n0s) :cursor-ix cursor-ix0}; refactoring to accept the counts would be a good idea.
-        ij (cursor-ix-to-piece baux) ix (first ij) 
+        ij (cursor-ix-to-piece baux) ix (first ij)
         jx (if (= (count pieces1) 0) 0 (within-piece-f (nth pieces0 ix) (nth pieces1 ix) (second ij)))]
     (+ jx (apply + (if (= (count n1s) 0) [0] (subvec n1s 0 ix)))))) ; sum up all lines before our ix.
 
-(defn pixel-to-selected-char-ix [box x y] ; useful for external functions. 
+(defn pixel-to-selected-char-ix [box x y] ; useful for external functions.
   (let [half-char-width (* (first (gran2 box)) 0.5) ; half-shift since we select on chars not between chars.
         c-ix (cursor-pixel-to-ix box (+ x half-char-width) y)] (dec c-ix)))
 
@@ -476,7 +476,7 @@
         vr (view-range box) ; [top bottom left right].
         t (first vr) b (second vr) l (nth vr 2) r (nth vr 3)
         boxx (cond (< x l) (scx box (- x l)) (> (dec x) r) (scx box (- (dec x) r)) :else box)
-        boxxy (cond (< y t) (scy boxx (+ (- y t) (if sh? -1 0))) (> y b) (scy boxx (- y b)) :else boxx)] 
+        boxxy (cond (< y t) (scy boxx (+ (- y t) (if sh? -1 0))) (> y b) (scy boxx (- y b)) :else boxx)]
     (scroll-bound boxxy)))
 
 (defn scroll-to-see-selection [box]
@@ -510,7 +510,7 @@
         d (string-digest (rendered-string box))
         n-l (:nlines d) max-l (apply max (:counts d))
         box (assoc box :scroll-top 0 :scroll-left 0)]
-    (assoc box :size 
+    (assoc box :size
       [(if x? (+ (* mns 2) m (* max-l (first g2))) (first (:size box)))
        (if y? (+ (* mns 2) m (* n-l (second g2))) (second (:size box)))])))
 
@@ -521,7 +521,7 @@
     (if (or (<= xx n) (<= yy n)) (fit-to-text box (<= xx n) (<= yy n)) box)))
 
 (defn edit [box ix0 ix1 insert copy-piece-ixs]
-  "Replaces the stuff between cursor ix0 and cursor ix1 (which makes ix0 inclusive and ix1 exclusive). 
+  "Replaces the stuff between cursor ix0 and cursor ix1 (which makes ix0 inclusive and ix1 exclusive).
    with insert and sets the cursor index to the end of the inserted stuff.
    IF insert is a string, it simply modifies the corresponding string.
    IF it is an object or array thereof it adds a new object.
@@ -530,10 +530,10 @@
   (let [ix0 (max ix0 0)
         box (v box)
         stats (assoc (index-stats (:pieces box) ix0 ix1 (:partial-grab-fn box)) :copy-piece-ixs copy-piece-ixs)
-        
+
         pure-deleting? (and (= insert "") (< ix0 ix1))
-        
-        box1 (if pure-deleting? ((:delete-fn box) box stats) 
+
+        box1 (if pure-deleting? ((:delete-fn box) box stats)
                ((:insert-fn box) box insert stats (string? insert)))]
     (scroll-to-see-cursor (assoc box1 :selection-start 0 :selection-end 0))))
 
@@ -558,7 +558,7 @@
       tk {:type :type :value (string/replace tk #"\t" "    ") :ix0 ix0 :ix1 ix1}
       :else {:type :ignore})))
 
-(defn arrow-cursor [box arrow-code shifting?] 
+(defn arrow-cursor [box arrow-code shifting?]
   "The user moves the cursor. The node scrolls to keep the cursor in view if it moves out of view.
    Arrow codes are: < > v ^. Shift + arrow means select."
   (let [sel0 (:selection-start box) sel1 (:selection-end box) arrow-code (str arrow-code)]
@@ -574,7 +574,7 @@
                       (= arrow-code "v") [global-x-grid (inc global-y-grid)]
                       (= arrow-code "^") [global-x-grid (dec global-y-grid)]
                       :else (throw (Exception. (str "Unrecognized arrow code: " arrow-code))))
-            d (string-digest (rendered-string box)) lc (:counts d) nl (count lc) nb4 (:num-b4 d) nc (:nchars d) 
+            d (string-digest (rendered-string box)) lc (:counts d) nl (count lc) nb4 (:num-b4 d) nc (:nchars d)
             cl #(max 0 (min % (dec nl))) gx (first gxy) gy (second gxy)
             gxy (cond (or (< gy 0) (and (< gx 0) (= gy 0))) [0 0] ; various overflow and wrap-around rules in this cond.
                   (< gx 0) [(nth lc (dec gy)) (dec gy)]
@@ -583,13 +583,13 @@
                   (> gx (nth lc gy)) [0 (inc gy)]
                   :else [gx gy])
             cur-ix0 (:cursor-ix box)
-            cur-ix (+ (first gxy) (nth nb4 (second gxy)))]; new cursor index after arrowing. 
-        (scroll-to-see-cursor 
-          (assoc 
+            cur-ix (+ (first gxy) (nth nb4 (second gxy)))]; new cursor index after arrowing.
+        (scroll-to-see-cursor
+          (assoc
             (if shifting? ; arrow key selections.
               (let [sel-st (if (= cur-ix0 sel0) cur-ix sel0)
                     sel-en (if (= cur-ix0 sel1) cur-ix sel1)]
-                (if (and (> sel1 sel0) (>= sel-en sel-st)) 
+                (if (and (> sel1 sel0) (>= sel-en sel-st))
                   (assoc box :selection-start sel-st :selection-end sel-en)
                   (assoc box :selection-start (min cur-ix0 cur-ix) :selection-end (max cur-ix0 cur-ix))))
                 (assoc box :selection-start 0 :selection-end 0))
@@ -620,7 +620,7 @@
       (_tripleclick mouse-evt box mouse-press)
       :else
       (assoc box :cursor-ix i2
-        :selection-start (if sh? (min i1 i2) 0) 
+        :selection-start (if sh? (min i1 i2) 0)
         :selection-end (if sh? (max i1 i2) 0)))))
 
 (defn mouse-drag [mouse-evt box]
@@ -645,7 +645,7 @@
                    (if (<= x1 x0) false ; nothing selected.
                      (let [slice (grab-selection-by (:pieces box) x0 x1 (:partial-grab-fn box))
                            txt (apply str (mapv :text slice)) ; txt is the lookup key on paste.
-                           i0 (first (ixjx-pieces (:pieces box) x0 x1)) 
+                           i0 (first (ixjx-pieces (:pieces box) x0 x1))
                            copy-ixs (mapv #(+ % i0) (range (count slice)))] ; which index each comes from.
                        (clipboard/put-as-string! txt) ; The visual string.
                        (reset! clip-atom (hash-map txt {:x slice :ixs copy-ixs :comp-type (:type box)}))))))]
@@ -695,13 +695,13 @@
 
 (defn render-cursor-by-color [box col col-edge]
   (let [pix (cursor-ix-to-pixel box)] ; nil if not rendered, center of cursor.
-    (if pix 
+    (if pix
       (let [x (first pix) y1 (- (second pix) (* (:font-size box) 0.5))
             y0 (+ (second pix) (* (:font-size box) 0.5))]
         [[:drawLine [(dec x) y0 (dec x) y1] {:Color col-edge}] [:drawLine [(inc x) y0 (inc x) y1] {:Color col-edge}]
          [:drawLine [x y0 x y1] {:Color col}]])))) ; draw the main cursor last
 
-(defn render-cursor [box] 
+(defn render-cursor [box]
   (let [col (if (> (mod (System/nanoTime) 1e9) 5e8) [1 1 1 1] [1 0 1 1])]
     (render-cursor-by-color box col [0 0 0.5 1])))
 
@@ -712,15 +712,15 @@
         n (count line-ends)
         view-r (view-range box)
         top (first view-r) bottom (second view-r) left (max 0 (nth view-r 2)) right (inc (nth view-r 3))
-              
+
         x (pieces-digest (:pieces box)) s (rendered-string box) ft-pts (:font-size box)
         piece-ix (into [] (apply concat (mapv #(repeat %1 %2) (:counts x) (range))))
-              
+
         min-c (max 0 (first line-starts)) max-c (last line-ends)
-              
+
         sub-s (subs s min-c max-c)
-        cols ((:colorize-fn box) box sub-s (subvec piece-ix min-c max-c) min-c max-c) 
-              
+        cols ((:colorize-fn box) box sub-s (subvec piece-ix min-c max-c) min-c max-c)
+
         ; Only keep the parts that are visible:
         _i0 (mapv #(min (- max-c min-c) (- (+ (max % 0) left) min-c)) line-starts)
         _i1 (mapv #(max %1 (min (+ %1 (- right left)) (- (max %2 0) min-c))) _i0 line-ends)
@@ -728,16 +728,16 @@
         cols1 (into [] (apply concat (mapv #(subvec cols %1 %2) _i0 _i1)))
         ux-loc (into [] (apply concat (mapv #(range (- %2 %1)) _i0 _i1)))
         uy-loc (into [] (apply concat (mapv #(repeat (- %2 %1) %3) _i0 _i1 (range n))))
-              
+
         char-locations (mapv #(cursor-ugrid-to-pixel box %1 %2) ux-loc uy-loc)
-        char-gfx [[:grid-string [ft-pts sub-s1 (mapv first char-locations) (mapv second char-locations) 
+        char-gfx [[:grid-string [ft-pts sub-s1 (mapv first char-locations) (mapv second char-locations)
                     (mapv first cols1) (mapv second cols1) (mapv #(nth % 2) cols1) (mapv #(nth % 3) cols1)] {}]]]
      (if (:show-line-nums? box)
        (let [ladd (:line-no-standoff-chars *text-params*)
-             
+
              line-xs (conj (mapv #(+ ladd (- %2 %1) (- left)) line-starts line-ends) ladd)
              line-locations (mapv #(cursor-ugrid-to-pixel box %1 %2) line-xs (range n))
-             
+
              ; vector "map" from vis to real lines:
              _ps (conj (:pieces box) {:text "\n"}) _n (count _ps)
              lnum-vis2rel (loop [acc [] ix 0 line-ix (:line-num-start box)]
@@ -747,11 +747,11 @@
                                     xtra (if-let [x (:hidden-nlines p)] x 0)]
                                 (recur (apply conj acc (mapv #(+ % xtra line-ix) (range nfeed)))
                                   (inc ix) (+ line-ix nfeed xtra)))))
-             line-strs (mapv #(let [l (+ top %)] 
+             line-strs (mapv #(let [l (+ top %)]
                                 (if (>= l 0) (str (if-let [x (get lnum-vis2rel l)] x "")) "0")) (range n))
-             
+
              lft-pts (* ft-pts (:line-fontsz-mult *text-params*))
-             lineno-gfx (filterv identity 
+             lineno-gfx (filterv identity
                           (mapv #(if (and (>= %3 0) (<= (+ %3 (count %2)) (- right left)))
                                    (vector :drawString [%2 (first %1) (second %1)] {:Color [1 1 1 0.5] :FontSize lft-pts}))
                             line-locations line-strs line-xs))]
@@ -765,12 +765,12 @@
     (let [box1 (assoc box :font-size 15) s (:path box1) sz (:size box1) g2 (gran2 box1) bc (:outline-color box1)
           s (if (string? s) s (apply str (interpose "/" s)))
           n (count s) places (mapv #(cursor-ugrid-to-pixel box1 % 0) (range n))
-          m (:margin *text-params*) 
+          m (:margin *text-params*)
           tc (mapv #(+ (* % 0.5) 0.5) bc) width (+ (* m 2) (* (first g2) n))
           height (+ (* m 2) (second g2)) ft-pts (:font-size box1)
           put-above? false
           x0 (- (* (first sz) 0.5) (* width 0.5)) y0 (if put-above? (- height) 0)]
-      (into [] (concat 
+      (into [] (concat
         [[:fillRect [x0 y0 width height] {:Color [0 0 0 0.5]}]
          [:drawRect [x0 y0 width height] {:Color (:outline-color box1)}]]
         (mapv #(vector :drawString [(str %2) (+ (first %1) x0) (+ (second %1) y0)] {:Color tc :FontSize ft-pts}) places s)))) []))

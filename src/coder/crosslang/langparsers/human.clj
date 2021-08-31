@@ -7,7 +7,7 @@
 (defmacro _add! [] '(do (aset-int st kx ix0) (aset-int en kx ix) (aset-int ty kx mode)))
 
 (defn tokenize-ints [s]
-  "Human languages won't be added, so no :forwards, :backwards, etc 
+  "Human languages won't be added, so no :forwards, :backwards, etc
    but we can still tokenize a string in a way that mostly makes sense."
   (let [^chars cs (.toCharArray ^String s)
         n (int (count cs))
@@ -40,7 +40,7 @@
               close? (or (= c \)) (= c \]) (= c \}))
               dx1 (+ dx (if (open? 1) (if close? -1 0)))]
           (recur (conj acc dx1) (inc ix) dx1))))))
-          
+
 (defn reads-string [s]
   "Ignores punctuation."
   (let [s1 (string/replace s #"\.[ \t\n]"

@@ -1,10 +1,10 @@
-; Simple functions that analyze mouse events. 
+; Simple functions that analyze mouse events.
 (ns layout.mouseanal
   (:require [crossplatform.cp :as crossp] [globals]))
 
 (defn get-scroll-xy-vanilla [wheel-evt precise?]
   "Option for precise inertial scrolling."
-  (let [horiz? (:ShiftDown wheel-evt) 
+  (let [horiz? (:ShiftDown wheel-evt)
         delta (if precise? (:PreciseWheelRotation wheel-evt) (:WheelRotation wheel-evt))
         zero (if precise? 0.0 0)]
     (if horiz? [delta zero] [zero delta])))
@@ -20,7 +20,7 @@
             millis-past (mapv #(- (:Time wheel-evt) (:Time %)) past-wheel-evts)
             dxys (mapv #(get-scroll-xy-vanilla % precise?) past-wheel-evts)
             dxy (get-scroll-xy-vanilla wheel-evt precise?)
-            sign-agree? (fn [dxy1 dxy2] 
+            sign-agree? (fn [dxy1 dxy2]
                           (> (+ (* (first dxy1) (first dxy2))
                                (* (second dxy1) (second dxy2))) 0.5))
             sign-agree?s (mapv #(sign-agree? %1 dxy) dxys)

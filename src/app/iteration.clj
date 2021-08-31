@@ -27,28 +27,28 @@
   ;(println "crtl+s results: new: " new-files "changed:" changed-files "deleted if click yes: " deleted-files0 "missing: " missing-files "renamed: " renamed-map "copied: " copied-map)
   (let [deleted-files (if (and (> (count deleted-files0) 0) (warnbox/yes-no? (str "Delete: " deleted-files0) false)) deleted-files0 #{})
         ; undeleted files refill the tree:
-        s (reduce #(multicomp/add-file %1 %2 (jfile/folder? %2)) 
+        s (reduce #(multicomp/add-file %1 %2 (jfile/folder? %2))
             s (set/difference deleted-files0 deleted-files))
-        
+
         ;_ (throw (Exception. "Save disabled for safety reasons.")) ; DEBUG safety that can be enabled in rare app testing cases.
         _ (mapv #(do (jfile/rename!! %1 %2)) (keys renamed-map) (vals renamed-map))
         rename-msgs1 (mapv #(if (jfile/clj? %) (_update-ns1! "Renamed from: " %) (str "Renamed from:" %)) (keys renamed-map))
         rename-msgs2 (mapv #(if (jfile/clj? %) (_update-ns1! "Renamed to: " %) (str "Renamed from:" %)) (vals renamed-map))
-        _ (mapv (fn [fname] 
+        _ (mapv (fn [fname]
                   (let [text (jfile/open fname)]
-                    (mapv #(jfile/save!! % text) (get copied-map fname)))) 
+                    (mapv #(jfile/save!! % text) (get copied-map fname))))
             (keys copied-map)) ; No need to namespace-update copied files, as they are always invalid and only when the user changes them.
         copy-msgs [(if (= (count copied-map) 0) "" (str "Copied: " copied-map " No need to update the namespace just yet\n"))]
         new-save-msgs (mapv #(_save-or-delete1!! % (if-let [x (get open2text %)] x "")) (set/union new-files changed-files))
         del-msgs (mapv #(_save-or-delete1!! % nil) deleted-files)
-        
+
         ; The fbrowser was already updated. Thus only missing files or files the user decided not to delete:
         ; All these files are in local space.
         new-fileset (-> usfiles
                         (set/difference missing-files)
                         (set/union (set/difference deleted-files0 deleted-files)))
         s1 (multicomp/set-filetree s (multicomp/wrap-tree new-fileset) true)
-        
+
         all-msgs (apply str (interpose "\n" (concat rename-msgs1 rename-msgs2 copy-msgs new-save-msgs del-msgs)))
         msg (apply str (if (> (count all-msgs) 0) all-msgs "No user changes made => no disk changes."))]
     (siconsole/log s1 msg)))
@@ -77,7 +77,7 @@
         missing-files (apply hash-set (filterv #(let [o (get new2?old %)] (and o (not (jfile/exists? o)))) (keys new2?old)))
         changed-files (let [change? (fn [new] (not= (jfile/open (get-old new)) (get open2text new)))]
                         (apply hash-set (filterv change? (set/difference open new-files))))
-        copied-map (reduce (fn [acc fname] 
+        copied-map (reduce (fn [acc fname]
                              (let [old (get new2?old fname)]
                                (if (or (not old) (= (get renamed-map old) fname) (get new-files fname) (= old fname)) acc
                                  (update acc old #(if % (conj % fname) [fname]))))) {} (keys new2?old))

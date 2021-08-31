@@ -1,4 +1,4 @@
-; Refactoring tools 
+; Refactoring tools
 ; Many more will be added.
 (ns coder.refactor
   (:require [c]))
@@ -23,11 +23,11 @@
             (recur (inc ix) (conj acc phi) xi1)
             (map? xi)
             (let [cht (get-in (meta xi) [:PARSE 0 :children-txts])
-                  next-hop (get-in cht [phi 0 3])] 
+                  next-hop (get-in cht [phi 0 3])]
               (recur (inc ix) (conj acc (if next-hop next-hop phi)) xi1))
             :else
             (let [cht (get-in (meta xi) [:PARSE 0 :children-txts])
-                  next-hop (get-in cht [phi 3])] 
+                  next-hop (get-in cht [phi 3])]
               (recur (inc ix) (conj acc (if next-hop next-hop phi)) xi1))))))))
 
 (defn vpath2path [x path]
@@ -39,11 +39,11 @@
             (recur (inc ix) (conj acc phi) xi1)
             (map? xi)
             (let [cht (get-in (meta xi) [:PARSE 0 :children-txts])
-                  next-hop (first (filter #(= (get-in cht [% 0 3]) phi) (keys cht)))] 
+                  next-hop (first (filter #(= (get-in cht [% 0 3]) phi) (keys cht)))]
               (recur (inc ix) (conj acc (if next-hop next-hop phi)) xi1))
             :else
             (let [cht (get-in (meta xi) [:PARSE 0 :children-txts])
-                  next-hop (first (filter #(= (get-in cht [% 3]) phi) (keys cht)))] 
+                  next-hop (first (filter #(= (get-in cht [% 3]) phi) (keys cht)))]
               (recur (inc ix) (conj acc (if next-hop next-hop phi)) xi1))))))))
 
 (defn end-mpath [x force-parent? ph tail? sub-tail?]
@@ -55,7 +55,7 @@
         xi1 (if parent? (get-in x ph1) xi)
         mxi1 (meta xi1)
         ixp (if tail? (dec (count (:PARSE mxi1))) 0)
-        mp (conj (if parent? [:PARSE ixp :children-txts (last (path2vpath x ph))] 
+        mp (conj (if parent? [:PARSE ixp :children-txts (last (path2vpath x ph))]
                    [:PARSE ixp :txt]) (if tail? 2 0))
         mp1 (if (vector? (get-in mxi1 mp)) (conj mp (if sub-tail? 2 0)) mp)]
     [ph1 mp1]))
@@ -67,7 +67,7 @@
    sub-tail? = before and after the () within a collection. Has no effect if not within a collection."
   (if (not= path [])
     (let [pathv (path2vpath x path) n (count path)
-          wrap? (= (get pathv (dec n)) 0) 
+          wrap? (= (get pathv (dec n)) 0)
           pathv1 (if wrap?
                    (into [] (butlast pathv))
                    (update pathv (dec n) dec))
@@ -78,7 +78,7 @@
   (if (not= path [])
     (let [pathv (path2vpath x path) n (count path)
           nk (count (c/cget-in x (butlast path)))
-          wrap? (= (get pathv (dec n)) (dec nk)) 
+          wrap? (= (get pathv (dec n)) (dec nk))
           pathv1 (if wrap?
                    (into [] (butlast pathv))
                    (update pathv (dec n) inc))
@@ -92,17 +92,17 @@
    Does not change the string.
    Use-cases include removing an object without removing comments,
    and undoing a log insert without any extra stuff leftover or missing stuff."
-  (reduce 
+  (reduce
     (fn [xo on-parent?]
       (let [prev-pt (prev-patht xo path) next-pt (next-patht xo path)
             mp-prev (if prev-pt (apply end-mpath xo on-parent? prev-pt))
             mp-next (if next-pt (apply end-mpath xo on-parent? next-pt))
             mp-head (end-mpath xo on-parent? path false false)
             mp-tail (end-mpath xo on-parent? path true true)
-            set-e (fn [xj mp-us mp-them n-us us-first?] 
+            set-e (fn [xj mp-us mp-them n-us us-first?]
                     (let [us (c/dual-get-in xj mp-us)
                           them (c/dual-get-in xj mp-them)]
-                      (if (or (not us) (not them) (not mp-us) (not mp-them)) 
+                      (if (or (not us) (not them) (not mp-us) (not mp-them))
                         xj
                         (let [combine (if us-first? (str us them) (str them us))
                               nc (count combine)
@@ -110,9 +110,9 @@
                               c1 (subs combine 0 (if us-first? n-us1 (- nc n-us1)))
                               c2 (subs combine (count c1))
                               us1 (if us-first? c1 c2) them1 (if us-first? c2 c1)]
-                         (-> xj (c/dual-assoc-in mp-us us1) 
+                         (-> xj (c/dual-assoc-in mp-us us1)
                            (c/dual-assoc-in mp-them them1))))))]
-        (-> xo (set-e mp-head mp-prev n-head-end false) 
+        (-> xo (set-e mp-head mp-prev n-head-end false)
           (set-e mp-tail mp-next n-tail-end true))))
      x [false true]))
 
@@ -129,9 +129,9 @@
         ch (get-in mx [:PARSE 0 :children-txts])
         esn #(if (get %1 %2) (get %1 %2) "")
         ch1 (reduce #(let [from (get x2 %2)
-                           ch-from (get ch from)] ; nil unless integer within range. 
+                           ch-from (get ch from)] ; nil unless integer within range.
                        (if ch-from
-                         (assoc %1 %2 
+                         (assoc %1 %2
                            (vector (esn ch-from 0) (esn ch-from 1) (esn ch-from 2))) %1))
               (zipmap (range n2) (mapv #(vector "" "" "" %) (range n2))) (range n2))
         mx1 (assoc-in mx [:PARSE 0 :children-txts] ch1)]

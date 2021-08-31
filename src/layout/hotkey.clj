@@ -37,7 +37,7 @@
         keeps (filterv #(> (nth inter-levels %) 1) (range (count inter-levels)))
         keep-ix0 (if (first keeps) (+ ix0 (first keeps)))
         keep-ix1 (if (last keeps) (+ ix0 (last keeps)))
-        
+
         box1 (if keep-ix0 (rtext/edit box (inc keep-ix1) ix1 "" []) box)
         box2 (if keep-ix0 (rtext/edit box1 ix0 (dec keep-ix0) "" []) box1)] box2))
 
@@ -64,19 +64,19 @@
   {"C-w" close ; all these are (fn [s]).
    "esc" toggle-typing
    "C-r" (fn [s] (do-to-selected-box s codebox/hint-sym-qual #{:codebox :orepl :siconsole})) ;Don't worry about having to type the whole symbol
-   "C-S-r r r" #(if (warnbox/yes-no? "Relaunch app, losing any unsaved work?" false) 
+   "C-S-r r r" #(if (warnbox/yes-no? "Relaunch app, losing any unsaved work?" false)
                   (do (future (eval 'core.launch-main-app!)) (throw (Exception. "This iteration is dead, reloading."))) %)
-   "C-l" (fn [s] (layouts/next-layout s)) 
+   "C-l" (fn [s] (layouts/next-layout s))
    "C-S-l" (fn [s] (layouts/prev-layout s))
-   "C-`" selectmovesize/swap-on-top 
-   "C-f" (fn [s] (strfind/add-search-box s)) 
+   "C-`" selectmovesize/swap-on-top
+   "C-f" (fn [s] (strfind/add-search-box s))
    "C-p p" (fn [s] (orepl/log-and-toggle-viewlogbox s))
    "C-p x" (fn [s] (do (logger/remove-all-loggers!) ; clear loggers
                       #_(println "Cleared all loggers") s))
    "C-p C-x" (fn [s] (do (logger/clear-logs!) ; clear logs
                        #_(println "Cleared all logs") s))
    "C-p ^^" (fn [s] (funcjump/try-to-go-ups s false true))
-   ; The saving system: 
+   ; The saving system:
    ; ctrl+s = save onto child generation.
    ; ctrl+shift+s = pull child onto ourselves (TODO: do this when we quit as well).
    ; The child is viewed as the most up-to-date at all times, and it is occasionally copied back to us.

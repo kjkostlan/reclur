@@ -8,8 +8,8 @@
 ;    false or nil elements in sequentials or maps don't count as bieng there for keys or set operations, unless overidden for ckeys.
 ;      But filter doesn't set elements to nil it just contracts the vector.
 ;    keys and vals are the same for sets. keys are indexes for vectors.
-;    The output metadata is always the first collection or the union of input collections (even for difference operations), 
-;      as some collections may be missing their metadata. 
+;    The output metadata is always the first collection or the union of input collections (even for difference operations),
+;      as some collections may be missing their metadata.
 
 (ns c (:require [clojure.set :as set]))
 
@@ -31,11 +31,11 @@
 (defn bool2num [x]
   (cond (not x) 0 (= x true) 1 :else x))
 
-(defn reduce-unchecked "Doesn't check if ^clojure.lang.IReduce, which is true for most vector or listy collections." 
+(defn reduce-unchecked "Doesn't check if ^clojure.lang.IReduce, which is true for most vector or listy collections."
   ([f coll] (.reduce ^clojure.lang.IReduce coll f))
   ([f val coll] (println "Coll is:" coll) (.reduce ^clojure.lang.IReduceInit coll f val)))
 
-(defn queue 
+(defn queue
   "Creates or converts a coll to clojure's builtin queue type, from https://admay.github.io/queues-in-clojure/"
   ([] (clojure.lang.PersistentQueue/EMPTY))
   ([coll]
@@ -49,7 +49,7 @@
 
 (def vconcat vcat)
 
-(defn argmax 
+(defn argmax
   "Different from max-key in that it returns the key not the value."
   ([x]
     (argmax identity x))
@@ -63,12 +63,12 @@
             (recur (inc ix) (if gold-medal? fv record)
               (if gold-medal? ki best-k))))))))
 
-(defn argmin 
+(defn argmin
   "Different from max-key in that it returns the key not the value."
   ([x] (argmax #(- %) x))
   ([f x] (argmax #(- (bool2num (f %))) x)))
 
-(defn get- 
+(defn get-
   "Python would be x[k] for k < 0. Plenty of (dec (count x)) code could be easier."
   ([x k] (get- x k nil))
   ([x k not-found]
@@ -97,7 +97,7 @@
 
 (defn filter-kv [pred map]
   "Selects the keys in map for which (pred k v) is true. Returns a map."
-  (reduce #(let [v (get map %2)] 
+  (reduce #(let [v (get map %2)]
              (if (pred %2 v) (assoc %1 %2 v) %1)) {} (keys map)))
 
 ;;;;;;;;;;;;;;;; Generalized functions (wider valid argument set) ;;;;;;;;;;;;;;
@@ -159,15 +159,15 @@
 
 (defn creverse [x] ; doesnt affect maps or sets.
   (cond (vector? x) (with-meta (into [] (reverse x)) (meta x))
-    (sequential? x) (reverse x)    
+    (sequential? x) (reverse x)
     :else x))
 
 (defn cdissoc [x k & ks]
   (if (empty? ks)
     (let [metax (meta x)]
-      (with-meta 
+      (with-meta
         (cond (nil? x) [nil]
-              (sequential? x)      
+              (sequential? x)
               (cond (= (count x) (inc k))
                 (if (vector? x) (into [] (butlast x))
                     (apply list (butlast x)))
@@ -181,7 +181,7 @@
 
 (defn cselect-keys [x kys]
   (let [metax (meta x)]
-    (with-meta 
+    (with-meta
       (cond (nil? x) {}
             (sequential? x)
             (let [xv (if (vector? x) x (into [] x))]
@@ -201,7 +201,7 @@
         xms (if (sequential? x0) (mapv (fn [mp] (reduce #(if (get %1 %2) %1 (dissoc %1 %2)) mp (keys mp))) xms) xms) ; remove nil/false.
         big-map (apply merge xms)]
     (if (not x0) #{}
-        (with-meta 
+        (with-meta
           (cond (sequential? x0)
                 (let [n (apply max 0 (keys big-map))
                       xv (reduce #(assoc %1 %2 (get big-map %2)) (into [] (repeat n nil)) (keys big-map))]
@@ -220,7 +220,7 @@
         xms (if (sequential? x0) (mapv (fn [mp] (reduce #(if (get %1 %2) %1 (dissoc %1 %2)) mp (keys mp))) xms) xms) ; remove nil/false.
         big-map (apply merge-with f xms)]
     (if (not x0) {}
-        (with-meta 
+        (with-meta
           (cond (sequential? x0)
                 (let [n (apply max 0 (keys big-map))
                       xv (reduce #(assoc %1 %2 (get big-map %2)) (into [] (repeat n nil)) (keys big-map))]
@@ -253,7 +253,7 @@
         (set? x) (apply list x)
         :else (vals x)))
 
-(def cunion cmerge) 
+(def cunion cmerge)
 
 (defn cdifference [x & xs]
   "Keps the metadata of the first x. Uses keys not vals for non-set colls."
@@ -291,7 +291,7 @@
 
 (defn cmap [f x & xs]
   "cmap treats map entires as [k v] vectors, passing them into f."
-  (with-meta 
+  (with-meta
     (cond (nil? x) ()
       (sequential? x)
       (#(if (vector? x) (into [] %) (apply list %))
@@ -348,7 +348,7 @@
         (if-let [xtract (pred (nth vals ix))] xtract (recur (inc ix)))))))
 
 (defn where [pred coll]
-  "Returns where in coll (the key) pred is true. 
+  "Returns where in coll (the key) pred is true.
    Not lazy (could be made lazy but with difficulty)."
   (let [kys (into [] (ckeys coll)) vals (into [] (cvals coll))
         ixs (filterv #(pred (nth vals %)) (range (count vals)))]
@@ -357,7 +357,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; Working with metadata ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-(defn keep-meta [x f & args] 
+(defn keep-meta [x f & args]
   "Applies f w/o affecting meta. Throws an error if x had meta and (f x) can't hold meta."
   (if (meta x)
     (with-meta (apply f x args) (meta x))
@@ -424,7 +424,7 @@
        (if (= ix# n#) acc#
          (recur (conj acc# (nth ~v2 ix#)) (inc ix#))))))
 (defn _paths [x root]
-  (cond 
+  (cond
     (set? x) (let [n (count x) xv (into [] x)]
                    (loop [acc [root] ix 0]
                      (if (= ix n) acc
@@ -446,11 +446,11 @@
   (_paths x []))
 
 (defn path-order-compare [p1 p2]
-  "Compares two paths using 'sign(p1-p2)' which is approximatly <. 
+  "Compares two paths using 'sign(p1-p2)' which is approximatly <.
    If neither path is before as in hash-maps the other returns zero.
    Note: Hash maps or sets with integer keys WILL confuse it.
    [1 2] is before [1 2 0]."
-  (let [p1 (into [] p1) p2 (into [] p2) 
+  (let [p1 (into [] p1) p2 (into [] p2)
         n1 (count p1) n2 (count p2)
         n (max n1 n2)]
     (loop [ix 0]
@@ -473,7 +473,7 @@
          (map (fn [[k v]] (flatten-path (conj path k) v)))
          (into {}))
     [path step]))
- 
+
 (defn _pwalk [f ph x]
   (f ph
     (cond (map? x) (zipmap (keys x) (mapv #(_pwalk f (conj ph %1) %2) (keys x) (vals x)))
@@ -481,7 +481,7 @@
       (vector? x) (mapv #(_pwalk f (conj ph %1) %2) (range) x)
       (coll? x) (apply list (mapv #(_pwalk f (conj ph %1) %2) (range) x))
       :else x)))
-(defn pwalk [f x] 
+(defn pwalk [f x]
   "Pathed post walk, calls (f path subform). Not lazy."
   (_pwalk f [] x))
 
@@ -493,7 +493,7 @@
       (vector? x) (mapv #(_dpwalk f (conj ph %1) %2 (dec max-depth)) (range) x)
       (coll? x) (apply list (mapv #(_dpwalk f (conj ph %1) %2 (dec max-depth)) (range) x))
       :else x)))
-(defn dpwalk [f x max-depth] "Depth-limited pathwalk that applies (f path subform). 
+(defn dpwalk [f x max-depth] "Depth-limited pathwalk that applies (f path subform).
                               Max-depth zero means just applying f to [] the entire collection."
   (_dpwalk f [] x max-depth))
 
@@ -516,7 +516,7 @@
         (vector? x) (mapv #(_pwalk f (conj ph %1) %2) (range) x)
         (coll? x) (apply list (mapv #(_pwalk f (conj ph %1) %2) (range) x))
         :else x))))
-(defn pm-postwalk [f x] 
+(defn pm-postwalk [f x]
   "Pathed post walk, calls (f path subform). Not lazy.
    Preserves metadata, unless f destroys metadata."
   (_pmwalk f [] x))

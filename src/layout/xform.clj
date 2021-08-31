@@ -63,7 +63,7 @@
       :else ; guessing, this list isn't complete.
       (let [x?s (mapv #(and (number? %1) (even? %2)) args (range))
             y?s (mapv #(and (number? %1) (odd? %2)) args (range))]
-        [(mapv #(nth args %) (filterv #(nth x?s %) (range na))) 
+        [(mapv #(nth args %) (filterv #(nth x?s %) (range na)))
          (mapv #(nth args %) (filterv #(nth y?s %) (range na)))]))))
 (defn xy-keypoints [g-cmd]
   (try (xy-keypoints-fairweather g-cmd)
@@ -87,6 +87,6 @@
 
 (defn xlisten-map [lfns]
   "Convience fn to work on a map of listener fns."
-  (zipmap (keys lfns) 
+  (zipmap (keys lfns)
     (mapv (fn [k v] #(v (xevt %3 %1) %2))
        (keys lfns) (vals lfns))))

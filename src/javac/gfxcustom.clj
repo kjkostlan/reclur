@@ -2,14 +2,14 @@
 ; TODO: it would be nice if we used some fns from xform and gfx, but they both depend on us.
 (ns javac.gfxcustom
   (:import [java.awt.image BufferedImage]
-    [java.awt Graphics2D Font Transparency Color GraphicsEnvironment 
-      GraphicsDevice GraphicsConfiguration RenderingHints BasicStroke] 
+    [java.awt Graphics2D Font Transparency Color GraphicsEnvironment
+      GraphicsDevice GraphicsConfiguration RenderingHints BasicStroke]
     [java.awt.image BufferedImage]
     [java.awt.geom AffineTransform]
     [java.io File]
     [javax.swing SwingUtilities]
     [javax.imageio ImageIO])
-  (:require [clojure.string :as string] 
+  (:require [clojure.string :as string]
     [javac.file :as jfile]
     [layout.xform :as xform]
     [coder.unerror :as unerror]
@@ -30,9 +30,9 @@
 
 (defn grid-string! [^java.awt.Graphics2D g args]
   "Draws string s with per-char locations xs and ys and per-char colors r g b and a."
-  (let [fontsize (first args) 
-        ^String s (second args) 
-        xs (nth args 2) ys (nth args 3) 
+  (let [fontsize (first args)
+        ^String s (second args)
+        xs (nth args 2) ys (nth args 3)
         rs (nth args 4) gs (nth args 5) bs (nth args 6) as (nth args 7)
         n (count s)]
     (set-font-size! g fontsize)
@@ -69,7 +69,7 @@
 ;;;;;;;;;;;;;;;;;;; Defining how the camera xforms the graphics commands ;;;;;;;;;;;;;;;;;
 
 (defn xform-grid-string [xform-camera g-cmd keep-width?]
-  (let [;xform-camera is [x y scalex scaley], scale first. 
+  (let [;xform-camera is [x y scalex scaley], scale first.
         dx (first xform-camera) dy (second xform-camera) scx (nth xform-camera 2) scy (nth xform-camera 3)
         args (second g-cmd)
         xs1 (mapv #(+ (* % scx) dx) (nth args 2))
@@ -83,7 +83,7 @@
   (let [scx (nth xform-camera 2) scy (nth xform-camera 3)
         cam-zoom (+ (* scx 0.5) (* scy 0.5))
         args (second g-cmd) ;[x y zoom perspective file]
-        
+
         im-dist-3d (+ (/ cam-zoom) (nth args 3))
         perspective-scale-mult (/ 1.0 cam-zoom im-dist-3d)
         ^BufferedImage im-buf (filename2BufferedImage (nth args 4))
@@ -92,7 +92,7 @@
         xform-image [(first args) (second args) (nth args 2) (nth args 2)]
         xform-p [im-shiftx im-shifty perspective-scale-mult perspective-scale-mult]
         total-xform (xform/xx xform-p (xform/xx xform-camera xform-image))
-        
+
         args1 (-> args (assoc 0 (first total-xform)) (assoc 1 (second total-xform)) (assoc 2 (nth total-xform 2)))]
     (assoc g-cmd 1 args1)))
 
@@ -104,6 +104,6 @@
    :grid-string grid-string!
    :bitmap file-bitmap-draw!})
 
-(def custom-xforms 
+(def custom-xforms
   {:grid-string xform-grid-string
    :bitmap xform-bitmap}) 

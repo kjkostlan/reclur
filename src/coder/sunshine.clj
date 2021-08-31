@@ -16,10 +16,10 @@
    If we switch even/odd, now ODD symbols will be bound-on-declaration: (let [1 a] a).
    Call this function again to restore the original code."
   (let [walkf (fn [form]
-                (if (and (c/listy? form) 
+                (if (and (c/listy? form)
                       (contains? #{'let `let 'let*} (first form)))
                   (apply list (first form)
-                    (let [v (second form)] 
+                    (let [v (second form)]
                       (into [] (interleave (take-nth 2 (rest v)) (take-nth 2 v))))
                     (rest (rest form))) form))]
     (walk/postwalk walkf code)))
@@ -35,9 +35,9 @@
         confuse-set (conj (set/union let-set fn-set) 'loop 'loop* 'recur 'recur* 'binding 'binding*)
         vassoc (fn [v ix k] (if (>= ix (count v)) (conj v k) (assoc v ix k)))]
     (if (coll? code) ; non-collections don't really do much.
-      (loop [toks [] ; flat tokens. 
-             bind?s [] ; is token 
-             lev 0 ; number of levels deep. 
+      (loop [toks [] ; flat tokens.
+             bind?s [] ; is token
+             lev 0 ; number of levels deep.
              pathv [] ; current path; path to (nth subvforms lev). It's all numbers.
              subvforms [(_tovec code)] ; List of smaller and smaller subforms of the code, each in vector form.
              subform-types [(_ty code)]] ; 0 = list, 1 = vec, 2 = map, 3 = set.
@@ -51,7 +51,7 @@
                                        nuform (get (get subvforms (- lev 2)) p2+)]
                                    (recur toks1 bind?s1 (dec lev) (assoc pathv (- lev 2) p2+)
                                      (assoc subvforms (dec lev) (_tovec nuform))
-                                     (assoc subform-types (dec lev) (_ty nuform)))))) 
+                                     (assoc subform-types (dec lev) (_ty nuform))))))
             (vector? subv) ; dig into sub form.
             (let [ty (get subform-types lev)]
               (recur (conj toks (cond (= ty 0) lo (= ty 1) vo (= ty 2) mo :else so))
@@ -82,7 +82,7 @@
 
 (defn unbinds [tokens bind?s]
   "Unbinds are at closing brackets. Nil when nothing is unbound."
-  (let [lo (symbol "(") lc (symbol ")") mo (symbol "{") 
+  (let [lo (symbol "(") lc (symbol ")") mo (symbol "{")
         vo (symbol "[") vc (symbol "]") mc (symbol "}")
         so (symbol "#{") sc (symbol "}") n (count tokens) ]
     (loop [acc [] ix 0 lev 0
@@ -92,16 +92,16 @@
               open? (or (= tok lo) (= tok vo) (= tok mo) (= tok so))
               close? (or (= tok lc) (= tok vc) (= tok mc) (= tok sc))
               bind? (nth bind?s ix) fn-name? (and bind? (contains? #{'fn 'fn* `fn 'defn `defn} (nth tokens (dec ix))))
-              bl (get binds-at-lev lev) 
+              bl (get binds-at-lev lev)
               unbinds (if close? (get binds-at-lev (inc lev)))] ; unbind when we drop TWO levels, except fn-names
           (recur (conj acc unbinds)
             (inc ix) (cond open? (inc lev) close? (dec lev) :else lev)
-            (if bind? (assoc binds-at-lev (if fn-name? (inc lev) lev) 
+            (if bind? (assoc binds-at-lev (if fn-name? (inc lev) lev)
                         (conj (if bl bl #{}) bind?)) binds-at-lev)))))))
 
 (defn clean-sym [sym]
   "Clojure's singleton nondeterministic symbol generation definitly makes macros easier, but no one says it is easy to read.
-   Symbols are guarenteed not to end in a number; this is so that 
+   Symbols are guarenteed not to end in a number; this is so that
    No two clean symbols can map to the same deshadow-sym'ed symbol."
   (let [s (str sym) s0 (first s) s1 (second s) s2 (get s 2) n (count s)
         num? #(string/includes? "0123456789" (str %))
@@ -117,12 +117,12 @@
     (symbol (if (num? (last sclean)) (str sclean "$") sclean))))
 (defn deshadow-sym [sym n-uses]
   "Nice-looking removal of shadows."
-  (symbol (cond (= n-uses 0) sym 
+  (symbol (cond (= n-uses 0) sym
             (string/includes? "0123456789" (str (last (str sym))))
             (str sym "_" n-uses) :else (str sym n-uses))))
 
 (def core-syms (set (keys (ns-map 'clojure.core))))
-(def core-clean2count ; A count of sorts for clojure.core symbols 
+(def core-clean2count ; A count of sorts for clojure.core symbols
   ; We also don't allow shadowing core symbols (more an asthetic choice).
   ; In other words, (deshadow-sym (clean x) n) must not equal core symbols over all possible x and n.
   ; To ensure this we need to extract the highest number.
@@ -145,14 +145,14 @@
                (if (= ix n) [clean2count toks]
                  (let [tok (nth tokens ix)
                        add? (nth bind?s ix) remove? (nth unbind?s ix)
-                       bounds (if add? (conj bounds add?) bounds) 
+                       bounds (if add? (conj bounds add?) bounds)
                        bounds (if remove? (set/difference bounds remove?) bounds)
                        tok-qual? (if (symbol? tok) (qual-fn tok))
                        unbound-tok-clean? (if (and (symbol? tok) (not tok-qual?) (not (get bounds tok))
                                                 (not (contains? open-closes tok)))
                                            (clean-fn tok)) ; unbound but unqualifiable.
                        clean2count1 (if unbound-tok-clean?
-                                       (assoc clean2count unbound-tok-clean? 
+                                       (assoc clean2count unbound-tok-clean?
                                          (inc (get clean2count unbound-tok-clean? 0))) clean2count)]
                    (recur (inc ix) (if tok-qual? (assoc toks ix tok-qual?) toks)
                      clean2count1 bounds))))
@@ -170,14 +170,14 @@
                   tok-deshadow (deshadow-sym tok-clean n-uses)
                   replace-map (assoc replace-map tok tok-deshadow)]
               (recur (inc ix) (assoc toks ix tok-deshadow) bounds replace-map (assoc clean2count tok-clean (inc n-uses))))
-            (recur (inc ix) 
-              (if-let [tok1 (if (and (symbol? tok) (get bounds tok)) ; local tokens get replaced. 
+            (recur (inc ix)
+              (if-let [tok1 (if (and (symbol? tok) (get bounds tok)) ; local tokens get replaced.
                               (get replace-map tok))] (assoc toks ix tok1) toks)
               bounds replace-map clean2count)))))))
 
 (defn unflat [tokens]
   "Un-flattens the collections."
-  (let [n (count tokens) lo (symbol "(") lc (symbol ")") 
+  (let [n (count tokens) lo (symbol "(") lc (symbol ")")
         vo (symbol "[") vc (symbol "]") mo (symbol "{")
         so (symbol "#{") sc (symbol "}") mc (symbol "}")]
     (loop [nested-forms {} lev 0 opening-toks [] ix 0]
@@ -193,7 +193,7 @@
                           (= open vo) formv
                           (= open mo) (apply hash-map formv)
                           (= open so) (set formv))]
-              (recur (assoc (assoc nested-forms (dec lev) []) (- lev 2) 
+              (recur (assoc (assoc nested-forms (dec lev) []) (- lev 2)
                        (conj (get nested-forms (- lev 2)) formx))
                 (dec lev) opening-toks (inc ix)))
             :else ; leaf forms.
@@ -214,7 +214,7 @@
     (let-swap form-swap1)))
 
 (defn simple-qual [ns-sym code & assert-deshadowed?]
-  "Qualifies all non-local symbols in the code." 
+  "Qualifies all non-local symbols in the code."
   (let [ns-sym (if (symbol? ns-sym) ns-sym (symbol (str ns-sym)))
         form-swap (let-swap code)
         tb (flat-tokenize-mark form-swap) tokens (first tb) bind?s (second tb)
@@ -224,7 +224,7 @@
                   (if (= ix n) acc
                     (let [t (nth tokens ix) b? (nth bind?s ix)
                           ubs (if (nth unbind?s ix) (set (nth unbind?s ix)) #{})]
-                      (recur (conj acc 
+                      (recur (conj acc
                                (cond (re-matches #"[\{\}\[\]\(\)]" (str t)) t
                                  (contains? bound t) t
                                  :else (if-let [tq (langs/resolved ns-sym t)] tq t)))
@@ -266,6 +266,6 @@
   (let [all-quals (filterv textparse/qual? (cnav/symbols-in x))
         java-replace #(symbol (string/replace (str %) "java.lang.Math/" "Math/"))
         clojure-replace #(symbol (string/replace (str %) "clojure.core/" ""))
-        replace-map (zipmap all-quals 
+        replace-map (zipmap all-quals
                       (mapv #(java-replace (clojure-replace %)) all-quals))]
     (walk/postwalk #(if (symbol? %) (get replace-map % %) %) x)))

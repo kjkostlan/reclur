@@ -12,7 +12,7 @@
     [clojure.set :as set]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Basic functions ;;;;;;;;;;;;;;;;;
- 
+
 (defn _intsum [^ints a]
   (let [n (count a)]
     (loop [ix (int 0) tot (int 0)]
@@ -22,10 +22,10 @@
 (defn _acopy-int! [^ints fr ^ints to]
   (let [n (count fr)]
     (loop [ix (int 0)]
-      (if (< ix n) 
+      (if (< ix n)
         (do (aset-int to ix (aget fr ix))
           (recur (inc ix)))))))
- 
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Cleaning up clojure's messy gensym code ;;;;;;;;;;;;;;;;;;;;
 
 (def ^:dynamic *allow-structural-unmacro* false) ; you need to change the paths in error reporting if you do this!
@@ -115,11 +115,11 @@
         (let [ty (nth tok-types ix)
               allowed1 (if (and (= ty 0)
                                (= lev 1)
-                               (odd? sx)) 
+                               (odd? sx))
                          (disj allowed ix) allowed)]
           (recur (inc ix)
             (cond (= ty 4) (inc lev) (= ty 5) (dec lev) :else lev)
-            (if (and (not= ty 5) (not= ty 0) (= lev 1)) (inc sx) sx) 
+            (if (and (not= ty 5) (not= ty 0) (= lev 1)) (inc sx) sx)
             allowed1))))))
 (defn _binding-blocknl [tok-strs tok-types allowed-newlines]
   "Forces newlines before even elements in binding vectors (apart from 0).
@@ -143,7 +143,7 @@
         allowed-ixs
         (loop [ix (int 0) allowed-ixs []]
             (if (= ix n) allowed-ixs
-              (if (or (= ix (dec n)) 
+              (if (or (= ix (dec n))
                     (let [ty (nth token-types ix)
                           ty1 (nth token-types (inc ix))]
                       (and (not= ty1 0) (not= ty1 5))))
@@ -201,7 +201,7 @@
   "Randomized change ixs that get back to where we started.
    Modifies loop in place."
   (let [ntog (int ntog) last-sucessful-changeix (int last-sucessful-changeix)
-        nloop2 (int (/ nloop 2)) ; Round down. 
+        nloop2 (int (/ nloop 2)) ; Round down.
         nearby-chance 0.5
         old-boys-chance 0.025] ; kicks in if nearby chance fails.
     (if (= nloop2 0) (throw (Exception. "The loop must be at least two elements long.")))
@@ -230,17 +230,17 @@
   (let [ntok (count tok-strs)
         ^ints newline?s (make-array Integer/TYPE ntok)
         ^ints delta-syntaxs (make-array Integer/TYPE ntok)
-        levmx (loop [ix (int 0) lev (int 0) max-lev (int 0)] 
-                (if (< ix ntok) 
+        levmx (loop [ix (int 0) lev (int 0) max-lev (int 0)]
+                (if (< ix ntok)
                   (let [ty (nth tok-types ix) max1 (if (> lev max-lev) lev max-lev)]
-                    (if (= ty 4) (do (aset-int delta-syntaxs ix 1) 
+                    (if (= ty 4) (do (aset-int delta-syntaxs ix 1)
                                    (recur (inc ix) (inc lev) (inc max1)))
                       (if (= ty 5)
                         (do (aset-int delta-syntaxs ix -1)
                           (recur (inc ix) (dec lev) max1))
                         (recur (inc ix) lev max-lev))))
                   max-lev))
-        
+
         ;^ints token-lengths (make-array Integer/TYPE ntok)
         ;_ (loop [ix (int 0)]
         ;    (if (< ix ntok)
@@ -251,7 +251,7 @@
             (if (< ix ntok)
               (let [tok (nth tok-strs ix)]
                 (aset-int force-newline?s ix  ; Crude to force a newline after a token if it has a newline.
-                  (if (string/includes? tok "\n") 1 0)) 
+                  (if (string/includes? tok "\n") 1 0))
                 (recur (inc ix)))))
         x-ends (into-array Integer/TYPE
                  (reductions + (count (first tok-strs)) (mapv count (rest tok-strs))))
@@ -286,7 +286,7 @@
               cost-new (if (and line-end? (> xe-new max-free-x)) (* (- xe-new max-free-x) (- xe-new max-free-x)) 0)
               jx11 (int (if (= jx1 jx)
                           (if (= (aget open-ix jx) jx) (aget close-ix jx) ; ( jump to )
-                            (if line-end? jx (inc jx))) ; newlines stop propagation. 
+                            (if line-end? jx (inc jx))) ; newlines stop propagation.
                           jx1))]
           (aset x-ends jx xe-new)
           (recur (inc jx) jx11 (+ delta-cost (- cost-new cost-old))))))))
@@ -312,7 +312,7 @@
                             (let [toggle-ix (int (aget loop-storage jx))
                                   delta-lin (if (= (aget newline?s toggle-ix) 1) -1 1)
                                   delta-sqr (float
-                                              (toggle-newline! newline?s x-ends open-ix close-ix ntok 
+                                              (toggle-newline! newline?s x-ends open-ix close-ix ntok
                                                max-free-x spaces-per-indent toggle-ix))
                                   delta (float (+ (* quad-wt delta-sqr) delta-lin))
                                   total-delta1 (float (+ delta total-delta))]
@@ -328,11 +328,11 @@
         x-starts (conj (mapv #(- (aget x-ends %) (count (nth tokens %))) (range ntok)) 0)
         strs (loop [acc [] ix 0]
                (if (= ix ntok) acc
-                 (recur 
-                   (conj acc 
-                     (str (nth tokens ix) (if (= (aget newline?s ix) 1) 
+                 (recur
+                   (conj acc
+                     (str (nth tokens ix) (if (= (aget newline?s ix) 1)
                                             (apply str "\n" (repeat (nth x-starts (inc ix)) " ")) "")))
-                   (inc ix))))] 
+                   (inc ix))))]
     (apply str strs)))
 
 (defn to-code [code-or-str] (if (string? code-or-str) (read-string code-or-str) code-or-str))
@@ -360,7 +360,7 @@
 (defn vps [code-or-str]
   "Very Prettyprint to String."
   (let [code (to-code code-or-str)]
-    (if (coll? code) (apply ez-blit (_vps-core code-or-str)) 
+    (if (coll? code) (apply ez-blit (_vps-core code-or-str))
       (pr-str code))))
 
 (defn vp [code-or-str]

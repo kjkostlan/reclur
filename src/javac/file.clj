@@ -174,8 +174,7 @@
          (with-open [writer (BufferedWriter. (OutputStreamWriter. (FileOutputStream. (File. file)) "UTF-8"))]
                     (.write writer contents)))
   (catch Exception e
-    (println (.getMessage e))
-    )))
+    (println (.getMessage e)))))
 
 (defn rename!! [^String file-old ^String file-new]
   (assert-in-our-folders file-old) (assert-in-our-folders file-new)

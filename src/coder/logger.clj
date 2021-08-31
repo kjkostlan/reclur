@@ -37,16 +37,16 @@
   (try (eval code)
     (catch Exception e
       (do (if *err-print-code?* (unerror/errprint? code))
-          (reset! coder.logger/eval-lasterr 
-            (merge {:ns (ns-name *ns*) :code code} 
+          (reset! coder.logger/eval-lasterr
+            (merge {:ns (ns-name *ns*) :code code}
               (langs/convert-exception e "none" :clojure))) (throw e)))))
 
 ;;;;;;;;;;;;;;; Runtime ;;;;;;;;;;;;;;;;
 
 (defn log! [x path start-time end-time]
-  "Called when the logged code runs." 
+  "Called when the logged code runs."
   (swap! *log-atom*
-    #(let [code (get-in @globals/log-atom [:log-code-lookup path])           
+    #(let [code (get-in @globals/log-atom [:log-code-lookup path])
            log {:path path :start-time start-time :end-time end-time :value x :Thread (format "0x%x" (System/identityHashCode (Thread/currentThread)))
                 :TraceOb (if *log-stack?* (.getStackTrace ^Thread (Thread/currentThread)))
                 :code code :lang :clojure} ; loggers for other languages will use different lang keywords.
@@ -94,9 +94,9 @@
 
 (defn get-logs [] (:logs @*log-atom*)) ; logs are a vector of :path :start-time :end-time :value :Thead.
 (defn get-loggers [] (:loggers @globals/log-atom)) ; loggers are {symbol {path ...}} format.
-(defn clear-logs! [] (do (let [n-log (count (get-logs))] 
+(defn clear-logs! [] (do (let [n-log (count (get-logs))]
                            (if (> n-log 0) (println "Removing all" n-log "logs")
-                             (println "No logs to remove.")) 
+                             (println "No logs to remove."))
                        (swap! globals/log-atom #(assoc % :logs [])))))
 (defn logged? [sym-qual path]
   (boolean (get-in (:loggers @globals/log-atom) [sym-qual path])))
@@ -139,13 +139,13 @@
                     (and (not def?)
                       (let [cx (c/cget code (first firstph))]
                         (and (not (coll? cx)) (not (string? cx)))))))
-              (throw (Exception. 
+              (throw (Exception.
                        (str "All logpaths must be inside the function part of a defn, but " firstph " isn't for: " sym-qual)))))
         logged-code (reduce #(logify-code1 %1 (c/vcat [sym-qual] %2) %2) code paths-sort)
         logged-fn-code (if mexpand? (last logged-code)
                          (apply list 'fn (c/cget logged-code 2) (subvec (into [] logged-code) 3)))
         err-atm (atom nil)
-        f (try (binding [*ns* ns-obj] (eval+ logged-fn-code)) 
+        f (try (binding [*ns* ns-obj] (eval+ logged-fn-code))
                  (catch Exception e (do (reset! err-atm e) nil)))]
     [logged-fn-code f @err-atm]))
 
@@ -183,12 +183,12 @@
         current-loggers (get-in @globals/log-atom [:loggers sym-qual] {}) ; path -> logger
         mexpand?-old (:mexpand? (first (vals current-loggers)))
         untouched-loggers (dissoc current-loggers path)
-        _ (cond 
+        _ (cond
             (and (> (count untouched-loggers) 0) mexpand?-old (not mexpand?))
             (throw (Exception. "Other loggers have macro-expansion, but we don't. We can't mix and max (TODO?)."))
             (and (> (count untouched-loggers) 0) (not mexpand?-old) mexpand?)
             (throw (Exception. "Other loggers don't have macro-expansion, but we do. We can't mix and max (TODO?).")))
-        
+
         new-msg (get messages 0 "")
         already-msg (get messages 1 "")
         new? (not (get current-loggers path))]
@@ -216,7 +216,7 @@
 (defn remove-all-loggers! []
   (let [syms (keys (get @globals/log-atom :loggers {}))]
     (if (> (count syms) 0)
-       (do (println "Removing all loggers, " (count syms) "symbols will be cleaned") 
+       (do (println "Removing all loggers, " (count syms) "symbols will be cleaned")
          (mapv remove-loggers! syms))
        (println "No loggers anywhere, no need to remove"))))
 
@@ -269,7 +269,7 @@
           minbad-paths (if bad-path [bad-path]
                          (throw (Exception. "TODO: write code to handle bad-on-multible-loggers-only paths.")))
           _ (set-logpaths! log-sym old-paths (:mexpand? (meta old-paths)))]
-      (if throw? 
+      (if throw?
         (let [_ (println "A minimum set of bad logpaths:" (set minbad-paths))
               log-code-fn-err? (get-logged-code-and-fn log-sym minbad-paths mexpand?)
               run-code-fn-err? (get-logged-code-and-fn run-sym [] false)
@@ -302,9 +302,9 @@
               mexpand? (:mexpand? (first (vals loggers-for-sym)))
               old-code (:source (get loggers-for-sym (first (keys loggers-for-sym))))
               code (symqual2code sym-qual mexpand?)
-              paths1 (set (filterv identity 
+              paths1 (set (filterv identity
                             (mapv #(cnav/drag-path old-code code %) paths)))
-              _ (if (not (first quiet?)) 
+              _ (if (not (first quiet?))
                   (println "Reloading logged symbol:" ns-sym (count paths1) "of" (count (keys loggers-for-sym)) "kept."))] ; this may get annoying.
            (set-logpaths! sym-qual paths1 mexpand?))) need-logged)))
 
@@ -313,7 +313,7 @@
 (defn w2ps [sym-qual search-key mexpand?]
    (let [code (symqual2code sym-qual mexpand?)
         _ (if (not code) (throw (Exception. (str "Cant find code for:" sym-qual))))
-        phs (c/find-values-in code search-key)] 
+        phs (c/find-values-in code search-key)]
      phs))
 
 (defn user-data-logger! [sym-qual path udata]
@@ -382,10 +382,10 @@
         valid-counts-hi (set (mapv #(if (contains? (set %) '&)
                                      1e100 (count %)) als))
         n (count args)]
-    (if (not (first (filterv #(and (>= n (first %)) (<= n (second %))) 
+    (if (not (first (filterv #(and (>= n (first %)) (<= n (second %)))
                       (mapv vector valid-counts-lo valid-counts-hi))))
       (throw (Exception. (str "Wrong number of args " n " passed to " sym-qual)))))
-  (try (apply (find-var sym-qual) args) 
+  (try (apply (find-var sym-qual) args)
     (catch Exception e nil))
   (mapv :value (get-last-watch-logs sym-qual search-key)))
 
@@ -410,7 +410,7 @@
    Total time includes subfunctions (TODO: an option to exclude this?)
    Can print? or return a datastructure."
   (let [vv (cbase/varaverse)
-        fn-syms (mapv (fn [sym] (if-let [x (first (filter #(string/includes? (str %) (str sym)) 
+        fn-syms (mapv (fn [sym] (if-let [x (first (filter #(string/includes? (str %) (str sym))
                                                     (keys vv)))] x sym)) fn-syms)
         _ (println "Fn syms:" fn-syms)
         sym2paths (zipmap fn-syms (mapv #(cnav/fnresult-paths (get vv %)) fn-syms))
@@ -426,7 +426,7 @@
         sym2time (reduce (fn [acc lst]
                             (assoc acc (first lst) (+ (/ (second lst) 1.0e6) (get acc (first lst) 0))))
                     {} (mapv vector log-syms nanos))]
-    (if print? 
+    (if print?
       (do (println "Symbol" "Number-of-fn-calls" "Total-runtime-ms")
         (mapv #(println % (get sym2count %) (get sym2time %)) (keys sym2count))))
       [sym2count sym2time]))

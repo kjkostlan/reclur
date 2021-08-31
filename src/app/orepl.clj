@@ -12,7 +12,7 @@
     [coder.crosslang.langs :as langs]
     [coder.sunshine :as sunshine]
     [coder.unerror :as unerror]
-    [javac.clipboard :as clipboard] 
+    [javac.clipboard :as clipboard]
     [javac.file :as jfile]
     [layout.colorful :as colorful]
     [layout.keyanal :as ka]
@@ -44,7 +44,7 @@
 
 (defn new-repl [& code]
   (assoc (merge rtext/empty-text (interact-fns))
-   :type :orepl :langkwd :clojure :pieces [{:text (if (first code) (first code) "(+ 1 2)")} {:text "\n3"}] 
+   :type :orepl :langkwd :clojure :pieces [{:text (if (first code) (first code) "(+ 1 2)")} {:text "\n3"}]
    :num-run-times 0
    :outline-color [0.2 0.2 1 1]
    :cmd-history [] :cmd-history-viewix 1e100
@@ -195,7 +195,7 @@
 (defn _clear-var! [ns-sym var-sym var-ob]
   "sets vars to throw or be an error message."
   (alter-var-root var-ob
-   (fn [_] (fn [& args] (throw (Exception. (str "Variable:" ns-sym "/" var-sym " has been removed."))))))) 
+   (fn [_] (fn [& args] (throw (Exception. (str "Variable:" ns-sym "/" var-sym " has been removed.")))))))
 
 (defn _mark-vars! [ns-symbol]
   "Makes variables with an ::old flag."
@@ -231,7 +231,7 @@
   "Reloads a given clj file, removing the ns if the file no longer exists."
   (let [ns-symbol (symbol (jfile/file2dotpath cljfile))
         file-exists? (jfile/exists? cljfile)]
-    (cond 
+    (cond
       (= ns-symbol 'ect) {:error false :message "The project.clj file has no namespace."} ; special for saving changes to the project.clj
       (and (not (find-ns ns-symbol)) (not file-exists?)) {:error false :message "Non-existant namespace with non-existant file, no reloading needed."}
       file-exists?
@@ -286,13 +286,13 @@
   "Running the repl may affect s, depending on the command. Running is agnostic to which repl is focused, i.e the k value."
   (cond (and (= (:type evt) :keyPressed) (ka/emacs-hit? "S-ret" evt))
     (reduce #(if (= (:type (get (:components %1) %2)) :orepl)
-               (run-repl %1 %2) %1) s1 (:selected-comp-keys s1)) 
+               (run-repl %1 %2) %1) s1 (:selected-comp-keys s1))
     (and (= (:type evt) :mousePressed)
       (= (:ClickCount evt) 2))
     (dispatch-heavy-doubleclick s s1 k)
     :else s1))
 
-(def dispatch 
+(def dispatch
   {:mousePressed (fn [evt box] (mouse-press evt box))
    :mouseReleased (fn [_ box] box)
    :mouseDragged rtext/mouse-drag
@@ -301,7 +301,7 @@
    :keyReleased rtext/key-release})
 
 (defn interact-fns []
-  {:dispatch dispatch 
+  {:dispatch dispatch
    :dispatch-heavy dispatch-heavy
    :render rtext/render
    :expandable? expandable?
@@ -342,7 +342,7 @@
               (if logviewk (assoc-in s [:components logviewk] lrepl1)
                 ((:add-component (:layout s)) s lrepl1 (keyword (gensym "logviewrepl")))))
               s))
-          (do (println "Must select something in a codebox to use this function") s)) 
+          (do (println "Must select something in a codebox to use this function") s))
         (do (println "Must select something (in a codebox) to use this function") s)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Useful user-to-type-in fns ;;;;;;;;;;;;;;;;;;;;;;;;;;

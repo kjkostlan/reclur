@@ -10,7 +10,7 @@
 ; Stores information about the mouse, time, etc.
 (defonce external-state-atom (atom {}))
 
-; The logging code needs to mutate some atom from deep within any arbitrary code. 
+; The logging code needs to mutate some atom from deep within any arbitrary code.
 (defonce log-atom (atom {}))
 
 ; The undo atom also lives outside the state:

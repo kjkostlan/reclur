@@ -41,14 +41,14 @@
   (str (subs s 0 (:ix0 edit)) (:value edit) (subs s (:ix1 edit))))
 
 (defn apply-edits [s edits]
-  "Convenience function. It would be possible to avoid the expensive string 
+  "Convenience function. It would be possible to avoid the expensive string
    copy each time though significant effort. StringBuilder class maybe? Array mapping translation?"
   (reduce apply-edit s edits))
 
 (defn levenshtein-corr [^String s0 ^String s1]
    "Adapted from https://stackoverflow.com/questions/15042879/java-characters-alignment-algorithm"
     (let [n0 (int (count s0)) n1 (int (count s1))
-          
+
           stride (int (inc n1)) ; T[i][j] => (aget T (+ j (* i stride)))
           ^ints T (make-array Integer/TYPE (* (inc n0) (inc n1)))
           ^chars cs0 (.toCharArray s0) ^chars cs1 (.toCharArray s1)]
@@ -56,21 +56,21 @@
         (if (<= i n0) (do (aset T (* i stride) i) (recur (inc i)))))
       (loop [j (int 0)]
         (if (<= j n1) (do (aset T j j) (recur (inc j)))))
-        
+
       (loop [i (int 1)]
-        (if (<= i n0) 
+        (if (<= i n0)
           (do (loop [j (int 1)]
                 (if (<= j n1)
                   (do
                     (if (= (aget cs0 (dec i)) (aget cs1 (dec j)))
-                      (aset T (+ j (* i stride)) 
+                      (aset T (+ j (* i stride))
                         (aget T (+ (dec j) (* (dec i) stride))))
                       (let [x (aget T (+ j (* (dec i) stride)))
                             y (aget T (+ (dec j) (* i stride)))]
-                        (aset T (+ j (* i stride)) 
+                        (aset T (+ j (* i stride))
                           (if (< x y) (inc x) (inc y)))))
                     (recur (inc j))))) (recur (inc i)))))
-      (into [] 
+      (into []
         (rseq
           (loop [acc [] i (int n0) j (int n1)]
              (if (and (<= i 0) (<= j 0)) acc
@@ -117,11 +117,11 @@
   "Converts to edits that can be applied in order, using our edge + chunked corr."
   (let [corr (conj corr 0) n (count corr) ; pad so that we flush the edit before exiting the loop.
         ledits (loop [acc [] ix 0 ix0 0 ix1 0 cur-ed-count 0 cur-ed-type 0]
-                 (if (= ix n) acc 
+                 (if (= ix n) acc
                    (let [ci (nth corr ix) ix0+ (if (= ci 1) ix0 (inc ix0))
                          ix1+ (if (= ci -1) ix1 (inc ix1))]
                      (if (= ci cur-ed-type) (recur acc (inc ix) ix0+ ix1+ (inc cur-ed-count) cur-ed-type)
-                       (recur (if (= cur-ed-type 0) acc 
+                       (recur (if (= cur-ed-type 0) acc
                                 (conj acc (if (= cur-ed-type 1) {:ix0 ix0 :ix1 ix0 :value (subs s1 (- ix1 cur-ed-count) ix1)}
                                             {:ix0 (- ix0 cur-ed-count) :ix1 ix0 :value ""})))
                          (inc ix) ix0+ ix1+ 1 ci)))))]
@@ -130,7 +130,7 @@
 (defn edits-between [s0 s1]
   "Edits (as in what rtext calls an edit) to get from s0 to s1.
    Edits must be applied in the order this fn gives them.
-   Tries to be minimalistic, i.e. heuristic toward minimal number of edits and 
+   Tries to be minimalistic, i.e. heuristic toward minimal number of edits and
    total size of edits.
    TODO: improve combining edits."
   (if (= s0 s1) []

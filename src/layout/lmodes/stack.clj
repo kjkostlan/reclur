@@ -39,7 +39,7 @@
         zmax (lay/max-z s)
         vis-xxyy (lay/visible-xxyy (:camera s))
         comp1 (assoc (if comp-screen (merge comp (select-keys comp-screen [:position :size]))
-                       (pos-new-comptype s comp)) 
+                       (pos-new-comptype s comp))
                 :z (inc zmax))]
     (assoc-in s [:components kwd] comp1)))
 
@@ -91,7 +91,7 @@
     (if k (-> (update-in s [:components k] hilite) (select k))
       (let [comp (fbrowser/load-from-cache-or-file (:components s) filename codebox/from-text)
             ky1 (keyword (gensym 'goto-target))]
-        (-> (select s ky1) 
+        (-> (select s ky1)
           (add-then comp ky1 add-comp-function hilite))))))
 
 (defn goto-codes [s filenames char-ix0s char-ix1s add-comp-fn]
@@ -99,15 +99,15 @@
   (if (= (count filenames) 0) (throw (Exception. "Going nowhere microsecond-fast.")))
   (let [n (count filenames)
         kwds (mapv #(keyword (gensym %)) filenames)
-                
+
         compvs (mapv #(fbrowser/load-from-cache-or-file (:components s) %1 codebox/from-text) filenames)
         s1 (add-grid s compvs kwds add-comp-fn)
-        
+
         comps1 (select-keys (:components s1) kwds)
-        
+
         z-1 (lay/max-z s)
         hilite #(assoc (rtext/scroll-to-see-selection (codebox/select-on-real-string %1 %2 %3)) :z (+ z-1 %4))
-        
+
         compv1 (mapv hilite (vals comps1) char-ix0s char-ix1s (range))]
     (assoc s1 :components (merge (:components s) (zipmap kwds compv1)))))
 

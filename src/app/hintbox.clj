@@ -37,13 +37,13 @@
   "The down and dirty with positioning, etc."
   (let [cix (:cursor-ix cbox)
         xy (mapv + (rtext/cursor-ix-to-pixel cbox) (:position cbox))
-        box (assoc (new-hintbox) :pieces (mapv #(hash-map :text %) txts) 
+        box (assoc (new-hintbox) :pieces (mapv #(hash-map :text %) txts)
               :z (+ (:z cbox) 1e6))
         box (rtext/fit-to-text box true true) sz (:size box)
         m 7 ; margin in pixels
-        box (assoc box :position 
+        box (assoc box :position
               (mapv - xy [(* (first sz) 0.5) (+ (second sz) m)]))
-        box (selectmovesize/fit-to-screen s box)] 
+        box (selectmovesize/fit-to-screen s box)]
     (assoc box :subtype subtype)))
 
 (defn lineanate [syms]
@@ -61,7 +61,7 @@
    Metadata has :special? and :resolved? keywords."
   (let [real (codebox/real-string cbox)
         real-ixs (codebox/real-string-ixs-for-thing-at-cursor cbox)
-        piece (apply subs real real-ixs)        
+        piece (apply subs real real-ixs)
         sym (first (filter identity ; foo/ isn't a valid symbol, but it should be an autocompletable.
                      (map #(try (read-string %) (catch Exception e false))
                        [piece (subs piece 0 (dec (count piece)))])))
@@ -93,13 +93,13 @@
   "Generates a component based on the cursor's position in the codebox.
    nil = no hint could be found, so no box generated."
   (let [x (codebox/x-qual-at-cursor cbox)
-        special? (fn [sym] 
+        special? (fn [sym]
                    (contains? cnav/specials
                      sym))]
     (cond (nil? x) (add-hint-box s cbox ["Nothing here"] :doc)
       (and (symbol? x) (special? x))
       (add-hint-box s cbox [(str x) " (special form)" ] :doc)
-      (and (symbol? x) (string/includes? (str x) "/") 
+      (and (symbol? x) (string/includes? (str x) "/")
         (langs/findable-ns? (textparse/sym2ns x))
         (:arglists (langs/var-info x false)))
       (let [info (langs/var-info x true)
@@ -124,14 +124,14 @@
   "If it can't add a hintbox and none exists it returns the unmodified s."
   (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
     (if (or (= (:type fc) :codebox) (= (:type fc) :orepl))
-      (if-let [hb (codebox-hint s fc)] 
+      (if-let [hb (codebox-hint s fc)]
         (if (let [hb0 (get-in s [:components ::hintbox])]
               (and hb0 (= (mapv int (:position hb0)) (mapv int (:position hb)))))
-          (update s :components 
+          (update s :components
             #(dissoc % ::hintbox))
-          (assoc-in s [:components ::hintbox] hb)) 
-          (do (println "No hint found at location") s)) 
-        (do (println "A codebox or orepl needs to be selected.") s)) 
+          (assoc-in s [:components ::hintbox] hb))
+          (do (println "No hint found at location") s))
+        (do (println "A codebox or orepl needs to be selected.") s))
     (do (println "No components selected.") s)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -152,7 +152,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(def dispatch 
+(def dispatch
   {:mousePressed rtext/mouse-press
    :mouseDragged rtext/mouse-drag
    :mouseWheelMoved rtext/mouse-wheel

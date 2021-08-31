@@ -10,21 +10,21 @@
         halfwidth 0.15
         cam-xxyy (lay/visible-xxyy (:camera s))
         query-range-xxyy (lay/scale-xxyy cam-xxyy (- 1.0 (* halfwidth 2.0))) ; smaller so comp is 100% on screen.
-        
+
         xxyys (mapv #(lay/xxyy %) (vals (:components s)))
         resolution 20
         xs-ys-ds (lay/boxed-density-measure xxyys query-range-xxyy resolution)
         ix (c/argmin (last xs-ys-ds))
         center-x (nth (first xs-ys-ds) ix)
         center-y (nth (second xs-ys-ds) ix)
-        
+
         sx (- (nth cam-xxyy 1) (nth cam-xxyy 0))
         sy (- (nth cam-xxyy 3) (nth cam-xxyy 2))
-        
+
         xxyy1 [(- center-x (* halfwidth sx)) (+ center-x (* halfwidth sx))
                (- center-y (* halfwidth sy)) (+ center-y (* halfwidth sy))]
         comp1 (assoc (lay/set-xxyy comp xxyy1) :z (inc (lay/max-z s)))]
-    (if k-screen 
+    (if k-screen
       (assoc-in s [:components kwd] comp1)
       (stack/add-component s comp1 kwd)))) ; New type of comp => no need to dogpile.
 

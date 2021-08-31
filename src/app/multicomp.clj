@@ -2,7 +2,7 @@
 ; Trying not to have too much component-specific code here, but the coupling is just so tight for the structural editor.
 
 (ns app.multicomp
-  (:require 
+  (:require
     [clojure.set :as set] [clojure.string :as string]
     [app.codebox :as codebox]
     [layout.xform :as xform]
@@ -27,7 +27,7 @@
 
 (defn cursor-locate [s k]
   "Returns the [filename, char-ix within file] of the cursor given a k."
-  (let [comps (:components s) comp (get comps k) 
+  (let [comps (:components s) comp (get comps k)
         _ (if (nil? comps) (throw (Exception. "Bad state")))
         _ (if (nil? comp) (throw (Exception. (str k " doesn't exist within the :components"))))
         _ (if (not= (:type comp) :codebox) (throw (Exception. "Not a codebox")))
@@ -81,7 +81,7 @@
         old-string (codebox/real-string (get comps (first codeboxks)))
         old-string (if old-string old-string "")
         edits (stringdiff/edits-between old-string new-string)
-        
+
         comps1 (reduce (fn [comp-map k]
                          (assoc comp-map k
                            (codebox/apply-edits-to-real-string (get comps codeboxks) edits))) comps codeboxks)]
@@ -113,14 +113,14 @@
 
         expandable? (:expandable? comp)
         mevt (xform/xevt (xform/x-1 (xform/pos-xform (:position comp0))) mevt-c)
-        x (if (expandable? mevt comp) 
+        x (if (expandable? mevt comp)
             ((:expand-child comp) mevt comp))]
-    (if x 
+    (if x
       (let [new-parent (first x) new-child (second x)
             comps (:components s)
             pos1 (mapv #(+ %1 (* %2 0.75)) (:position comp0) (:size comp0))
             s1 (assoc-in s [:components k-parent] (assoc new-parent :position (:position comp0)))
-            s2 ((:add-component (:layout s1)) s1 (assoc new-child :position pos1 :z (inc (:z new-parent))) k-child)] 
+            s2 ((:add-component (:layout s1)) s1 (assoc new-child :position pos1 :z (inc (:z new-parent))) k-child)]
         s2) s)))
 
 (defn contract-child [parent child]
@@ -152,16 +152,16 @@
 (defn close-component-noprompt [comps kwd]
   "Contracts into the parent(s) if it has parents."
   (let [ty (get-in comps [kwd :type])]
-    (if (= ty :fbrowser) 
+    (if (= ty :fbrowser)
       (let [cs (contract-descendents-if-twinless comps kwd)
             doomed (get cs kwd)
             twins? (> (count (multisync/twins cs kwd)) 0)
             cs1 (dissoc cs kwd)
-            
-            parent-ks (filterv #(= ty (:type (get cs %))) 
+
+            parent-ks (filterv #(= ty (:type (get cs %)))
                         (multisync/fbrowser-padres cs kwd))]
         (if (or twins? (= (count parent-ks) 0)) cs1 ; don't contract the child unless it is the last one remaining.
-          (reduce #(assoc %1 %2 (contract-child (get comps %2) doomed)) cs1 parent-ks))) 
+          (reduce #(assoc %1 %2 (contract-child (get comps %2) doomed)) cs1 parent-ks)))
       (dissoc comps kwd))))
 
 (defn close-component-vanilla-layout [comps kwd]
@@ -175,7 +175,7 @@
             txt1 (open-fcache comps fname)]
         (if (not= txt0 txt1)
           (let [opt (warnbox/choice (str "Save file before closing? " fname) [:yes :no :cancel] :yes)]
-            (cond (= opt :yes) 
+            (cond (= opt :yes)
               (do (jfile/save!! fname txt1)
                 (close-component-noprompt comps kwd)) ; the cache is stored in the components; closing it removes the cache.
               (= opt :no)
@@ -192,12 +192,12 @@
         comps1 (close-component-vanilla-layout comps kwd)
         kys-gone (set/difference (set (keys comps)) (set (keys comps1)))
         s1 (assoc (assoc-in s [:precompute :desync-safe-mod?] true) :components comps1)] ; we handled all synching during the close.
-    (if clf 
+    (if clf
       (let [s2 (assoc s1 :components (merge comps comps1))
             s3 (clf s2 kys-gone)] ; The comps that were removed are doomed anyway.
         (if (not= (keys (:components s3)) (keys comps1))
           (throw (Exception. "The layout close function didn't behave properly.")))
-        s3) 
+        s3)
       s1)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

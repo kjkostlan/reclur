@@ -57,7 +57,7 @@
         ^ints en (make-array Integer/TYPE N)
         ^ints ty (make-array Integer/TYPE N)
         ^chars cs (.toCharArray s)
-        n-tok (loop [ix (int 0) ; ix jumps reader macros and (), so our mode is never a brakcet or reader-macro. 
+        n-tok (loop [ix (int 0) ; ix jumps reader macros and (), so our mode is never a brakcet or reader-macro.
                      ix0 (int 0) ; the beginning of the token we are currently on.
                      kx (int 0) ; which token we are currently on.
                      mode (int 0) ; what token code we are just prior to entering the character at ix, and 0 for just left a token even if there is no space.
@@ -104,7 +104,7 @@
                                       (_add!) (recur ix ix (inc kx) 0 (and (< ix n) (= (aget cs ix) \\)) false false level ignore-level))
                            (not= mode 0) (if (or sp? (and (= c \") (not= ix0 (dec ix) (not= (aget cs (dec ix)) \#))) (= c \;) (= c \\)) ; the little switchyard.
                                            (do (_add!) (recur (inc ix) ix (inc kx) (if (= c \\) 1 0) (= c \\) (= c \;) (= c \") level ignore-level)) ; don't enter into quotes just yet.
-                                           (recur (inc ix) ix0 kx mode false false quote? level ignore-level))    
+                                           (recur (inc ix) ix0 kx mode false false quote? level ignore-level))
                            :else (let [mode1 (cond (or sp? (= c \;)) 0 ; entering from a zero mode, the big switchyard.
                                                    (= c \:) 2
                                                    (or (= c \0) (= c \1) (= c \2) (= c \3) (= c \4) (= c \5) (= c \6) (= c \7) (= c \8) (= c \9)
@@ -117,11 +117,11 @@
                                      (recur (inc ix) ix0 kx 0 false (= c \;) false level ignore-level)))))))]
     [(javar/chop-ints st n-tok) (javar/chop-ints en n-tok) (javar/chop-ints ty n-tok)]))
 
-(defn reads-string [s] 
-  (let [^String st (.trim ^String s) 
-        trail? (and (.endsWith st "/") 
+(defn reads-string [s]
+  (let [^String st (.trim ^String s)
+        trail? (and (.endsWith st "/")
                  (let [ix (max 0 (.lastIndexOf st "\n"))]
-                   (not (.contains ^String (subs st ix) ";"))))] 
+                   (not (.contains ^String (subs st ix) ";"))))]
     (if trail? ; Pull a symbol. This makes hintboxes work for incomplete symbols like "foo/"
       (let [lx #(.lastIndexOf ^String s ^String (str %))
             stops " \t\n()[]{};,'\"~@"

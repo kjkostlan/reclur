@@ -44,22 +44,22 @@
         quote-sym #(symbol (str "\"" % "\""))
         ch-frac-min (get opts :min-child-fraction *min-child-fraction*)
         ch-frac (max ch-frac-min (/ 1.0 (if (number? n) n dig)))
-        opts1 (assoc opts :target-fillchars (Math/ceil (* chars ch-frac)) 
+        opts1 (assoc opts :target-fillchars (Math/ceil (* chars ch-frac))
                 :max-dig-range (Math/ceil (* dig ch-frac)))]
     (loop [n-used 0 c-used 0 acc-head [] acc-tail (list) xhead (seq x) xtail (if from-tail? (reverse x))]
             ; Bi-directional loop.
-      (let [subsummary (fn [xi k] 
+      (let [subsummary (fn [xi k]
                          (let [xs (_summarize (conj path k) (if m? (second xi) xi) opts1)]
                            (if m? [(first xi) xs] xs)))
-            
+
             k0 (cond m? (first (first xhead)) s? (first xhead) :else n-used)
-            k1 (cond m? (first (first xtail)) s? (first xtail) (number? n) (- n n-used 1))             
+            k1 (cond m? (first (first xtail)) s? (first xtail) (number? n) (- n n-used 1))
             get-h (fn [] (subsummary (first xhead) k0))
             get-t (fn [] (subsummary (first xtail) k1))
             add-dot3 (fn []
                        (let [ellipse (if (= n "???") "(???)"
                                         (str "<" n "-" (* n-used uno-dos) ">"))
-                             midpiece [(quote-sym 
+                             midpiece [(quote-sym
                                         (str (if from-head? "..." "") ellipse (if from-tail? "..." "")))]
                              midpiece (if (map? x) [(conj midpiece (quote-sym "<kys>"))] midpiece)]
                          (concat acc-head midpiece acc-tail)))]
@@ -71,9 +71,9 @@
           (_as-counted (add-dot3) x)
           :else (let [h (if from-head? (_summarize (conj path k0) (first xhead) opts1))
                       t (if from-tail? (_summarize (conj path k1) (first xtail) opts1))
-                      c-used1 (+ c-used (if from-head? (nfill-char h) 0) 
+                      c-used1 (+ c-used (if from-head? (nfill-char h) 0)
                                 (if from-tail? (nfill-char t) 0))]
-                  (recur (inc n-used) c-used1 (if from-head? (conj acc-head h) acc-head) 
+                  (recur (inc n-used) c-used1 (if from-head? (conj acc-head h) acc-head)
                      (if from-tail? (conj acc-tail t) acc-tail)
                      (if from-head? (rest xhead)) (if from-tail? (rest xtail)))))))))
 
@@ -85,7 +85,7 @@
             :else (let [n0 (count (take dig x))] (if (< n0 dig) n0 "???")))
         sym+meta #(with-meta (symbol %) {::path path})
         meta1 #(try (with-meta %1 (meta %2)) (catch Exception e %1))
-        meta-kvs-if-map (fn [x1] (if (map? x1) (zipmap (mapv meta1 (keys x1) (vals x1)) 
+        meta-kvs-if-map (fn [x1] (if (map? x1) (zipmap (mapv meta1 (keys x1) (vals x1))
                                                  (vals x1)) x1))]
     (cond
       (and (coll? x) (not= n "???"))

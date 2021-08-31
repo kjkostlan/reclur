@@ -46,7 +46,7 @@
            old-num-deleted (?0 (:num-undos-deleted %))
            new-num-deleted (if (> n *max-undo*) (+ old-num-deleted (- n *max-undo*)) old-num-deleted)
            undo-ix (dec (count undos))] ; set to the end.
-      (assoc % :undo-index undo-ix :undo-stack undos 
+      (assoc % :undo-index undo-ix :undo-stack undos
        :num-undos-deleted new-num-deleted))))
 
 (defn maybe-report! [evt s-old s]
@@ -60,15 +60,15 @@
 
 (defn unredoo! [delta]
   (let [tmp (atom nil)]
-    (swap! globals/undo-atom 
+    (swap! globals/undo-atom
       #(let [undos (?vec (:undo-stack %))
              undo-ix0 (?0 (:undo-index %))
-             undo-ix (if (< delta 0) 
+             undo-ix (if (< delta 0)
                        (max 0 (+ undo-ix0 delta))
                        (min (+ undo-ix0 delta) (dec (count undos))))
              s-old (:state (get (:undo-stack %) undo-ix))
              s (:app-state %)]
-         (reset! tmp {:main (if s-old s-old s) 
+         (reset! tmp {:main (if s-old s-old s)
                       :old (:state (get undos (min undo-ix0 undo-ix)))
                       :new (:state (get undos (max undo-ix0 undo-ix)))
                       :old-ix (+ undo-ix0 (?0 (:num-undos-deleted %)))
@@ -79,7 +79,7 @@
     (let [change (summarize-change (:old @tmp) (:new @tmp)) ; strings that summarize the undo/redo.
           ft (str "(" (:old-ix @tmp) "->" (:new-ix @tmp) ")")
           bgd (cond (:begin? @tmp) " [Beginning]" (:end? @tmp) " [End]" :else "")]
-      (siconsole/log (:main @tmp) 
+      (siconsole/log (:main @tmp)
         (str (if (> delta 0) "Redo " "Undo ") change " " ft bgd)))))
 
 (defn undo! []

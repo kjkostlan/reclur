@@ -48,7 +48,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Working with xxyys ;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn scale-xxyy 
+(defn scale-xxyy
   "Scale the xxyy keeping the center unchanged."
   ([xxyy0 scalexy]
     (scale-xxyy xxyy0 scalexy scalexy))
@@ -72,7 +72,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Screen and camera conversion stuff ;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn y- [unit-xxyy] 
+(defn y- [unit-xxyy]
   "When it's more intuitive to work in a system where +y is up."
  [(first unit-xxyy) (second unit-xxyy) (- 1.0 (nth unit-xxyy 3)) (- 1.0 (nth unit-xxyy 2))])
 
@@ -89,11 +89,11 @@
 
 (defn visible-xxyy-to-cam [xxyy]
   "Visible region -> camera. Should functions like these belong in xform?"
-  (let [xy (screen-pixels) 
+  (let [xy (screen-pixels)
         x0 (first xxyy) x1 (second xxyy) y0 (nth xxyy 2) y1 (nth xxyy 3)
         zoomx (/ (first xy) (- x1 x0)) zoomy (/ (second xy) (- y1 y0))
         zoom (* 0.5 (+ zoomx zoomy))
-        
+
         sh-x (- (* x0 zoom)) ;x0*zoom + sh-x = 0
         sh-y (- (* y0 zoom))]
     [sh-x sh-y zoom zoom]))
@@ -154,12 +154,12 @@
             (recur (apply hash-set acc1) (inc ix)))))))
 
 (defn maxarea-free-screenunitxxyy [s]
-  "The largest free xxyy on the screen. 
+  "The largest free xxyy on the screen.
    x0 = x1 an y0 = y1 if there is no free space."
   (let [vis-xxyy (visible-xxyy (:camera s)) x (- (vis-xxyy 1) (vis-xxyy 0)) y (- (vis-xxyy 3) (vis-xxyy 2))
         uxxyys (mapv #(unitscreen-xxyy vis-xxyy %) (mapv xxyy (vals (:components s))))
         uxxyys (filterv #(and (> (+ (% 0) (% 1)) 0) (< (% 0) x) (> (+ (% 2) (% 3)) 0) (< (% 3) y)) uxxyys)
-        
+
         rects (into [] (screenunitfree-rects uxxyys))
         areas (mapv #(* (- (% 1) (% 0)) (- (% 3) (% 2))) rects)
         max-area (apply max 0 areas)]
@@ -167,7 +167,7 @@
       (nth rects (first (filter #(= (nth areas %) max-area) (range)))))))
 
 (defn most-on-screen [s & comp-filter]
-  "Most not-offscreen component's key for which (comp-filter comp) is true, comp-filter is optional. 
+  "Most not-offscreen component's key for which (comp-filter comp) is true, comp-filter is optional.
    If there aren't any components (matching comp-filter if used, otherwise no restrictions) on the screen it returns false"
   (let [vis-xxyy (visible-xxyy (:camera s))
         maybe-f (if (first comp-filter) (first comp-filter))
@@ -257,9 +257,9 @@
                       (inc ix)
                       (if wrap? 0 (inc ix-x))
                       (if wrap? (inc ix-y) ix-y)))))
-        aply (fn [c ix] (let [xxyy (nth xxyys ix)] 
+        aply (fn [c ix] (let [xxyy (nth xxyys ix)]
                           (assoc c :position [(first xxyy) (nth xxyy 2)]
-                            :size [(- (second xxyy) (first xxyy)) 
+                            :size [(- (second xxyy) (first xxyy))
                                    (- (nth xxyy 3) (nth xxyy 2))])))]
     (if (map? comps) (zipmap (keys comps) (mapv aply (vals comps) (range)))
       (mapv aply comps (range)))))

@@ -21,7 +21,7 @@
   (if (= ix (dec (count v))) 0 (inc ix)))
 
 (defn boring-find [s ky case?]
-  "Returns a vector of [start ix, end ix]. 
+  "Returns a vector of [start ix, end ix].
    ky can be either a string or regexp, as it can be in most cases.
    For non-regex each end ix is (count ky) more than the corresponding start ix."
   (let [case? (or case? (not (string? ky))) ; how to set case on a regexp?
@@ -63,7 +63,7 @@
 (defn search-step1-codebox [component opts wrap?]
   "Nil if failed."
   (let [txt (codebox/real-string component)
-        cix (if (< (:selection-start component) (:selection-end component)) 
+        cix (if (< (:selection-start component) (:selection-end component))
               (if (:reverse? opts) (min (:cursor-ix component) (:selection-start component))
                 (max (:cursor-ix component) (:selection-end component)))
               (:cursor-ix component))
@@ -73,11 +73,11 @@
                           (apply codebox/select-on-real-string component ixs1?)))]
     comp1))
 
-(defn search-step [s opts] 
+(defn search-step [s opts]
   "Every time search is called, returns the modified state."
   (let [boxk (:boxk opts) comps (:components s)
         compk (:target opts) comp (get comps compk)
-        fail (fn [] (siconsole/log s (str "not found: " (pr-str (:key opts)))))] 
+        fail (fn [] (siconsole/log s (str "not found: " (pr-str (:key opts)))))]
     (cond (or (:dumb-text? opts) (and (not= (:type comp) :codebox) (not= (:type comp) :fbrowser)))
       (if-let [comp1 (search-step1-naive comp opts true)] (assoc-in s [:components compk] comp1) (fail))
       (= (:type comp) :codebox)
@@ -89,7 +89,7 @@
             codeboxks (filterv #(= (:type (get comps %) :codebox)) (keys comps))
             cur-box (apply max-key #(get-in comps [% :z]) codeboxks)
             first-match? (fn [fname] (find1 (jfile/open fname) opts (if (:reverse? opts) 1e100 0) false))
-            next-file (fn [fname] 
+            next-file (fn [fname]
                         (let [fiix (get file-order fname 0)
                               flist ((if (:reverse? opts) reverse identity)
                                      (concat (subvec files 0 fiix) (subvec files (inc fiix))))]
@@ -101,11 +101,11 @@
                          (zipmap (keys (:components s1))
                            (mapv #(if (and (= (:type %) :codebox)
                                         (= (fbrowser/devec-file (:path %)) fname))
-                                    (assoc % :z (inc max-z)) %) 
+                                    (assoc % :z (inc max-z)) %)
                              (vals (:components s1)))))))
             go-fn (fn [fname ix0 ix1] (afloat (go-fn0 s fname ix0 ix1) fname))
             local-attempt (if cur-box (search-step1-codebox (get comps cur-box) opts false))]
-        (assoc 
+        (assoc
           (cond (= nf 0) (fail)
             (not local-attempt)
             (let [file1 (next-file (fbrowser/devec-file (:path (get comps cur-box))))]
@@ -121,7 +121,7 @@
     (if (= (count ckys) 0) (siconsole/log s "Must select a component to search within.")
       (let [boxk (keyword (gensym 'searchbox))
             m0 {:key "" :case? false :reverse? false :dumb-text? false :boxk 'core/*comp-k*}
-            
+
             blit #(if (symbol? %) (symbol (str "'" %)) %)
             cky (first ckys)
             m (assoc m0 :target (blit cky))

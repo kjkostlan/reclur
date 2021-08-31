@@ -16,7 +16,7 @@
   "TODO, used for the tardis mouse move."
   [500 500])
 
-(defn hotfn [f-sym] "Dont store old references to fns" 
+(defn hotfn [f-sym] "Dont store old references to fns"
   (fn [& args] (apply (ns-resolve this-ns f-sym) args)))
 
 (defn filter-logs [& f]

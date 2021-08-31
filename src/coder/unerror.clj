@@ -2,7 +2,7 @@
 ; Helps you remove bugs by catching *compile* time errors.
 
 (ns coder.unerror
-  (:require 
+  (:require
     [clojure.set :as set]
     [clojure.string :as string]
     [layout.blit :as blit]
@@ -15,7 +15,7 @@
 
 (defn sym-to-class [sym]
   (let [maybe-cl (try (eval (symbol sym)) (catch Exception e))]
-    (if (instance? java.lang.Class maybe-cl) maybe-cl))) 
+    (if (instance? java.lang.Class maybe-cl) maybe-cl)))
 
 (defn cool-head [code n]
   (let [codev (into [] code)]
@@ -24,7 +24,7 @@
 (def specials #{'if 'fn 'fn* 'let 'let* 'try 'catch 'throw 'monitor-enter 'monitor-exit 'loop 'recur 'def 'binding '. 'new 'var})
 
 (defn _abridged-error [err path where]
-  {:msg (str (:msg err) 
+  {:msg (str (:msg err)
           (let [txt (str (first (:path err)))]
             (if (> (count txt) 64)
               (str "\n  This error occured " where (subs txt 0 60) "...")
@@ -58,7 +58,7 @@
         msg1 (apply str msg " (" (subs (str (type e)) 6) ")" "\n"
                (let [st (if (first hide-stack?) [] (:StackTrace e-clj))]
                  (interpose "\n" st)))]
-    (-> msg1 
+    (-> msg1
       (string/replace "(clojure.lang.Compiler$CompilerException)" "")
       (string/replace "RuntimeException: " "")
       (string/replace "reading source at" "at"))))
@@ -84,7 +84,7 @@
     (try (do (pr-str (langs/mexpand (symbol (str ns-sym)) code)) nil)
       (catch Exception e
         (if-let [deeper-error
-                  (cond 
+                  (cond
                     (map? code) (c/juice-1 #(_on-macroexpand-err-catch ns-sym (get code %) (conj path %)) (keys code))
                     (set? code) (c/juice-1 #(_on-macroexpand-err-catch ns-sym % (conj path %)) (keys code))
                     :else (let [codev (into [] code)]
@@ -106,7 +106,7 @@
 
 (defn _symlist-check [body-vec path-to-vec]
   (if (vector? body-vec)
-    (if-let [bad-ix (first (filter #(not (symbol? (nth body-vec %))) (range (count body-vec))))] 
+    (if-let [bad-ix (first (filter #(not (symbol? (nth body-vec %))) (range (count body-vec))))]
      {:msg (str "the " bad-ix "'th arg isn't a symbol") :path (conj path-to-vec bad-ix)})
     {:msg "[args] is not a vector" :path path-to-vec}))
 
@@ -117,7 +117,7 @@
         (cond (= ix (dec n)) {:msg (str "The " (/ ix 2) "-th symbol in [body] has no value assigned")
                               :path (conj path-to-vec ix)}
           (= ix n) nil
-          (not (symbol? (nth code-vec ix))) 
+          (not (symbol? (nth code-vec ix)))
           {:msg (str "The " (/ ix 2) "-th symbol in [body] isnt a symbol")
            :path (conj path-to-vec ix)}
           :else (recur (+ ix 2)))))
@@ -141,17 +141,17 @@
 (defn _fn-check [code-list state]
   (if (vector? (second code-list))
     (if-let [report (_fn-check-default-format (list 'fn* (apply list (rest code-list))) state)]
-      (let [np0 (count (:path state))] 
-        (update report :path 
+      (let [np0 (count (:path state))]
+        (update report :path
           #(into [] (concat (subvec % 0 (inc np0)) (subvec % (+ np0 2)))))))
     (_fn-check-default-format code-list state)))
 
 
 (defn _loop-recur-check1 [code path n-binding tail?]
   (let [add-path (fn [added] (apply conj path added))]
-    (cond 
-      (map? code) 
-      (if-let [err0 (_loop-recur-check1 (keys code))] 
+    (cond
+      (map? code)
+      (if-let [err0 (_loop-recur-check1 (keys code))]
         {:path path :msg (assoc err0 :msg (str (:msg err0) " (error in a KEY to this map)."))}
         (c/juice-1 #(_loop-recur-check1 (get code %) (add-path [%]) n-binding false) (keys code)))
       (set? code) (c/juice-1 #(_loop-recur-check1 % (add-path [%] false) n-binding false) code)
@@ -162,16 +162,16 @@
       (and (= (first code) 'recur) (< (dec (count code)) n-binding)) {:msg "Too few args to recur" :path path}
       (and (= (first code) 'recur) (> (dec (count code)) n-binding)) {:msg "Too many args to recur" :path path}
       :else (let [codev (into [] (cool-head code 1)) if? (= (first code) 'if) n (count codev)]
-              (c/juice-1 #(_loop-recur-check1 (nth codev %) (add-path [%]) n-binding (or if? (= % (dec n)))) 
+              (c/juice-1 #(_loop-recur-check1 (nth codev %) (add-path [%]) n-binding (or if? (= % (dec n))))
                 (range (count code)))))))
-(defn _loop-recur-check [code-list state] 
+(defn _loop-recur-check [code-list state]
   (let [n-binding (/ (count (second code-list)) 2)]
     (_loop-recur-check1 (cool-head code-list 2) (:path state) n-binding true)))
 
 ;;;;;;;;;;;; Spec checks for java interaction special forms ;;;;;;;;;;;;
 
 
-(defn _java-constructor-check [code-list path]    
+(defn _java-constructor-check [code-list path]
   (cond (< (count code-list) 2) {:msg "Java constructer with no class" :path path}
     (not (symbol? (second code-list))) {:msg "Java constructor arg not a symbol" :path (conj path 1)}
     (not (sym-to-class (second code-list))) {:msg (str "Can't find java class " (second code-list)) :path (conj path 1)}
@@ -186,7 +186,7 @@
       (sym-to-class x1)
       (try (do (eval (list 'fn [] (apply list '. x1 (second (rest code-list))
                                     (range (- (count code-list) 3))))) false) ; Only arity checked. Again they use eval, so can we.
-        (catch Exception e 
+        (catch Exception e
           {:msg (str (sym-to-class (second code-list)) " has no method " (second (rest code-list)) " with arity " (- (count code-list) 3)) :path path}))
       :else false)))
 
@@ -199,7 +199,7 @@
         dot-end? (= (str (last (str sym))) ".")
         cl-sym (symbol (string/replace (first pieces) "." ""))
         class-found? (sym-to-class cl-sym)]
-    (cond 
+    (cond
       (and dot-end? (= arity -1)) (str sym " must be at the beginning like a function call.")
       dot-end?
       (if class-found? false (str "Can't find this java class: " cl-sym))
@@ -218,11 +218,11 @@
         sym (first code-list) let? (or (= sym 'let) (= sym 'let*))
         loop? (or (= sym 'loop) (= sym 'loop*)) bind? (= sym 'binding)
         path (:path state []) x2 (second code-list)]
-    (cond 
+    (cond
       (or let? loop? bind?)
       (let [msg-tail (cond let? " of let" loop? " of loop" bind? " of binding")]
-        (if-let [body (second code-list)] 
-          (if-let [err (_binding-spec-check body (conj path 1))] 
+        (if-let [body (second code-list)]
+          (if-let [err (_binding-spec-check body (conj path 1))]
             (assoc err :msg (str (:msg err) msg-tail))
             (if loop? (_loop-recur-check code-list state) false))
           {:msg (str "No [body] " msg-tail) :path path}))
@@ -240,7 +240,7 @@
                     (> (count code-list) 4) {:msg "Too many arguments to if." :path path})
       (= sym 'throw) (cond (< (count code-list) 2) {:msg "Too few arguments to throw." :path path}
                     (> (count code-list) 3) {:msg "Too many arguments to throw." :path path})
-      (and (= sym 'catch) (not (get (:locals state) sym))) 
+      (and (= sym 'catch) (not (get (:locals state) sym)))
        (cond (not (:try? state)) {:msg "Catch not enclosed by try." :path path}
          (< (count code-list) 3) {:msg  "Too few arguments to catch." :path path}
          (not (symbol? (second code-list))) {:msg "The exception class was badly specified." :path (conj path 1)}
@@ -250,8 +250,7 @@
       (_java-constructor-check code-list path)
       (= sym '.)
       (_java-call-check code-list path (:locals state))
-      :else false
-      ))) ;try, moniter-enter, moniter-exit seem to have no restrictions on compile.
+      :else false))) ;try, moniter-enter, moniter-exit seem to have no restrictions on compile.
 
 
 ;;;;;;;;;;;; Recursive compilation error functions ;;;;;;;;;;;;
@@ -275,8 +274,8 @@
         locals (if (set? locals) locals (set locals))
         c0 (if (coll? code) (first code)) codev (if (sequential? code) (into [] code))
         path (:path state [])
-        env (:env state #{}) 
-        state1 (if (coll? code) 
+        env (:env state #{})
+        state1 (if (coll? code)
                  (assoc state :enclosing-arity (dec (count code))
                    :try? (= c0 'try) ; This stuff is for one level above us.
                    :fn? (= c0 'fn*)
@@ -299,7 +298,7 @@
       (if-let [spec-err (_spec-assert code state)] spec-err
         (cond
           (= c0 '.) (_compile-err-catch ; Java call = first 3 can break rules
-                      (c/cassoc (cool-head code 3) 1 (second code)) state1) 
+                      (c/cassoc (cool-head code 3) 1 (second code)) state1)
           (and (= c0 'new) (not (get (:locals state) 'new))) (_compile-err-catch (cool-head code 2) state1) ; Constructor, first 2 can break rules.
           (= c0 'catch) ; Adds a single local variable.
           (let [locals1 (conj locals (nth codev 2))]
@@ -324,7 +323,7 @@
   "Catches macroexpanded or compile-time errors in code,
    returns the path in the macroexpanded code if there is an error and type of error."
   (let [_err? (atom true)
-        code-or-err (try (let [code-ex (langs/mexpand ns-sym code)] 
+        code-or-err (try (let [code-ex (langs/mexpand ns-sym code)]
                            (reset! _err? false) code-ex)
                       (catch Exception e
                         (_on-macroexpand-err-catch ns-sym code [])))]
@@ -341,7 +340,7 @@
     (symbol (str sadface sadface sadface sym sadface sadface sadface))))
 
 (defn label-code [code err-info]
-  (c/cupdate-in code (:path err-info) 
+  (c/cupdate-in code (:path err-info)
     (fn [broken-part] (label-symbol (pr-str broken-part)))))
 
 (defn errprint [code err-info]
@@ -355,15 +354,15 @@
        err-info)
     (do (blit/vpu code)
       (println "No error caught in code [shown unqualed above].")))
-  (try (do (eval (list 'fn [] code)) 
+  (try (do (eval (list 'fn [] code))
          (println "No vanilla error"))
     (catch Exception e
-      (println "Compare to vanilla error [code shown unqualed above]: " 
+      (println "Compare to vanilla error [code shown unqualed above]: "
         (pr-error e)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Testing ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(def java-interop-tests 
+(def java-interop-tests
   [[false '(+ 1 2)] ; Works!
    ["Cant resolve" '(+ foo bar)] ; Works!
    ["Malformed member" '(1 2 (. bar))] ; Works!

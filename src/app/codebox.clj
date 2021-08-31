@@ -12,7 +12,7 @@
    [coder.cbase :as cbase]
    [coder.textparse :as textparse]))
 
-; The global rtext contains a language protocol in :langkwd that is used for text coloring and 
+; The global rtext contains a language protocol in :langkwd that is used for text coloring and
 ; contraction/expansion, etc.
 ; There isnt much of a tree, the exported id are in order and there is only one element
 ; which is the code itself's real string sans exported children.
@@ -30,7 +30,7 @@
           (let [pi (nth pieces ix) si? (nth squishy?s ix)]
             (recur (if si? acc (conj acc (update piece :text #(apply str %)) pi))
               (inc ix) (if si? (update piece :text #(conj % (:text pi))) {:text []}))))))))
-(defn _rml [pieces] 
+(defn _rml [pieces]
   (rtext/remove-empty (_merge-leaf-pieces pieces)))
 
 ;;;;;;;;;;;;;;;;;;;;;;; Updating the precomputation ;;;;;;;;;;;;;;;;;;;
@@ -64,7 +64,7 @@
   "true for folded and not exported to a child."
  (boolean (:children piece)))
 
-(defn _splay-out [cljpath0 pieces] 
+(defn _splay-out [cljpath0 pieces]
   (into [] (apply concat (mapv #(concat [(conj cljpath0 %2)] (if (:children %1) (_splay-out (conj cljpath0 %2 :children) (:children %1)) [])) pieces (range)))))
 (defn splay-out [box]
   "All paths to various pieces, including nested pieces, in reading order."
@@ -72,8 +72,8 @@
 (defn splay-out+ [box]
   "The splayed-out pieces themselves, with a :tmp-path key."
   (let [uspaths (splay-out box)]
-    (into [] (concat [{:text (get box :head "") :tmp-path [:head]}] 
-               (mapv #(assoc (get-in box %) :tmp-path %) uspaths) 
+    (into [] (concat [{:text (get box :head "") :tmp-path [:head]}]
+               (mapv #(assoc (get-in box %) :tmp-path %) uspaths)
                [{:text (get box :foot "") :tmp-path [:tail]}]))))
 
 (defn piece-real-string [piece]
@@ -90,9 +90,9 @@
   "Uses precomputed values here for folded or exported pieces, otherwise uses the string."
   (dec (count (string/split (piece-real-string piece) #"\n"))))
 
-(defn contain-ixs [box] 
+(defn contain-ixs [box]
  "Indexes on the rendered str that contain the cursor in terms of nesting level.
-  grab the string using an inclusive, exclusive pattern to select the internal region and the brackets. 
+  grab the string using an inclusive, exclusive pattern to select the internal region and the brackets.
   rtext/cursor-ix-to-piece can get the piece index.
   Used for cold-folding, etc."
   (let [box (update-precompute box)
@@ -106,7 +106,7 @@
         hi (loop [ix cur-ix]
              (if (or (= ix n) (< (nth levels ix) lev)) ix
                (recur (inc ix))))]
-    [lo hi]))    
+    [lo hi]))
 (defn contain-ixs1 [box cur-ix]
   "We commonly want to test modified cursor-ixs, so this is a convenience function."
   (contain-ixs (assoc box :cursor-ix cur-ix)))
@@ -129,14 +129,14 @@
   (let [pieces (_rml (:pieces box))
 
         ; Equivalent edit (needed for updating the tokens incrementally instead of recomputing everything):
-        ;insert (if folding? ... 
+        ;insert (if folding? ...
         ;         (apply str (mapv :text (:children (nth pieces cur-pieceix)))))
         ;edit {:type :misc :ix0 (first ixs) :ix1 (second ixs) :value insert}
         ;box1 (edits-update box [edit])
         ;add-edit #(edits-update box %1 [edit])
 
         stats (rtext/index-stats (:pieces box) (first ixs) (second ixs) rtext/default-partial-grab)
-       
+
         ;set-pieces #(assoc box :pieces (_rml (into [] %)))
         folded-piece (if folding? {:text ... :children (:in stats)})
         pieces-b4 (:b4 stats) pieces-afr (:afr stats)]
@@ -195,7 +195,7 @@
     {:type :misc :ix0 ix0 :ix1 ix1 :value insert}))
 
 (defn keep-fe-length [box] "Always 3 spacers"
-  (let [ndots 3 pieces0 (:pieces box) 
+  (let [ndots 3 pieces0 (:pieces box)
         pieces1 (mapv #(if (folded? %) (assoc % :text ...) %) pieces0)]
     (if (= pieces0 pieces1) box
       (let [ccf (fn [p0 p1 jx0] jx0) cix (:cursor-ix box)]
@@ -222,7 +222,7 @@
         tix (first (filterv #(nth allowed?s %) (range tix-in (count strings))))]
     [(if (= tix 0) 0 (nth cumsum (dec tix))) (nth cumsum tix) tix]))
 
-(defn select-twofour-click [box four? & suppress-human] 
+(defn select-twofour-click [box four? & suppress-human]
   "double click with no shift, so selects text instead of code folding."
   (let [box (update-precompute box)
         st (rtext/rendered-string box)
@@ -231,7 +231,7 @@
         ils (:inter-levels (:precompute box))
         sel-start (:selection-start box)
         sel-end (:selection-end box)
-        l0 (if (> sel-end (inc sel-start)) 
+        l0 (if (> sel-end (inc sel-start))
              (apply min (mapv #(nth ils %) (range (inc sel-start) sel-end)))
              (nth ils (max 0 c-ix)))
         n (count ils)
@@ -243,12 +243,12 @@
                   (if (and (> l0 0) (= (nth ils ix) (dec l0))) ix (recur (inc ix)))))
         toksty (cbase/tokenize (subs st c-ix0 c-ix1) (:langkwd box))
         toks (first toksty) ty (second toksty)
-        
+
         cur-jx (- c-ix c-ix0)
         jx01-tix (token-cur-ix01 toks (repeat true) cur-jx)
         tix-in (nth jx01-tix 2)
         t-in (get toks tix-in)
-        jx01 (if (and (not (first suppress-human)) (= (get ty tix-in) 0) 
+        jx01 (if (and (not (first suppress-human)) (= (get ty tix-in) 0)
                    (re-find #"[a-zA-Z0-9]+" t-in)) ; Trigger for in-comment mode which uses human language instead.
                (let [jx0 (first jx01-tix)
                      piecesty (cbase/tokenize t-in :human)
@@ -270,15 +270,15 @@
         sel1s (mapv :selection-end boxes)
         sel-strs (mapv #(subs (rtext/rendered-string %1) %2 %3) boxes sel0s sel1s)
         sym-ix (first (filter (fn [ix] (let [txt (nth sel-strs ix)]
-                                         (and (> (count txt) 0) (not (re-find #"[\[\]{}\(\) ]" txt))))) 
+                                         (and (> (count txt) 0) (not (re-find #"[\[\]{}\(\) ]" txt)))))
                         (range (count sel-strs))))]
-    (if sym-ix 
+    (if sym-ix
       (let [sym-str (nth sel-strs sym-ix)
             strs (sort (mapv str (cbase/symaverse)))
             private? #(let [u (str (textparse/unqual (symbol %)))] (or (string/starts-with? u "-") (string/starts-with? u "_")))
             strs (concat (remove private? strs) (filter private? strs)) ; private later.
             matches (filterv #(string/includes? % sym-str) strs)]
-        (if (= (count matches) 0) 
+        (if (= (count matches) 0)
           (do (println "No matching fully qualified symbols [in loaded namespaces] to" sym-str) box)
           (do (if (> (count matches) 1) (println "Multible matches to" sym-str "taking fist one."))
             (update-precompute (rtext/edit box (nth sel0s sym-ix) (nth sel1s sym-ix) (first matches) [])))))
@@ -299,7 +299,7 @@
                         xy1 (get-xy (:selection-end box))]
                     [(second xy0) (second xy1) (first xy0)])
                   (let [c-ix (:cursor-ix box)
-                        c-range (#(vector (max (first %1) (first %2)) (min (second %1) (second %2))) 
+                        c-range (#(vector (max (first %1) (first %2)) (min (second %1) (second %2)))
                                   (contain-ixs1 box c-ix) (contain-ixs1 box (inc c-ix)))
                         xy0 (get-xy (first c-range))
                         xy1 (get-xy (second c-range))]
@@ -310,14 +310,14 @@
             lines (if shifting? (string/split (rtext/rendered-string box) #"\n"))
             n-space (fn [l] (count (re-find #"[ \t]*" l)))
             ; Slow line-by-line, can be improved:
-            box1 (reduce 
-                   (fn [bx y] 
+            box1 (reduce
+                   (fn [bx y]
                     (let [ix0 (rtext/cursor-ugrid-to-ix bx 0 y)
                           ix1 (if shifting? (+ ix0 (min nind (n-space (nth lines y)))) ix0)]
                       (rtext/edit bx ix0 ix1 (if shifting? "" indent) [])))
                     box (range y0 (inc y1)))
-            box2 (assoc box1 :cursor-ix 
-                   (rtext/cursor-ugrid-to-ix box1 
+            box2 (assoc box1 :cursor-ix
+                   (rtext/cursor-ugrid-to-ix box1
                      (max 0 (+ x0 (if shifting? (- nind) nind))) y0))]
          (update-precompute box2))
       (= (:KeyCode key-evt) 10) ; indent current line as far.
@@ -332,12 +332,12 @@
 
 (defn mouse-press [m-evt box] ; shift+double click = code folding.
   (cond (and (= (:ClickCount m-evt) 2) (:ShiftDown m-evt))
-    (let [cur-ix (rtext/cursor-pixel-to-ix box (:X m-evt) (:Y m-evt))          
+    (let [cur-ix (rtext/cursor-pixel-to-ix box (:X m-evt) (:Y m-evt))
           cur-pieceix (first (rtext/cursor-ix-to-piece (assoc box :cursor-ix cur-ix)))
           cur-pieceix1 (first (rtext/cursor-ix-to-piece (assoc box :cursor-ix (inc cur-ix))))
           folding? (and (not (folded? (nth (:pieces box) cur-pieceix)))
                      (not (folded? (nth (:pieces box) cur-pieceix1))))]
-      (code-fold-toggle-at-cursor (assoc box :cursor-ix cur-ix) folding? nil)) 
+      (code-fold-toggle-at-cursor (assoc box :cursor-ix cur-ix) folding? nil))
     (= (:ClickCount m-evt) 2)
     (select-twofour-click box false)
     (= (:ClickCount m-evt) 4)
@@ -385,12 +385,12 @@
    pix is the ix of the real string, jx0 and jx1 are the ixs within the real string.
    If the jxs go off the end it just maps them to the end.
    The selection includes folded pieces it is in."
-  (let [selection0 (real-string-to-cursor box real-ix0 -1) 
+  (let [selection0 (real-string-to-cursor box real-ix0 -1)
         selection1 (real-string-to-cursor box real-ix1 1)
         cur-ix (:cursor-ix box)
         hi-ix? (> cur-ix (+ (* 0.5 selection0) (* 0.5 selection1)))
         scrolled-box (-> box (assoc :cursor-ix (if hi-ix? selection0 selection1))
-                       rtext/scroll-to-see-cursor 
+                       rtext/scroll-to-see-cursor
                        (assoc :cursor-ix (if hi-ix? selection1 selection0))
                        rtext/scroll-to-see-cursor)]
     (assoc box :selection-start selection0 :selection-end selection1
@@ -400,17 +400,17 @@
   "Whatever symbol, etc is at cursor, string indexes for this."
   (let [real-s (real-string box)
         rcur-ix (cursor-to-real-string box)
-        cs0 (first (if (<= rcur-ix 0) " " 
+        cs0 (first (if (<= rcur-ix 0) " "
                      (subs real-s (dec rcur-ix) rcur-ix)))
-        cs1 (first (if (< rcur-ix (count real-s)) 
+        cs1 (first (if (< rcur-ix (count real-s))
                      (subs real-s rcur-ix (inc rcur-ix)) " "))
-        sp? (fn [c] (contains? #{\ \newline \tab} c)) 
+        sp? (fn [c] (contains? #{\ \newline \tab} c))
         open? (fn [c] (contains? #{\{ \( \[} c))
         closed? (fn [c] (contains? #{\} \) \]} c))
         land? (or (and (not (open? cs0)) (not (closed? cs0)) (not (sp? cs0)))
                 (and (not (open? cs1)) (not (closed? cs1)) (not (sp? cs1))))
         box1 (assoc box :cursor-ix rcur-ix :pieces [{:text real-s}])]
-    (cond 
+    (cond
       (and (not land?) (open? cs0))
       (contain-ixs box1)
       (and (not land?) (open? cs1))
@@ -429,7 +429,7 @@
 (defn generic-ns-sym [box]
   "Not just codeboxes"
   (let [ty (:type box)]
-    (if (= ty :codebox) 
+    (if (= ty :codebox)
       (langs/file2ns (fbrowser/devec-file (:path box)))
       'app.orepl)))
 
@@ -487,8 +487,8 @@
           shadow-box (reduce #(rtext/dispatch-edit-event %1 %2) (assoc box :pieces piecesu :head "" :foot "") edits)
           piecesu1 (splay-out+ shadow-box)
           piecesu1 (mapv #(dissoc (assoc % :tmp-path (:tmp-path1 %)) :tmp-path1) piecesu1)
-          
-          box1 (reduce #(assoc-in %1 (:tmp-path %2) (dissoc %2 :tmp-path)) (dissoc box :pieces) 
+
+          box1 (reduce #(assoc-in %1 (:tmp-path %2) (dissoc %2 :tmp-path)) (dissoc box :pieces)
                   (subvec piecesu1 1 (dec (count piecesu1))))
           box1 (update box1 :pieces map2vec)
           box1 (walk/postwalk #(if (:children %) (update (assoc % :text ...) :children map2vec) %) box1)
@@ -496,7 +496,7 @@
           pr #(vector (:tmp-path %) (count (:text %)))]
     #_(println "paths:" (mapv pr piecesu) "|" (mapv pr piecesu1) "|"
       (mapv pr (splay-out+ box1)))
-    #_(println "Real-str edit test:" 
+    #_(println "Real-str edit test:"
         "Edits needed:" (pr-str edits)
         "Should = needed (shadow test):" (pr-str (stringdiff/edits-between (real-string box) (real-string shadow-box)))
         "Should = needed (piecesu1 test):" (pr-str (stringdiff/edits-between (real-string box) (apply str (mapv :text piecesu1))))
@@ -505,7 +505,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;; Compiling interaction events ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(def dispatch 
+(def dispatch
   {:mousePressed mouse-press
      :keyPressed key-press
      :keyReleased rtext/key-release
@@ -514,7 +514,7 @@
 
 (defn interact-fns []
   {:dispatch dispatch
-   :render (fn [box & show-cursor?] 
+   :render (fn [box & show-cursor?]
              (let [box (update-precompute box) ;If is up-to-date already will not do anything.
                    head (get box :head "") foot (get box :foot "")
                    title (str (fbrowser/devec-file (:path box))
@@ -523,4 +523,4 @@
                (apply rtext/render (assoc box :path title) show-cursor?)))
    :expandable? expandable?
    :expand-child expand-child :contract-child contract-child
-   :is-child? (fn [box] false)}) 
+   :is-child? (fn [box] false)})
