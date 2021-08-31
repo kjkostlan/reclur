@@ -3,14 +3,13 @@
 
 (ns javac.cpanel
   (:require [clojure.string :as string] [globals]
-    [javac.gfx :as gfx]
+    [javac.gfx :as gfx] [javac.thread :as jthread]
     [javac.clojurize :as clojurize]
     [coder.unerror :as unerror]
     [crossplatform.cp :as crossp]
     [c])
   (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent ComponentAdapter WindowAdapter]
-    [javax.swing SwingUtilities]
-    [java.awt FlowLayout] 
+    [java.awt FlowLayout]
     [javax.swing JFrame JPanel]))
 
 ;;;;;;;;;;;;;;;;;;;;; Settings ;;;;;;;;;;;;;;;;;;;;
@@ -51,7 +50,7 @@
       :AltGraphDown (:AltGraphDown e-clj))
     :else old-extern))
 
-(defn queue1 [x e-clj kwd] 
+(defn queue1 [x e-clj kwd]
   "Queues e, with reasonable limits to prevent everyFrame events piling-up to infinity.
    Handles both java and clojure datastructures for e, converting e into clojure if it is a java event."
   (let [_ (if (not (map? e-clj)) (throw (Exception. "all events need to be converted to clojure maps for queue1.")))
@@ -59,12 +58,12 @@
         evtq (:evt-queue x)]
     (assoc x :evt-queue (conj evtq e-clj))))
 
-(defn dispatch [x evt] 
+(defn dispatch [x evt]
   "Processes one event on x. Returns x if evt is nil.
    Does not affect the event queue."
-  (if evt 
+  (if evt
     (let [kwd (:type evt)
-          _ (if (= kwd :mouseWheelMoved) 
+          _ (if (= kwd :mouseWheelMoved)
               (do (crossp/update-inertial-scroll-guess! evt)
                 (swap! globals/external-state-atom
                   #(let [sc-h (get % :mouse-wheel-history [])
@@ -77,8 +76,7 @@
           f (:dispatch x)
           new-state (try (if f (f evt (:app-state x)) (:app-state x))
                       (catch Exception e (println e) (:app-state x)))
-          ud? true ; TODO: better gfx update rules.
-          ]
+          ud? true] ; TODO: better gfx update rules.
      (swap! globals/external-state-atom #(update-external-state evt (:type evt) %))
      (assoc x :app-state new-state :needs-gfx-update? ud?)) x))
 
@@ -116,7 +114,7 @@
   "Not too many every frame events."
   (let [evtq (:evt-queue (lock-deref globals/sync-app-atom))
         kwd (:type e-clj)
-        add? (or (not (= kwd :everyFrame)) 
+        add? (or (not (= kwd :everyFrame))
                (< (count evtq) *drop-frames-queue-length-threshold*))]
     (cond add? true
       (not report-if-fail?) false
@@ -124,7 +122,7 @@
       (do (swap! globals/external-state-atom
             #(let [n-drop (get % :dropped-frames-since-last-report 0)]
                (if (< n-drop *drop-frames-report-every*) (assoc % :dropped-frames-since-last-report (inc n-drop))
-                 (do (println "Dropped many frames due to slow evts and/or gfx: " n-drop) 
+                 (do (println "Dropped many frames due to slow evts and/or gfx: " n-drop)
                    (assoc % :dropped-frames-since-last-report 0))))) false))))
 
 (defn _update-graphics! [x]
@@ -133,7 +131,7 @@
       (let [gfx-updated-app-state (try (udgfx (:app-state x)) (catch Exception e (do (println "app gfx update error:" e) (:app-state x))))
             new-gfx (try ((:render-fn x) gfx-updated-app-state) (catch Exception e (do (println "gfx render error." e) [])))
             success? (atom false)]
-        (if-let [panel (:JPanel @globals/external-state-atom)] 
+        (if-let [panel (:JPanel @globals/external-state-atom)]
           (try (do (gfx/update-graphics! panel (:last-drawn-gfx x) new-gfx) (reset! success? true))
             (catch Exception e (println "gfx/update-graphics! error:" e))))
         (if success? (assoc x :last-drawn-gfx new-gfx :app-state gfx-updated-app-state :needs-gfx-update? false) x)) x)))
@@ -157,7 +155,7 @@
 ; Continuously polling is a (tiny) CPU drain, but it is way easier than a lock system that must ensure we don't get overlapping calls to dispatch-loop!
 ; The idle CPU is 0.7% of one core for the total program (tested Aug 13th 2019).
 (if (not (:main-polling-loop? @globals/external-state-atom))
-  (future 
+  (future
     (loop [last-millis -1e100] ; This loop runs until the application is quit.
         (let [elapsed-millis (max 0 (- (System/currentTimeMillis) last-millis))
               sleep-time (- *frame-time-ms* elapsed-millis)]
@@ -167,10 +165,11 @@
               t (:frames-since-app-start
                   (swap! globals/external-state-atom #(assoc % :frames-since-app-start (inc (get % :frames-since-app-start 0)))))]
           (if (or (> (count (:hot-boxes s)) 0) ; A single empty hot box adds about 1.25% CPU, tripling our CPU usage.
-                (= (mod t *nframe-slowdown-when-idle*) 0)) 
+                (= (mod t *nframe-slowdown-when-idle*) 0))
             (event-queue! {:Time (System/currentTimeMillis)} :everyFrame)))
         (lock-swap! globals/sync-app-atom dispatch-all)
-        (if (:needs-gfx-update? (lock-deref globals/sync-app-atom)) (update-graphics!))
+        (if (:needs-gfx-update? (lock-deref globals/sync-app-atom))
+          (update-graphics!))
         (recur (System/currentTimeMillis)))))
 (swap! globals/external-state-atom #(assoc % :main-polling-loop? true)) ; Extra sure we do not put more than one thread on this loop.
 
@@ -211,9 +210,9 @@
       (windowClosing [e] (event-queue! e :quit)))))
 
 (defn proxy-panel []
-  (proxy [javax.swing.JPanel] [] 
+  (proxy [javax.swing.JPanel] []
     (paintComponent [g]
-      (do (proxy-super paintComponent g) 
+      (do (proxy-super paintComponent g)
         (gfx/defaultPaintComponent! g this)))))
 
 (defn new-window [w h]
@@ -224,7 +223,7 @@
     (.setLayout panel (FlowLayout.))
     (add-mouse-listeners! panel)
     ; Gets tab working: http://www.java2s.com/Code/Java/Event/KeyEventDemo.htm
-    (.setFocusTraversalKeysEnabled frame false) 
+    (.setFocusTraversalKeysEnabled frame false)
     (.add frame panel)
     (add-resize-listener! frame)
     (.setSize frame w h) ; Does not trigger the resize-listener yet.
@@ -238,25 +237,24 @@
     [frame panel]))
 
 (defn launch-app! [init-state-fn dispatch-fn update-gfx-fn render-fn]
-  "app is singleton, launching 
+  "app is singleton, launching
    dispatch-fn including is (f evt-clj state), we make our own every-frame event.
    update-gfx-fn is (f state-clj), returns the new state, and should cache any expensive gfx cmds.
    render-fn is (f state-clj) but some render commands are functions on the java object."
-  (SwingUtilities/invokeAndWait
-    (fn [& args]
-      ;; https://stackoverflow.com/questions/1234912/how-to-programmatically-close-a-jframe
-      (if-let [old-frame (:JFrame @globals/external-state-atom)]
+    ;; https://stackoverflow.com/questions/1234912/how-to-programmatically-close-a-jframe
+    (if-let [old-frame (:JFrame @globals/external-state-atom)]
+      (jthread/swing-wait
         (do (.setDefaultCloseOperation old-frame (JFrame/DISPOSE_ON_CLOSE))
-          (.dispatchEvent old-frame (WindowEvent. old-frame WindowEvent/WINDOW_CLOSING)))
-        (swap! globals/external-state-atom #(dissoc % :JFrame)))
-      (let [w 1440 h 877
-            [frame panel] (new-window w h)]
-        (swap! globals/external-state-atom #(assoc % :X0 0 :Y0 0 :X1 0 :Y1 0))
-        (set-window-size! w h)
-        (swap! globals/external-state-atom #(assoc % :JFrame frame :JPanel panel))
-        (lock-reset! globals/sync-app-atom
-               (assoc (empty-state) :app-state (init-state-fn)
-                :dispatch dispatch-fn :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn))))))
+               (.dispatchEvent old-frame (WindowEvent. old-frame WindowEvent/WINDOW_CLOSING))
+               (swap! globals/external-state-atom #(dissoc % :JFrame)))))
+    (let [w 1440 h 877
+          [frame panel] (jthread/swing-wait (new-window w h))]
+      (swap! globals/external-state-atom #(assoc % :X0 0 :Y0 0 :X1 0 :Y1 0))
+      (set-window-size! w h)
+      (swap! globals/external-state-atom #(assoc % :JFrame frame :JPanel panel))
+      (lock-reset! globals/sync-app-atom
+             (assoc (empty-state) :app-state (init-state-fn)
+              :dispatch dispatch-fn :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn))))
 
 (defn stop-app! []
   "Different from quit and very rarely used."

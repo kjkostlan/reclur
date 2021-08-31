@@ -2,13 +2,11 @@
 ; Uses reflections and getters.
 (ns javac.clojurize
   (:require [clojure.string :as string]
-    [crossplatform.cp :as crossp])
+    [crossplatform.cp :as crossp]
+    [javac.thread :as jthread])
   (:import [java.awt Point Rectangle Dimension]
-    [javax.swing SwingUtilities]
     [java.io StringWriter]
     [java.nio Buffer]))
-
-(defn edt? [] (SwingUtilities/isEventDispatchThread))
 
 (defn elementary? [t]
   "Is the class t an elementary type or not."
@@ -23,21 +21,21 @@
         n (count pre)
         getter? #(boolean (= (subs (.getName %) 0 n) pre))]
     (filterv #(and (= (count (.getParameterTypes %)) narg) (getter? %)) methods)))
-    
+
 (defn _method-memoize [^java.lang.Class cl m-atom slow-fn]
   (let [cache (get @m-atom cl)]
     (if cache cache
       (let [methods (slow-fn)
-            method2kwd #(let [name (.getName %)] 
+            method2kwd #(let [name (.getName %)]
                           (cond (or (.startsWith name "get") (.startsWith name "set")) (keyword (subs name 3))
                                 (.startsWith name "is")  (keyword (subs name 2))
                                 :else (throw (Exception. (str "Unrecognized method name format." name)))))]
-        (let [out (zipmap (mapv method2kwd methods) methods)] 
+        (let [out (zipmap (mapv method2kwd methods) methods)]
           (swap! m-atom #(assoc % cl out)) out)))))
 
 (defn getters [^java.lang.Class cl]
   "Getter methods (map from keyword to java.lang.reflect.Method). Includes ancestor methods."
-  (_method-memoize cl memoized-getters 
+  (_method-memoize cl memoized-getters
     (fn [] (into [] (concat (methods-starts-with cl "get" 0) (methods-starts-with cl "is" 0))))))
 
 (defn setters [^java.lang.Class cl]
@@ -65,14 +63,14 @@
       (if (or x (not java-obj)) x
         (let [methods (getters (.getClass java-obj))
               ks (keys methods)
-              vs (mapv #(let [x (if f-simple (f-simple %))] (if x x %)) 
+              vs (mapv #(let [x (if f-simple (f-simple %))] (if x x %))
                    (mapv #(.invoke ^java.lang.reflect.Method % java-obj (object-array [])) (vals methods)))]
           (filter-by-val #(not= % :Nil) (zipmap ks (mapv boolean-fix vs))))))))
 
 (defn simple-java-to-clj [obj]
   "Lossy conversion of some simple java obs to clojure, nil = not in the class we convert.
    Conversion between java and clojure forms is more involved so is done at two levels."
-  (if (not (nil? obj)) 
+  (if (not (nil? obj))
     (let [t (type obj)]
       (cond
         (elementary? t)
@@ -87,17 +85,13 @@
         :else
         nil))))
 
-(defn assert-edt []
-  "Asserts that we are on the event dispatch thread, throws an error otherwise."
-  (if (not (edt?)) (throw (Exception. "A function that needed to be ran on the event dispatch thread wasn't."))))
-
 (defn param-str [java-e]
   (try (.paramString java-e) (catch Exception e "MI_SC")))
 
 (defn get-evt-type [java-e]
   "Java event -> :mousePressed. Parses the paramString (I can't seem to find a better way).
    This shouldn't need overriding."
-  (assert-edt)
+  (jthread/assert-edt)
   (let [^String s (param-str java-e)
         tokens (re-seq #"[A-Z_]+" s)
         tok (first (filter #(.contains % "_") tokens)) ; they tend to be at the beginning.
@@ -107,17 +101,17 @@
 (defn translate-event [java-e java-ob]
   "Translates the event into a clojure form.
    The :Type of the event returned is something like :MousePressed"
-  (assert-edt)
+  (jthread/assert-edt)
   (let [evt-type (get-evt-type java-e)]
     (let [clean-up #(dissoc % :Source :Component :Class)
           add-sc #(assoc % :ParamString (param-str java-e))
           f0 #(assoc (clean-up (add-sc %)) :Type evt-type)] ; a default function.
       (f0 (java-to-clj java-e nil simple-java-to-clj))))) ; direct java -> clj translation.
-      
+
 (defn translate-generic [java-ob]
   (java-to-clj java-ob nil simple-java-to-clj))
 
-(defn extract! [^StringWriter dump-prints-here] 
+(defn extract! [^StringWriter dump-prints-here]
   (let [out (str dump-prints-here)
         buf ^Buffer (.getBuffer dump-prints-here)]
     (.setLength buf 0) out))

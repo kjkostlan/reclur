@@ -1,22 +1,16 @@
 ; Warning and dialogue boxes.
 
 (ns javac.warnbox
+  (:require [javac.thread :as jthread])
   (:import (javax.swing JOptionPane SwingUtilities)))
-
-(defmacro swing-wait [body]
-  `(let [tmp-atom# (atom nil)]
-     (SwingUtilities/invokeAndWait 
-       (fn [] (let [x# ~body] 
-                (reset! tmp-atom# x#))))
-     @tmp-atom#))
 
 (defn warning [^String msg]
   "Warning."
-  (SwingUtilities/invokeLater (fn [] (JOptionPane/showMessageDialog nil msg))) true)
+  (jthread/swing-later (JOptionPane/showMessageDialog nil msg)) true)
 
 (defn yes-no? [^String msg default-yes?]
   "User input, modal dialog box, boolean return. Closing it returns false."
-  (swing-wait
+  (jthread/swing-wait
     (let [btn (JOptionPane/YES_NO_OPTION)
           m1 (JOptionPane/WARNING_MESSAGE)
           optsv ["Yes" "No"]
@@ -27,7 +21,7 @@
 
 (defn choice [^String msg opts default]
   "User input, modal dialog box, boolean return. Closing it returns the default."
-  (swing-wait
+  (jthread/swing-wait
     (let [btn (JOptionPane/YES_NO_OPTION)
           m1 (JOptionPane/WARNING_MESSAGE)
           opts (into-array Object opts)
