@@ -7,7 +7,7 @@
 (ns coder.pathedmexp
   (:require
     [clojure.walk :as walk]
-    [c]
+    [t]
     [coder.textparse :as textparse]
     [coder.crosslang.langs :as langs]
     [coder.cnav :as cnav]
@@ -73,8 +73,8 @@
         code-ex (pmexpand code)
         phs (keys pm)
         report (if inv?
-                 (fn [ph] (str ph "->" (get pm ph) " | " (c/cget-in code-ex ph) " | " (c/cget-in code (get pm ph))))
-                 (fn [ph] (str ph "->" (get pm ph) " | " (c/cget-in code ph) " | " (c/cget-in code-ex (get pm ph)))))]
+                 (fn [ph] (str ph "->" (get pm ph) " | " (t/cget-in code-ex ph) " | " (t/cget-in code (get pm ph))))
+                 (fn [ph] (str ph "->" (get pm ph) " | " (t/cget-in code ph) " | " (t/cget-in code-ex (get pm ph)))))]
     (println (if inv? "TESTINVPM:" "TESTPM:") "Before and after expansion:")
     (blit/vpu code)
     (blit/vpu code-ex)

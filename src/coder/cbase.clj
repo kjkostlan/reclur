@@ -4,7 +4,7 @@
 (ns coder.cbase
   (:require [clojure.repl] [clojure.set :as set]
     [clojure.string :as string]
-    [c]
+    [c] [t]
     [javac.file :as jfile]
     [clojure.set :as set]
     [coder.textparse :as textparse]
@@ -74,8 +74,8 @@
                   (do (println "Parsing failed for" fname " see thrown error") (throw e))))
         defpaths (cnav/all-defpaths codes)
         ns-sym (langs/file2ns fname)
-        def-syms (mapv #(second (c/cget-in codes %)) defpaths)
-        def-codes (mapv #(c/cget-in codes %) defpaths)
+        def-syms (mapv #(second (t/cget-in codes %)) defpaths)
+        def-codes (mapv #(t/cget-in codes %) defpaths)
         def-syms-qual (mapv #(langs/resolved ns-sym %) def-syms)]
     (zipmap def-syms-qual def-codes)))
 

@@ -5,7 +5,7 @@
     [layout.blit :as blit]
     [app.codebox :as codebox]
     [coder.cbase :as cbase]
-    [c]))
+    [c] [t]))
 
 (def ^:dynamic *max-dig-range* 1e5)
 (def ^:dynamic *shallow-digfurther-ratio* 8)
@@ -109,5 +109,5 @@
 (defn path-at-cursor [x-summarized x-summarized-txt cursor-ix]
   "What path on the original x the cursor in x-summarized is at, nil if failure Does not work for *print-meta*."
   (if-let [hot-path (into [] (rest (cbase/stringlang-to-wpath x-summarized-txt cursor-ix :clojure)))]
-    (if-let [x-piece (c/cget-in x-summarized hot-path)]
+    (if-let [x-piece (t/cget-in x-summarized hot-path)]
       (::path (meta x-piece)))))

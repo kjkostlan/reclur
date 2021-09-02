@@ -2,7 +2,7 @@
 
 (ns coder.textparse
   (:require
-    [c]
+    [c] [t] [np]
     [coder.javar :as javar]
     [clojure.string :as string]))
 
@@ -142,7 +142,7 @@
         sym (gensym "IAmUnique")
         txt1 (str (subs txt 0 c0) " " sym " " (subs txt c1))
         x1 (reads-string-fn txt1)
-        path (c/find-value-in x1 sym true)]
+        path (t/find-value-in x1 sym true)]
     (if (not path) (throw (Exception. (str "String-to-wpath not working: ..." (subs txt1 (max 0 (- ix 20)) (min (+ ix 20) (count txt1))) "..."))))
     path))
 
@@ -163,12 +163,12 @@
    The w stands for wrapped.
    TODO: This function can be expensive O(n^2) if there is a long string and lots of look-alikes."
   (let [wpath (into [] wpath) x (reads-string-fn txt) n (count txt)
-        target (c/cget-in x wpath)]
+        target (t/cget-in x wpath)]
     (if (and (coll? target) (> (count target) 0))
       (let [; Pick the key to the rarest element:
             vs (into [] (c/cvals target))
-            counts (mapv count (mapv #(c/find-values-in x %) vs))
-            ky (nth (into [] (c/ckeys target)) (c/argmin counts))
+            counts (mapv count (mapv #(t/find-values-in x %) vs))
+            ky (nth (into [] (c/ckeys target)) (np/argmin counts))
             ixs (wpath-to-string-ixs txt (conj wpath ky) tok-ints-fn reads-string-fn)
             ix (int (Math/round (+ (* 0.5 (first ixs)) (* 0.5 (second ixs)))))]
         (enclosing-ixs txt ix tok-ints-fn))

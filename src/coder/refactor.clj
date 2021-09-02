@@ -1,7 +1,7 @@
 ; Refactoring tools
 ; Many more will be added.
 (ns coder.refactor
-  (:require [c]))
+  (:require [c] [t] [mt]))
 
 
 
@@ -48,8 +48,8 @@
 
 (defn end-mpath [x force-parent? ph tail? sub-tail?]
   "The [path within x, path within (meta x)] that leads to the head and tail space assigned to (cget-in x ph).
-   Non-metable elements depend on thier parent collection. use c/dual-get-in to access the meta."
-  (let [xi (c/cget-in x ph)
+   Non-metable elements depend on thier parent collection. use mt/dual-get-in to access the meta."
+  (let [xi (t/cget-in x ph)
         parent? (or force-parent? (not (meta xi)))
         ph1 (if parent? (into [] (butlast ph)) ph)
         xi1 (if parent? (get-in x ph1) xi)
@@ -77,7 +77,7 @@
 (defn next-patht [x path]
   (if (not= path [])
     (let [pathv (path2vpath x path) n (count path)
-          nk (count (c/cget-in x (butlast path)))
+          nk (count (t/cget-in x (butlast path)))
           wrap? (= (get pathv (dec n)) (dec nk))
           pathv1 (if wrap?
                    (into [] (butlast pathv))
@@ -100,8 +100,8 @@
             mp-head (end-mpath xo on-parent? path false false)
             mp-tail (end-mpath xo on-parent? path true true)
             set-e (fn [xj mp-us mp-them n-us us-first?]
-                    (let [us (c/dual-get-in xj mp-us)
-                          them (c/dual-get-in xj mp-them)]
+                    (let [us (mt/dual-get-in xj mp-us)
+                          them (mt/dual-get-in xj mp-them)]
                       (if (or (not us) (not them) (not mp-us) (not mp-them))
                         xj
                         (let [combine (if us-first? (str us them) (str them us))
@@ -110,8 +110,8 @@
                               c1 (subs combine 0 (if us-first? n-us1 (- nc n-us1)))
                               c2 (subs combine (count c1))
                               us1 (if us-first? c1 c2) them1 (if us-first? c2 c1)]
-                         (-> xj (c/dual-assoc-in mp-us us1)
-                           (c/dual-assoc-in mp-them them1))))))]
+                         (-> xj (mt/dual-assoc-in mp-us us1)
+                           (mt/dual-assoc-in mp-them them1))))))]
         (-> xo (set-e mp-head mp-prev n-head-end false)
           (set-e mp-tail mp-next n-tail-end true))))
      x [false true]))

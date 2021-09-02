@@ -1,7 +1,7 @@
 ; TODO: this makes heavy use of clojure-only functions. They should be refactored to langs.
 
 (ns coder.logger
-  (:require [c]
+  (:require [c] [t] [mt]
     [clojure.pprint :as pprint]
     [coder.refactor :as refactor]
     [coder.crosslang.langs :as langs]
@@ -76,7 +76,7 @@
 (defn logify-code1 [code log-path path-in-code]
   "Naive logging of the code. Other functions must make sure we don't use a log-path that steps on special forms."
   (let [log-pathq (update log-path 0 #(list 'quote %))]
-    (c/cupdate-in code path-in-code
+    (t/cupdate-in code path-in-code
       #(list `logm! % log-pathq))))
 
 (defn symqual2code [sym-qual mexpand?]
@@ -155,11 +155,11 @@
   (let [code-f (get-logged-code-and-fn sym-qual paths mexpand?)
         logged-f (if-let [x (second code-f)] x (throw (last code-f)))
         code (symqual2code sym-qual mexpand?)
-        logged-codes (mapv #(c/cget-in code %) paths)
+        logged-codes (mapv #(t/cget-in code %) paths)
         loggers (zipmap paths (repeat (count paths) {:mexpand? mexpand? :source code}))]
     (alter-var-root (find-var sym-qual)
       (fn [old-val]
-        (c/keep-meta old-val (fn [_] logged-f))))
+        (mt/keep-meta old-val (fn [_] logged-f))))
     (swap! globals/log-atom
       (fn [world]
         (let [path+ #(c/vcat [sym-qual] %)
@@ -313,7 +313,7 @@
 (defn w2ps [sym-qual search-key mexpand?]
    (let [code (symqual2code sym-qual mexpand?)
         _ (if (not code) (throw (Exception. (str "Cant find code for:" sym-qual))))
-        phs (c/find-values-in code search-key)]
+        phs (t/find-values-in code search-key)]
      phs))
 
 (defn user-data-logger! [sym-qual path udata]
@@ -333,11 +333,11 @@
         adj (fn [ph]
               (cond (= (count adjacents) 0) true
                 (= (count adjacents) 1)
-                (or (= (first adjacents) (c/cget-in code (just-before ph)))
-                  (= (first adjacents) (c/cget-in code (just-after ph))))
+                (or (= (first adjacents) (t/cget-in code (just-before ph)))
+                  (= (first adjacents) (t/cget-in code (just-after ph))))
                 (>= (count adjacents) 2)
-                (and (= (first adjacents) (c/cget-in code (just-before ph)))
-                  (= (second adjacents) (c/cget-in code (just-after ph))))))
+                (and (= (first adjacents) (t/cget-in code (just-before ph)))
+                  (= (second adjacents) (t/cget-in code (just-after ph))))))
         phs1 (filterv adj phs)]
     (mapv #(add-logger! sym-qual % false "[not-so-Breakpoint]") phs1)
     (mapv #(user-data-logger! sym-qual % {:watchpoint? true}) phs1)))

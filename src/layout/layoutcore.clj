@@ -2,7 +2,7 @@
 (ns layout.layoutcore
   (:require [globals]
     [layout.xform :as xform]
-    [c]))
+    [c] [np]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Helper functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -215,8 +215,8 @@
                             proximity (/ proximity-wt (+ (Math/abs (- x x0)) dx (Math/abs (- y y0)) dy))]
                         (+ proximity (* wt x-score y-score)))))
           den-fn (fn [x y] (apply + (mapv #(den-fn1 % x y) xxyys)))
-          xs (c/linspace box0 box1 resolution)
-          ys (c/linspace boy0 boy1 resolution)
+          xs (np/linspace box0 box1 resolution)
+          ys (np/linspace boy0 boy1 resolution)
           get-row (fn [y] [xs (into [] (repeat resolution y)) (mapv #(den-fn % y) xs)])
           xs-ys-densitys (mapv get-row ys)
           xs (apply c/vcat (mapv first xs-ys-densitys))
@@ -241,8 +241,8 @@
              (<= n 40) 6
              :else (Math/round (Math/sqrt n)))
         ny (int (+ (/ n nx) 1 -1e-9))
-        x-values (c/linspace x0 x1 (inc nx))
-        y-values (c/linspace y0 y1 (inc ny))
+        x-values (np/linspace x0 x1 (inc nx))
+        y-values (np/linspace y0 y1 (inc ny))
         x0-values (into [] (butlast x-values))
         x1-values (into [] (rest x-values))
         y0-values (into [] (butlast y-values))

@@ -5,7 +5,7 @@
     [clojure.set :as set]
     [clojure.string :as string]
     [coder.textparse :as textparse]
-    [c]))
+    [c] [t] [np]))
 
 ;;;;;;;; Support fns ;;;;;;;;;
 
@@ -57,14 +57,14 @@
 (defn leaf-path-map [x y]
   "Map from path in x to path in y for any leaf element. If a leaf element appears more than once in y
    only one path is chosen. Using ^:leaf-meta also will let us associcate."
-  (let [lget-in (fn [x ph] (let [yi (c/cget-in x ph)
+  (let [lget-in (fn [x ph] (let [yi (t/cget-in x ph)
                                  lm (:leaf-meta (meta yi))]
                              (cond (not (coll? yi)) yi lm lm :else false)))
         leaf2py (reduce #(let [v (lget-in y %2)]
-                           (if v (assoc %1 v %2) %1)) {} (c/paths y))]
+                           (if v (assoc %1 v %2) %1)) {} (t/paths y))]
     (reduce #(let [xi (lget-in x %2)]
                (if (get leaf2py xi) (assoc %1 %2 (get leaf2py xi)) %1))
-      {} (c/paths x))))
+      {} (t/paths x))))
 
 (defn leaf-branch-path-map [x y]
   "Not just leaves."
@@ -78,11 +78,11 @@
         branch-phms (mapv (fn [n-cut] (no-nil (zipmap (mapv #(cut % n-cut) (keys lpm))
                                                 (mapv #(cut % n-cut) (vals lpm)))))
                       (range max-depth))
-        phx (c/paths x)
+        phx (t/paths x)
         get-ph (fn [px]
                  (let [phs (mapv #(get % px) branch-phms)]
-                   (first (filterv #(and % (= (c/cget-in x px) (c/cget-in y %))) phs))))
-        paths-x (c/paths x)]
+                   (first (filterv #(and % (= (t/cget-in x px) (t/cget-in y %))) phs))))
+        paths-x (t/paths x)]
     (c/filter-kv
       (fn [k v] v) (zipmap paths-x (mapv get-ph paths-x)))))
 
@@ -113,22 +113,22 @@
   "Tries to find a corresponding path, nil if failure.
    No obvious algorithim here, more of a heuristic. Room for much improvement."
   (let [np (count path-old)
-        nesting-keys (mapv #(c/cget-in code-old
+        nesting-keys (mapv #(t/cget-in code-old
                               (subvec path-old %))
                        (range np)) ; shallow -> deep.
-        pathss-old (mapv #(c/find-values-in code-old %) nesting-keys)
-        pathss-new (mapv #(c/find-values-in code-new %) nesting-keys)
+        pathss-old (mapv #(t/find-values-in code-old %) nesting-keys)
+        pathss-new (mapv #(t/find-values-in code-new %) nesting-keys)
         shallowest (first (filter #(> (count %) 0) pathss-new))
         deepest (last (filter #(> (count %) 0) pathss-new))]
     (if deepest ; Which is most similar? How deep can we go?
       (let [pathdif (fn [a b] (reduce + (mapv #(if (= %1 %2) 0.0 1.0) a b)))
             diffs (mapv #(pathdif path-old %) shallowest)]
-        (nth deepest (c/argmax diffs)))
+        (nth deepest (np/argmax diffs)))
       (if (and (> np 0) ; very simple subsitution
-            (let [v0 (c/cget-in code-old (subvec path-old 0 (dec np)))
-                  v1 (c/cget-in code-new (subvec path-old 0 (dec np)))]
+            (let [v0 (t/cget-in code-old (subvec path-old 0 (dec np)))
+                  v1 (t/cget-in code-new (subvec path-old 0 (dec np)))]
               (and (vector? v0) (vector? v1) (= (count v0) (count v1))))
-            (c/cget-in code-new path-old))
+            (t/cget-in code-new path-old))
        path-old false))))
 
 ;;;;;;;; Clojure-aware, single path return ;;;;;;
@@ -144,9 +144,9 @@
 (defn symbol2defpath-qual [codes sym]
   "The path to the path enclosing def in codes.
    In java and other languages, it usually wouldn't be explicitly a 'def'."
-  (let [def-paths (into [] (apply concat (mapv #(c/find-values-in codes %) def-variants)))
+  (let [def-paths (into [] (apply concat (mapv #(t/find-values-in codes %) def-variants)))
         defenclose-paths (mapv #(into [] (butlast %)) def-paths)
-        def-vals (mapv #(c/cget-in codes (conj % 1)) defenclose-paths)
+        def-vals (mapv #(t/cget-in codes (conj % 1)) defenclose-paths)
         sym-unqual (textparse/unqual sym)
         path-ix (first (filter #(or (= (nth def-vals %) sym-unqual) (= (nth def-vals %) sym)) (range (count def-vals))))
         _ (if (not path-ix) (throw (Exception. (str "Can't find the def-path for: " sym))))
@@ -158,18 +158,18 @@
 (defn path2defsym [codes path]
   "The foo in (def foo)."
   (let [fpath (path2subdef-path codes path) path2def (subvec (into [] path) 0 (- (count path) (count fpath)))]
-    (c/cget-in codes (conj path2def 1))))
+    (t/cget-in codes (conj path2def 1))))
 
 (defn sym-def? [code path]
   "Is path in code the location of a local defined symbol?
    I.e. the path to 'x in '(let [x 1]).
    Class members don't count as local, variables defined within fns do."
-  (let [x (c/cget-in code path)
+  (let [x (t/cget-in code path)
         first? #(if (coll? %) (first %) false)
-        pairbind? (contains? #{`let `let* `loop `loop* 'let 'loop} (first? (c/cget-in code (drop-last 2 path))))
-        fn-unpacked? (contains? #{`fn `fn* 'fn} (first? (c/cget-in code (drop-last 2 path))))
-        fn-packed? (contains? #{`fn `fn* 'fn} (first? (c/cget-in code (drop-last 3 path))))
-        in-vector? (vector? (c/cget-in code (drop-last 1 path)))
+        pairbind? (contains? #{`let `let* `loop `loop* 'let 'loop} (first? (t/cget-in code (drop-last 2 path))))
+        fn-unpacked? (contains? #{`fn `fn* 'fn} (first? (t/cget-in code (drop-last 2 path))))
+        fn-packed? (contains? #{`fn `fn* 'fn} (first? (t/cget-in code (drop-last 3 path))))
+        in-vector? (vector? (t/cget-in code (drop-last 1 path)))
         second? (= (last (butlast path)) 1)]
     (cond
       (< (count path) 2) false (not (symbol? x)) false (not in-vector?) false (not second?) false
@@ -184,7 +184,7 @@
   (let [cl (last code) cl0 (if (coll? cl) (first cl))
         explicit-fn? (contains? #{'fn* `fn 'fn} cl0) ; Is it (def ... (fn ...))
         prepend (if explicit-fn? [(dec (count code))] [])
-        fcode (c/cget-in code prepend)
+        fcode (t/cget-in code prepend)
         packed? (not (first (filter vector? fcode))); (fn ([a b] ...)) vs (fn [a b] ...)
         paths-in-fcode (if packed? (mapv #(vector % (dec (count (c/cget fcode %))))
                                      (filterv #(c/listy? (c/cget fcode %)) (range (count fcode))))
@@ -211,7 +211,7 @@
                           (or (not symr) (string/includes? (str symr) "clojure.core/"))) "Local sym OR clojure.core sym"
                         :else (swap! path-atom #(conj % path)))
                       x) x))]
-    (c/pwalk walk-fn code) @path-atom))
+    (t/pwalk walk-fn code) @path-atom))
 
 (defn all-defpaths [codes]
   "All paths to the codes that enclose the defs."
@@ -232,10 +232,10 @@
         path (into [] (rest cpath))
         codeu code-fully-qual]
     (if (sym-def? codeu path)
-      (let [paths (c/paths codeu)
-            target (c/cget-in codeu path)
+      (let [paths (t/paths codeu)
+            target (t/cget-in codeu path)
             path-ix (first (filter #(= (nth paths %) path) (range)))]
-        (filterv #(= (c/cget-in codeu %) target) (subvec paths (inc path-ix))))
+        (filterv #(= (t/cget-in codeu %) target) (subvec paths (inc path-ix))))
       [])))
 
 (defn local-uphill [cpath code-fully-qual]
@@ -243,9 +243,9 @@
   (let [sym-qual (first cpath)
         path (into [] (rest cpath))
         codeu code-fully-qual
-        target (c/cget-in codeu path)]
+        target (t/cget-in codeu path)]
     (if (symbol? target)
-      (let [first-use (first (filter #(= (c/cget-in codeu %) target) (c/paths codeu)))]
+      (let [first-use (first (filter #(= (t/cget-in codeu %) target) (t/paths codeu)))]
         (if (and (sym-def? codeu first-use) (and (not= path first-use)))
           (c/vcat [sym-qual] first-use) false))
       false)))
@@ -343,4 +343,4 @@
 (defn lucky-leaf [code search-key]
   "Includes only the branches that contain key from code.
    Collections are collapsed to 1 element, but the depth remains."
-  (lucky-branch code (c/find-value-in code search-key)))
+  (lucky-branch code (t/find-value-in code search-key)))

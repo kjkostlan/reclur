@@ -6,7 +6,7 @@
     [clojure.set :as set]
     [clojure.string :as string]
     [layout.blit :as blit]
-    [c]
+    [c] [t]
     [coder.crosslang.langs :as langs]))
 
 ;;;;;;;;;;;; Simple helper functions that are fairly generic ;;;;;;;;;;;;
@@ -340,7 +340,7 @@
     (symbol (str sadface sadface sadface sym sadface sadface sadface))))
 
 (defn label-code [code err-info]
-  (c/cupdate-in code (:path err-info)
+  (t/cupdate-in code (:path err-info)
     (fn [broken-part] (label-symbol (pr-str broken-part)))))
 
 (defn errprint [code err-info]

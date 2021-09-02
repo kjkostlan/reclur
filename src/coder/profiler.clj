@@ -5,7 +5,7 @@
     [clojure.set :as set]
     [clojure.string :as string]
     [clojure.main :as main]
-    [collections]
+    [c] [t]
     [coder.cnav :as cnav]
     [coder.cbase :as cbase]
     [coder.crosslang.langs :as langs]
@@ -13,82 +13,6 @@
     [coder.logger :as logger]
     [coder.unerror :as unerror]
     [coder.pathedmexp :as pathedmexp]))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Support functions that want to be in collections ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn m-conj [m k v]
-  ; Better for collections?
-  "Like assoc but conj's v onto (get m k [])."
-  (assoc m k (conj (get m k []) v)))
-
-(defn dim-mix [x dim-source & convert-dims-to-vector-form?s]
-  "Generic map dimension rearrange and recombine. Stubby paths get removed if stubbier than dim-source's maximum.
-   dim-source: dimensions going into each output dimension. Each element is a scalar or vector.
-   Multible dimensions into one dimension: later varies faster (as numpy's np).
-   convert-dims-to-vector-form?s: convert map entries to vectors (sorts the keys if activated).
-   This can only rearrange or combine dimensions, it can't split them.
-   (splitting would need a size)."
-  ; TODO: does this belong in collecitons?
-  (let [paths (set (collections/paths x))
-        dim-source (mapv #(if (coll? %) (into [] %) [%]) dim-source)
-        ndim (inc (apply max (apply concat dim-source))) ; # of dims we actualy care about.
-        cut #(if (> (count %) ndim) (subvec % 0 ndim) %)
-        paths-short (set (filterv #(>= (count %) ndim) (mapv cut paths)))
-        ; dim-source [1 [2 3] 2]
-        old2new (reduce (fn [acc ix]
-                          (reduce #(assoc %1 %2 ix)
-                            acc (nth dim-source ix)))
-                  {} (range (count dim-source))) ; Old path index to new path index collapsed.
-        map2vec (fn [m] (mapv #(get m %) (sort (keys m))))
-        change-ph (fn [ph] ; Change from old to new path.
-                    (mapv #(if (= (count %) 1) (first %) %)
-                      (map2vec (reduce #(let [jx (get old2new %2)]
-                                          (m-conj %1 jx (nth ph %2)))
-                                 {} (range (count ph))))))
-        xr (reduce
-             (fn [acc ph]
-               (let [add (collections/cget-in x ph)]
-                 (assoc-in acc (change-ph ph) add)))
-             {} paths-short)
-        ; Convert map levels to vec levels:
-        convert?s (first convert-dims-to-vector-form?s)]
-    (if (map? convert?s) (throw (Exception. "convert-dims-to-vector-form?s, if supplied, must be a vector.")))
-    (if (not convert?s) xr
-      (collections/dpwalk
-        (fn [path val]
-          (let [depth (count path)]
-            (if (and (map? val) (get convert?s depth))
-              (map2vec val) val))) xr (count convert?s)))))
-
-(defn _dim-split1 [x]
-  (cond (not (map? x)) x
-    (= (count x) 0) x
-    :else
-    (let [kys (into [] (keys x))
-          nk (mapv count kys)
-          c0 (apply min nk) c1 (apply max nk)]
-      (cond (< c0 c1) (throw (Exception. "Uneven number of key lengths; can't dim split (or it would be more complex)."))
-        (= c1 1) x
-        :else (reduce-kv #(assoc-in %1 %2 %3) {} x)))))
-(defn dim-split [x dims]
-  (let [max-dim (apply max 0 dims)
-        split?s (reduce #(assoc %1 %2 true) (into [] (repeat max-dim false)) dims)]
-    (collections/dpwalk (fn [ph x] (if (get split?s (count ph)) (_dim-split1 x) x))
-      x max-dim)))
-
-(defn dim-map2vec [x dims]
-  "Converts maps to vectors at specified nesting levels.
-   Maps must have integer keys."
-  (let [max-dim (apply max 0 dims)
-        vec?s (reduce #(assoc %1 %2 true) (into [] (repeat max-dim false)) dims)]
-    (collections/dpwalk (fn [ph x]
-                          (if (or (not (map? x)) (not (get vec?s (count ph)))) x
-                            (let [kys (into [] (keys x)) max-k (apply max kys)]
-                              (if (first (remove integer? kys))
-                                (throw (Exception. "Map key not an integer or long for converting to vector.")))
-                              (reduce #(assoc %1 %2 (get x %2))
-                                (into [] (repeat max-k false)) kys))))
-      x max-dim)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Support functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -132,18 +56,18 @@
 
 (defn interest-paths [defn-code-ex]
   "Not the first element of lists."
-  (let [phs (collections/paths defn-code-ex)
-        phs1 (filterv #(let [x0 (collections/cget defn-code-ex (first %))
+  (let [phs (t/paths defn-code-ex)
+        phs1 (filterv #(let [x0 (c/cget defn-code-ex (first %))
                              ;inside-outer-fn? (and (coll? x0) (= (first x0) 'fn*))
-                             x (collections/cget-in defn-code-ex (butlast %))
-                             not-first-list? (or (not (collections/listy? x)) (not= (last %) 0))]
+                             x (t/cget-in defn-code-ex (butlast %))
+                             not-first-list? (or (not (c/listy? x)) (not= (last %) 0))]
                         (and #_inside-outer-fn? not-first-list?)) phs)] phs1))
 
 (defn forbidden-paths [code-ex]
   "Paths that can't be logged. For example, the [foo bar] in (fn [foo bar]).
    Convention: Assume 'fn isn't overloaded."
-  (let [prepends (fn [k phs] (mapv #(collections/vcat [k] %) phs))
-        vmapv (fn [f & args] (apply collections/vcat (apply mapv f args)))]
+  (let [prepends (fn [k phs] (mapv #(c/vcat [k] %) phs))
+        vmapv (fn [f & args] (apply c/vcat (apply mapv f args)))]
     (into [] (sort
         (cond (map? code-ex)
           (vmapv #(prepends %1 (forbidden-paths %2)) (keys code-ex) (vals code-ex))
@@ -159,7 +83,7 @@
                           (and (contains? #{`fn 'fn 'fn*} c0) (vector? c1)) ; (fn [a b] ...)
                           (conj (prepends 1 (mapv vector (range (count c1)))) [1])
                           (contains? #{`fn 'fn* 'fn} c0) ; (fn ([a] ...) ([a b] ...))
-                          (apply collections/vcat [[1]]
+                          (apply c/vcat [[1]]
                             (mapv #(conj (prepends %2 (prepends 0 (mapv vector (range (count (first %1))))))
                                      [%2 0])
                               (rest code-ex) (range 1 1e100)))
@@ -172,7 +96,7 @@
                           (contains? #{'recur} c0)
                           (into [] (mapv vector (range 1 (count code-ex)))) ; the [0] path is covered by special check.
                           :else [])]
-            (collections/vcat forbid1 forbid))
+            (c/vcat forbid1 forbid))
           (or (contains? cnav/specials code-ex) (= code-ex 'fn)) [[]]
           (and (symbol? code-ex) (string/starts-with? (str code-ex) "java.lang"
                                    )) [[]] ; Doesn't cover all java fns, but Math is the main one.
@@ -182,25 +106,25 @@
   "Map from forbidden paths to equivelent paths. Exists for non-special symbols.
    Relies on sunshine's deobfuscation."
   (let [forbidden-set (set forbidden)
-        obs (mapv #(collections/cget-in code-ex %) forbidden)
-        paths (collections/paths code-ex)
+        obs (mapv #(t/cget-in code-ex %) forbidden)
+        paths (t/paths code-ex)
         substitute (mapv (fn [ph]
-                           (let [x (collections/cget-in code-ex ph)
+                           (let [x (t/cget-in code-ex ph)
                                  ph0 (butlast ph) ph00 (butlast ph0)
                                  pair-bind? (and (contains? #{`let 'let* `loop 'loop*}
-                                                   (collections/cget-in code-ex ph00))
-                                              (vector? (collections/cget-in code-ex ph0)))
-                                 x+ (collections/cget-in code-ex (butlast ph))]
+                                                   (t/cget-in code-ex ph00))
+                                              (vector? (t/cget-in code-ex ph0)))
+                                 x+ (t/cget-in code-ex (butlast ph))]
                              (cond pair-bind?
                                (update ph (dec (count ph)) inc) ; bind to the value, not the definition.
                                (symbol? x) ; Includes the x in (fn [x y z]), etc.
-                               (let [phs (cnav/paths-of code-ex x false)
+                               (let [phs (t/find-values-in code-ex x)
                                      same-sym-allowed-phs (remove #(get forbidden-set %) phs)]
                                  (cond (and (not (first same-sym-allowed-phs))
                                          (vector? x+) (not (first (remove symbol? x+))))
                                    (println "Warning:" (second code-ex) "Unused fn symbol:" x " bindings = " x+)
                                    (and (not (first same-sym-allowed-phs)) (vector? x+))
-                                   (println "Warning:" (second code-ex) "Unused let symbol:" x " bindings = " (collections/evens x+)))
+                                   (println "Warning:" (second code-ex) "Unused let symbol:" x " bindings = " (c/evens x+)))
                                  (first same-sym-allowed-phs))
                                :else false)))
                      forbidden)
@@ -215,7 +139,7 @@
         no-paths-ex (set (forbidden-paths code-ex))
         log-paths-ex (set/difference ipaths no-paths-ex)
         log-paths (_path-remap code log-paths-ex)
-        _ (if (empty? (set/difference log-paths (set (collections/paths code)))) "Good"
+        _ (if (empty? (set/difference log-paths (set (t/paths code)))) "Good"
             (throw (Exception. "Log-paths point to non-existant code paths.")))
         _ftmp #(if include-code-ex? (assoc % :code-ex code-ex) %)
         apaths (alternative-paths code-ex no-paths-ex)]
@@ -252,8 +176,8 @@
                         logf-sym (first ph) path-in-code (into [] (rest ph))
                         good2bad (get good2bad-pathss logf-sym)
                         acc1 (if-let [code-ph-bad (get good2bad path-in-code)]
-                               (m-conj acc (collections/vcat [logf-sym] code-ph-bad) val) acc)]
-                    (m-conj acc1 ph val)))
+                               (c/entry-conj acc (c/vcat [logf-sym] code-ph-bad) val) acc)]
+                    (c/entry-conj acc1 ph val)))
           {} logs))
 
 (defn deep-profiles [sym-qual runs]
@@ -280,7 +204,7 @@
             log-pathss-ex (mapv :lpaths-ex anals)
             log-pathss (mapv :lpaths anals) ; Log the UNexpanded code.
 
-            logs (apply collections/vcat (_logss-with-debug! log-syms log-pathss sym-qual runs))
+            logs (apply c/vcat (_logss-with-debug! log-syms log-pathss sym-qual runs))
             good2bad-pathss (zipmap log-syms (mapv :good2bad anals))]
         (_log-organize logs good2bad-pathss)))))
 
@@ -293,16 +217,16 @@
         log-ns-objs (mapv #(find-ns (textparse/sym2ns %)) log-syms)
         codes (mapv langs/var-source log-syms)
 
-        fncall-pathss (mapv #(logger/fncall-logpaths %1 (textparse/sym2ns %2)) codes log-syms) ; [sym][which path][path]
+        fncall-pathss (mapv #(cnav/fncall-paths %1 (textparse/sym2ns %2)) codes log-syms) ; [sym][which path][path]
 
         log-pathsss (mapv (fn [code fncall-paths]
                             (mapv (fn [fn-path]
-                                    (let [form (collections/cget-in code fn-path)]
+                                    (let [form (t/cget-in code fn-path)]
                                       (mapv #(conj fn-path %) (range 1 (count form)))))
                               fncall-paths))
                       codes fncall-pathss) ; [which sym][which fncall][which arg-index][path]
 
-        log-pathss (set/rename-keys (dim-mix log-pathsss [[0] [1 2]] [false true])
+        log-pathss (set/rename-keys (t/dim-mix log-pathsss [[0] [1 2]] [false true])
                      (zipmap (range) (into [] log-syms))); [which sym][which fncall & arg-ix][path]
         the-fn (eval sym-qual)
         sym2code (zipmap log-syms codes)
@@ -316,7 +240,7 @@
         logpath2calledsym (zipmap logpaths
                             (mapv #(let [lg-sym (first %) code (get sym2code lg-sym)
                                          path-in-code (rest %)
-                                         called-sym (collections/cget-in code (conj (into [] (butlast path-in-code)) 0))
+                                         called-sym (t/cget-in code (conj (into [] (butlast path-in-code)) 0))
                                          called-sym-qual (langs/resolved (textparse/sym2ns lg-sym) called-sym)]
                                      (if (not called-sym-qual)
                                        (throw (Exception. (str "Can't resolve:" called-sym))))
@@ -339,11 +263,11 @@
                             called-sym (get logpath2calledsym ph)]
                         (recur (update-in acc [called-sym noleaf arg-ix] #(conj (if % % []) lg))
                           (inc ix)))))
-        fdprofile1 (dim-mix fdprofile [[0] [1 3] [2]])] ;{fn-sym}{path-as-str+chronological}{wrt-ix}
+        fdprofile1 (t/dim-mix fdprofile [[0] [1 3] [2]])] ;{fn-sym}{path-as-str+chronological}{wrt-ix}
     (zipmap
       (keys fdprofile1)
       (mapv (fn [pack] (let [logss (into [] (sort-by #(:start-time (get % 0)) (vals pack)))
-                             logssv (dim-mix logss [[0] [1]] [true true])]
+                             logssv (t/dim-mix logss [[0] [1]] [true true])]
                          (mapv #(mapv :value %) logssv)))
         (vals fdprofile1)))))
 
@@ -361,7 +285,7 @@
         outer-log? #(let [cp (into [] (rest %))]
                       (and (= (first cp) 2)
                         (> (second cp) 0)
-                        (= (collections/third cp) 0)
+                        (= (c/third cp) 0)
                         (get cp 3)))
         kys-to-fn (filterv outer-log? (keys profile))
         sym+2argss (reduce (fn [acc ph]
@@ -372,6 +296,6 @@
                     {} kys-to-fn)]
         ; sym+2argss is {sym-qual}{which-argpack}{which-arg-ix}[chronological].
         ; We need to make it {sym-qual}[chronological][which-arg-ix].
-    (dim-mix sym+2argss [0 [1 3] 2] [false true true])
+    (t/dim-mix sym+2argss [0 [1 3] 2] [false true true])
     #_(println "TODO: debug warning remove this and next statement.")
     #_sym+2argss))
