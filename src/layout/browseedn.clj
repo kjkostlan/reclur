@@ -21,6 +21,10 @@
   "No need to include all decimal places."
   (str x)) ;TODO
 
+(defn to-sym [x]
+  "Symbols can hold metadata."
+  (symbol (if (number? x) (num2str x) (pr-str x))))
+
 (defn valid? [tok] (try (read-string tok) true (catch Exception e false)))
 
 (defn nfill-char [x]
@@ -41,16 +45,17 @@
   "One step, on a collection, with specified head and tail directions."
   (let [m? (map? x) s? (set? x) chars (:target-fillchars opts) dig (opts :max-dig-range opts)
         uno-dos (if (and from-head? from-tail?) 2 1)
-        quote-sym #(symbol (str "\"" % "\""))
         ch-frac-min (get opts :min-child-fraction *min-child-fraction*)
         ch-frac (max ch-frac-min (/ 1.0 (if (number? n) n dig)))
         opts1 (assoc opts :target-fillchars (Math/ceil (* chars ch-frac))
-                :max-dig-range (Math/ceil (* dig ch-frac)))]
+                :max-dig-range (Math/ceil (* dig ch-frac)))
+        mk2sym #(if m? (zipmap (mapv to-sym (keys %)) (vals %)) %)]
     (loop [n-used 0 c-used 0 acc-head [] acc-tail (list) xhead (seq x) xtail (if from-tail? (reverse x))]
             ; Bi-directional loop.
       (let [subsummary (fn [xi k]
-                         (let [xs (_summarize (conj path k) (if m? (second xi) xi) opts1)]
-                           (if m? [(first xi) xs] xs)))
+                         (let [path1 (conj path k)
+                               xs (_summarize path1 (if m? (second xi) xi) opts1)]
+                           (if m? [(to-sym (_summarize path1 (first xi) opts1)) xs] xs)))
 
             k0 (cond m? (first (first xhead)) s? (first xhead) :else n-used)
             k1 (cond m? (first (first xtail)) s? (first xtail) (number? n) (- n n-used 1))
@@ -59,16 +64,15 @@
             add-dot3 (fn []
                        (let [ellipse (if (= n "???") "(???)"
                                         (str "<" n "-" (* n-used uno-dos) ">"))
-                             midpiece [(quote-sym
-                                        (str (if from-head? "..." "") ellipse (if from-tail? "..." "")))]
-                             midpiece (if (map? x) [(conj midpiece (quote-sym "<kys>"))] midpiece)]
+                             midpiece [(str (if from-head? "..." "") ellipse (if from-tail? "..." ""))]
+                             midpiece (if (map? x) [(conj midpiece (to-sym "<kys>"))] midpiece)]
                          (concat acc-head midpiece acc-tail)))]
         (cond (and from-head? from-tail? (= (* n-used uno-dos) (dec n)))
-          (_as-counted (concat acc-head [(get-h)] acc-tail) x)
+          (mk2sym (_as-counted (concat acc-head [(get-h)] acc-tail) x))
           (= (* n-used uno-dos) n)
-          (_as-counted (concat acc-head acc-tail) x)
+          (mk2sym (_as-counted (concat acc-head acc-tail) x))
           (and (> (count acc-head) 0) (> c-used (- chars 5)))
-          (_as-counted (add-dot3) x)
+          (mk2sym (_as-counted (add-dot3) x))
           :else (let [h (if from-head? (_summarize (conj path k0) (first xhead) opts1))
                       t (if from-tail? (_summarize (conj path k1) (first xtail) opts1))
                       c-used1 (+ c-used (if from-head? (nfill-char h) 0)
@@ -83,7 +87,7 @@
         shallow (int (get opts :shallow-digfurther-ratio))
         n (cond (not (coll? x)) 1 (counted? x) (count x)
             :else (let [n0 (count (take dig x))] (if (< n0 dig) n0 "???")))
-        sym+meta #(with-meta (symbol %) {::path path})
+        sym+meta #(with-meta (to-sym %) {::path path})
         meta1 #(try (with-meta %1 (meta %2)) (catch Exception e %1))
         meta-kvs-if-map (fn [x1] (if (map? x1) (zipmap (mapv meta1 (keys x1) (vals x1))
                                                  (vals x1)) x1))]
@@ -92,8 +96,7 @@
       (meta-kvs-if-map (_summarize1 path x n true (or (vector? x) (< n (* dig shallow))) opts))
       (coll? x) ; Uncounted colls, such as infinite sequences.
       (_summarize1 path x n true false opts)
-      (number? x) (sym+meta (num2str x))
-      :else (sym+meta (pr-str x)))))
+      :else (sym+meta x))))
 (defn summarize [x & opts]
   "Generates a human-friendly representation of x if x is large, and removes lazyness.
    Returns a nested data-structure, with symbols at the leaves
@@ -107,7 +110,12 @@
     (_summarize [] x opts1)))
 
 (defn path-at-cursor [x-summarized x-summarized-txt cursor-ix]
-  "What path on the original x the cursor in x-summarized is at, nil if failure Does not work for *print-meta*."
+  "What path on the original x the cursor in x-summarized is at, nil if failure. Does not work for *print-meta*."
   (if-let [hot-path (into [] (rest (cbase/stringlang-to-wpath x-summarized-txt cursor-ix :clojure)))]
-    (if-let [x-piece (t/cget-in x-summarized hot-path)]
+    (let [_ (if (string/includes? (str (first hot-path)) "IAmUnique")
+              (println "You must click on map values, not keys (bug)."))
+          x-piece (reduce (fn [branch k]
+                            (c/cget branch
+                              (if (map? branch) (to-sym k) k)))
+                    x-summarized hot-path)]
       (::path (meta x-piece)))))
