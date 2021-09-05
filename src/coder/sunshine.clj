@@ -10,6 +10,9 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;; Support functions ;;;;;;;;;;;;;;;;;;;;;;;
 
+(defn _tovec [form] (cond (not (coll? form)) form (map? form) (into [] (apply concat form)) :else (into [] form)))
+(defn _ty [form] (cond (vector? form) 1 (map? form) 2 (set? form) 3 (coll? form) 0 :else -1))
+
 (defn let-swap [code]
   "Binding symbols should be bound once they are defined.
    But let statement's arent: (let [a a] a) the second a isn't bound.
@@ -24,11 +27,12 @@
                     (rest (rest form))) form))]
     (walk/postwalk walkf code)))
 
-(defn _tovec [form] (cond (not (coll? form)) form (map? form) (into [] (apply concat form)) :else (into [] form)))
-(defn _ty [form] (cond (vector? form) 1 (map? form) 2 (set? form) 3 (coll? form) 0 :else -1))
+;;;;;;;;;;;;;;;;;;;;;;;;;; Flattening and unflattening trees into 'tokens' ;;;;;;;;;;;;;;;;;;;;;;;
+
 (defn flat-tokenize-mark [code]
   "Returns two vectors: Tokens: The flattened code, with symbols encoding ()[]{}#{} in lieu of the associated collection.
-                        Bind?s: Does said token coorespond to a symbol binding, i.e. the [a b c] in (fn [a b c])."
+                        Bind?s: Does said token coorespond to a symbol binding, i.e. the [a b c] in (fn [a b c]).
+   This function was judged to not belong in textparse as the tokens are just a guide to a flattened tree."
   (let [lo (symbol "(") lc (symbol ")") vo (symbol "[") vc (symbol "]")
         mo (symbol "{") mc (symbol "}") so (symbol "#{") sc (symbol "}")
         let-set #{'let `let 'let*} fn-set #{'fn 'fn* `fn 'defn `defn}
@@ -81,7 +85,8 @@
       [[code] [false]])))
 
 (defn unbinds [tokens bind?s]
-  "Unbinds are at closing brackets. Nil when nothing is unbound."
+  "Unbinds are at closing brackets. Nil when nothing is unbound.
+   This function needs flat-tokenize-mark to be useful."
   (let [lo (symbol "(") lc (symbol ")") mo (symbol "{")
         vo (symbol "[") vc (symbol "]") mc (symbol "}")
         so (symbol "#{") sc (symbol "}") n (count tokens) ]
@@ -99,6 +104,33 @@
             (if bind? (assoc binds-at-lev (if fn-name? (inc lev) lev)
                         (conj (if bl bl #{}) bind?)) binds-at-lev)))))))
 
+(defn unflat [tokens]
+  "Un-flattens the tokens. This function needs flat-tokenize-mark to be useful."
+  (let [n (count tokens) lo (symbol "(") lc (symbol ")")
+        vo (symbol "[") vc (symbol "]") mo (symbol "{")
+        so (symbol "#{") sc (symbol "}") mc (symbol "}")]
+    (loop [nested-forms {} lev 0 opening-toks [] ix 0]
+      (if (= ix n) (first (get nested-forms -1)) ; nested-forms is smaller and smaller as we go from outer to inner forms.
+        (let [tok (nth tokens ix)]
+          (cond (or (= tok lo) (= tok vo) (= tok mo) (= tok so)) ; opening
+            (recur (assoc nested-forms lev []) ; start new vector.
+              (inc lev) (assoc opening-toks lev tok) (inc ix))
+            (or (= tok lc) (= tok vc) (= tok mc) (= tok sc)) ; closing
+            (let [open (nth opening-toks (dec lev))
+                  formv (get nested-forms (dec lev))
+                  formx (cond (= open lo) (apply list formv)
+                          (= open vo) formv
+                          (= open mo) (apply hash-map formv)
+                          (= open so) (set formv))]
+              (recur (assoc (assoc nested-forms (dec lev) []) (- lev 2)
+                       (conj (get nested-forms (- lev 2)) formx))
+                (dec lev) opening-toks (inc ix)))
+            :else ; leaf forms.
+            (recur (assoc nested-forms (dec lev) (conj (get nested-forms (dec lev)) tok))
+              lev opening-toks (inc ix))))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;; Symbol substitution ;;;;;;;;;;;;;;;;;;;;
+
 (defn clean-sym [sym]
   "Clojure's singleton nondeterministic symbol generation definitly makes macros easier, but no one says it is easy to read.
    Symbols are guarenteed not to end in a number; this is so that
@@ -115,6 +147,7 @@
         sclean (str sclean)
         nc (count sclean)]
     (symbol (if (num? (last sclean)) (str sclean "$") sclean))))
+
 (defn deshadow-sym [sym n-uses]
   "Nice-looking removal of shadows."
   (symbol (cond (= n-uses 0) sym
@@ -175,31 +208,6 @@
                               (get replace-map tok))] (assoc toks ix tok1) toks)
               bounds replace-map clean2count)))))))
 
-(defn unflat [tokens]
-  "Un-flattens the collections."
-  (let [n (count tokens) lo (symbol "(") lc (symbol ")")
-        vo (symbol "[") vc (symbol "]") mo (symbol "{")
-        so (symbol "#{") sc (symbol "}") mc (symbol "}")]
-    (loop [nested-forms {} lev 0 opening-toks [] ix 0]
-      (if (= ix n) (first (get nested-forms -1)) ; nested-forms is smaller and smaller as we go from outer to inner forms.
-        (let [tok (nth tokens ix)]
-          (cond (or (= tok lo) (= tok vo) (= tok mo) (= tok so)) ; opening
-            (recur (assoc nested-forms lev []) ; start new vector.
-              (inc lev) (assoc opening-toks lev tok) (inc ix))
-            (or (= tok lc) (= tok vc) (= tok mc) (= tok sc)) ; closing
-            (let [open (nth opening-toks (dec lev))
-                  formv (get nested-forms (dec lev))
-                  formx (cond (= open lo) (apply list formv)
-                          (= open vo) formv
-                          (= open mo) (apply hash-map formv)
-                          (= open so) (set formv))]
-              (recur (assoc (assoc nested-forms (dec lev) []) (- lev 2)
-                       (conj (get nested-forms (- lev 2)) formx))
-                (dec lev) opening-toks (inc ix)))
-            :else ; leaf forms.
-            (recur (assoc nested-forms (dec lev) (conj (get nested-forms (dec lev)) tok))
-              lev opening-toks (inc ix))))))))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;; Main API functions ;;;;;;;;;;;;;;;;;;;;
 
 (defn deshadow-qual [ns-sym code & local-sym-modify-f]
@@ -245,7 +253,7 @@
   (let [form-swap (let-swap code)
         tb (flat-tokenize-mark form-swap) tokens (first tb) bind?s (second tb)
         ixs (filterv #(nth bind?s %) (range (count bind?s)))]
-   (mapv #(nth tokens %) ixs)))
+   (filterv #(not (textparse/qual? %)) (mapv #(nth tokens %) ixs))))
 
 (defn unique-locals? [code & assert?]
   "Are all local symbols unique?"
