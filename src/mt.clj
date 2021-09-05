@@ -1,7 +1,7 @@
 ; MT =  Meta. Functions that work with metadata.
 ; Takes priority above t for where fns go.
 
-(ns mt (:require [t]))
+(ns mt (:require [clojure.walk :as walk] [t]))
 
 (defn keep-meta [x f & args]
   "Applies f w/o affecting meta. Throws an error if x had meta and (f x) can't hold meta."
@@ -52,3 +52,15 @@
   "Pathed post walk, calls (f path subform). Not lazy.
    Preserves metadata, unless f destroys metadata."
   (_pmwalk f [] x))
+
+(defn m-unpack [x]
+  "Unpacks metadata with (^ meta-data bar), ^ is a symbol.
+   Only unpacks data which has metadata. This fn is most useful for reporting without needing *print-meta*."
+  (walk/prewalk #(if-let [m (meta %)]
+                   (let [no-meta (with-meta % nil)]
+                     (list (symbol "^") m no-meta)) %) x))
+
+(defn m-pack [x]
+  "Packs metadata, undoing the effect of m-unpack."
+  (walk/prewalk #(if (and (list? %) (= (first %) (symbol "^")))
+                   (with-meta (c/third %) (second %)) %) x))

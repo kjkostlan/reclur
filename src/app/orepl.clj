@@ -140,6 +140,8 @@
     (let [txt (rtext/rendered-string (get-in s [:components repl-k]))
           new-ns-at (atom r-ns)
           result (get-repl-result s repl-k txt new-ns-at)]
+      (if (string/includes? txt "*print-meta*")
+        (print "*print-meta* does not work from the repl, use mt/m-unpack instead."))
       (if (:full-state-run? result) (:value result) ;The repl code was a fn that ran on s and returned a modified s.
         (let [repl (get-in s [:components repl-k])
               repl1 (-> (assoc repl :result result :view-path []) (show-result)
