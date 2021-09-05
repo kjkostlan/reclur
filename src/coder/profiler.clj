@@ -38,7 +38,7 @@
 
 (defmacro with-err-str ;tupelo.core
   "Evaluates exprs in a context in which *err* is bound to a fresh
-  StringWriter.  Returns the string created by any nested printing
+  StringWriter. Returns the string created by any nested printing
   calls."
   [& body]
   `(let [s# (new java.io.StringWriter)]
@@ -55,7 +55,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Paths in the code;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn interest-paths [defn-code-ex]
-  "Not the first element of lists."
+  "Not the first element of lists. Code must be expanded with pathedmexp or macroexpand-all."
   (let [phs (t/paths defn-code-ex)
         phs1 (filterv #(let [x0 (c/cget defn-code-ex (first %))
                              ;inside-outer-fn? (and (coll? x0) (= (first x0) 'fn*))
@@ -65,7 +65,7 @@
 
 (defn forbidden-paths [code-ex]
   "Paths that can't be logged. For example, the [foo bar] in (fn [foo bar]).
-   Convention: Assume 'fn isn't overloaded."
+   Convention: Assume 'fn isn't overloaded. Code must be expanded with pathedmexp or macroexpand-all."
   (let [prepends (fn [k phs] (mapv #(c/vcat [k] %) phs))
         vmapv (fn [f & args] (apply c/vcat (apply mapv f args)))]
     (into [] (sort
@@ -103,8 +103,8 @@
           :else [])))))
 
 (defn alternative-paths [code-ex forbidden]
-  "Map from forbidden paths to equivelent paths. Exists for non-special symbols.
-   Relies on sunshine's deobfuscation."
+  "Map from forbidden paths to equivelent, allowed paths. Some paths cannot be remapped.
+   Code must be expanded with pathedmexp or macroexpand-all."
   (let [forbidden-set (set forbidden)
         obs (mapv #(t/cget-in code-ex %) forbidden)
         paths (t/paths code-ex)
@@ -132,21 +132,19 @@
     (select-keys bad2good
       (filterv #(get bad2good %) forbidden))))
 
-(defn path-anal [code & include-code-ex?]
-  "Combines various path functions."
+(defn unexpanded-pathmap [code]
+  "Map from path of interest to the path logged. When possible these paths will be the same.
+   This is on the unexpanded code."
   (let [code-ex (pathedmexp/pmexpand code)
-        ipaths (set (interest-paths code-ex))
+        ipaths-ex (set (interest-paths code-ex))
         no-paths-ex (set (forbidden-paths code-ex))
-        log-paths-ex (set/difference ipaths no-paths-ex)
-        log-paths (_path-remap code log-paths-ex)
-        _ (if (empty? (set/difference log-paths (set (t/paths code)))) "Good"
-            (throw (Exception. "Log-paths point to non-existant code paths.")))
-        _ftmp #(if include-code-ex? (assoc % :code-ex code-ex) %)
-        apaths (alternative-paths code-ex no-paths-ex)]
-    (_ftmp {:ipaths-ex ipaths :notpaths-ex no-paths-ex
-            :lpaths log-paths :lpaths-ex log-paths-ex
-            :bad2good apaths
-            :good2bad (set/map-invert apaths)})))
+        yes-paths-ex (set/difference ipaths-ex no-paths-ex)
+        apaths-ex (alternative-paths code-ex no-paths-ex)
+        pathmap-ex (merge (zipmap yes-paths-ex yes-paths-ex) apaths-ex)
+        expanded2unexpanded (pathedmexp/inv-path-map code)
+        e2uf #(get expanded2unexpanded %)
+        path-map (zipmap (mapv e2uf (keys pathmap-ex)) (mapv e2uf (vals pathmap-ex)))]
+    (select-keys path-map (filter #(and % (get path-map %)) (keys path-map)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Runtime recording;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -168,17 +166,17 @@
         err?s log-syms log-pathss)
       logss)))
 
-(defn _log-organize [logs good2bad-pathss]
-  "Returns map from log path to vector of log :values with said path. good2bad-pathss can be empty.
-   If logs is sorted in time it will preserve within-path sorting."
+(defn _log-organize [logs path-map-map]
+  "Returns map from log path to vector of log :values with said path.
+   path-map-map is a map of maps from bad to good paths."
   (reduce (fn [acc log]
                   (let [ph (:path log) val (:value log)
                         logf-sym (first ph) path-in-code (into [] (rest ph))
-                        good2bad (get good2bad-pathss logf-sym)
-                        acc1 (if-let [code-ph-bad (get good2bad path-in-code)]
-                               (c/entry-conj acc (c/vcat [logf-sym] code-ph-bad) val) acc)]
-                    (c/entry-conj acc1 ph val)))
-          {} logs))
+                        path-map (get path-map-map logf-sym) ; All paths => Cooresponding good path.
+                        equivalent-paths (filterv #(= (get path-map %) path-in-code) (keys path-map))
+
+                        eq-sympaths (mapv #(c/vcat [logf-sym] %) equivalent-paths)]
+                    (reduce #(c/entry-conj %1 %2 val) acc eq-sympaths))) {} logs))
 
 (defn deep-profiles [sym-qual runs]
   "Runs sym-qual on each of runs. Each run is a vector of arguments to the fn bound to sym-qual.
@@ -197,16 +195,12 @@
     (if (string? vanilla) vanilla
       (let [;_ (println "Deep profile covering:" (mapv textparse/unqual log-syms))
             codes (mapv langs/var-source log-syms)
-            anals (mapv path-anal codes)
+            path-maps (mapv unexpanded-pathmap codes)
+            log-pathss (mapv #(into [] (set (vals %))) path-maps) ; Log the UNexpanded code.
 
-            pathss-ex (mapv :ipaths-ex anals)
-            bad-pathss-ex (mapv :notpaths-ex anals)
-            log-pathss-ex (mapv :lpaths-ex anals)
-            log-pathss (mapv :lpaths anals) ; Log the UNexpanded code.
-
-            logs (apply c/vcat (_logss-with-debug! log-syms log-pathss sym-qual runs))
-            good2bad-pathss (zipmap log-syms (mapv :good2bad anals))]
-        (_log-organize logs good2bad-pathss)))))
+            path-map-map (zipmap log-syms path-maps)
+            logs (apply c/vcat (_logss-with-debug! log-syms log-pathss sym-qual runs))]
+        (_log-organize logs path-map-map)))))
 
 (defn food-profiles [sym-qual runs]
   "{fn-sym}[chronological][which-arg-ix] => value of argument.
@@ -271,7 +265,16 @@
                          (mapv #(mapv :value %) logssv)))
         (vals fdprofile1)))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Useful for type deducing?;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Processing the profile;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn pack [profile]
+  "Combines like symbols into thier own maps, making a two-level map."
+  (let [syms (set (map first (keys profile)))]
+    (reduce (fn [acc kv]
+              (let [k (first kv) v (second kv)
+                    k1 (into [] (rest k)) sym (first k)]
+                (update acc sym #(assoc % k1 v))))
+      (zipmap syms (repeat {})) profile)))
 
 (defn inputss-to-fns [profile]
   "Map from sym-qual to vector of vector of args

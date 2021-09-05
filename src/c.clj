@@ -205,7 +205,7 @@
 (def vconcat vcat)
 
 (defn cmap [f x & xs]
-  "cmap treats map entires as [k v] vectors, passing them into f."
+  "cmap treats map entries as [k v] vectors, passing them into f."
   (with-meta
     (cond (nil? x) ()
       (sequential? x)
