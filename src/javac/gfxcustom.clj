@@ -11,7 +11,7 @@
     [javax.imageio ImageIO])
   (:require [clojure.string :as string]
     [javac.file :as jfile]
-    [layout.xform :as xform]
+    [layout.spatial.xform :as xform]
     [coder.unerror :as unerror]
     [globals] [c]))
 

@@ -1,31 +1,35 @@
 ; Teleport mode: adding stuff copies the screen but with the new component replacing
 ; the type of the old component, if necessary.
-(ns layout.lmodes.teleport
-  (:require [np]
-    [layout.layoutcore :as lay]
-    [layout.xform :as xform]
-    [layout.lmodes.stack :as stack]
-    [layout.selectmovesize :as selectmovesize]))
+(ns layout.spatial.lmodes.teleport
+  (:require [clojure.string :as string]
+    [np]
+    [layout.spatial.xform :as xform]
+    [layout.spatial.collide :as collide]
+    [layout.spatial.lmodes.stack :as stack]))
+
+(defn derive-key [kwd] "We are making a copy."
+  (let [txt (reduce #(string/replace %1 %2 "") (str kwd) (conj (mapv str "0123456789:") "copy"))]
+      (keyword (gensym (str txt "Copy")))))
 
 (defn add-component [s comp kwd]
   "Uses s to position the new comp."
-  (let [ty (:type comp) k-screen (lay/most-on-screen s #(= (:type %) ty))]
+  (let [ty (:type comp) k-screen (collide/most-on-screen s #(= (:type %) ty))]
     (if k-screen
       (let [; Everything else on the screen.
-            screen-xxyy (lay/visible-xxyy (:camera s))
-            screen-kys (filterv #(apply lay/overlap? screen-xxyy (lay/xxyy (get-in s [:components %])))
+            screen-xxyy (xform/visible-xxyy (:camera s))
+            screen-kys (filterv #(apply collide/overlap? screen-xxyy (xform/box-xxyy (get-in s [:components %])))
                           (keys (:components s)))
             screen-kys0 (disj (set screen-kys) k-screen)
 
-            all-comp-xxyys (mapv lay/xxyy (vals (:components s)))
-            total-xxyy (apply lay/union-xxyy [0 0 0 0] all-comp-xxyys)
+            all-comp-xxyys (mapv xform/box-xxyy (vals (:components s)))
+            total-xxyy (apply collide/union-xxyy [0 0 0 0] all-comp-xxyys)
             search-xxyy (mapv + [-1000 1000 -1000 1000] total-xxyy)
             search-len (+ (- (second search-xxyy) (first search-xxyy)) (- (nth search-xxyy 3) (nth search-xxyy 2)))
 
             resolution 50
-            xs-ys-ds (lay/boxed-density-measure all-comp-xxyys search-xxyy resolution)
+            xs-ys-ds (collide/boxed-density-measure all-comp-xxyys search-xxyy resolution)
             pnorm 2.0
-            dist-penalties (mapv #(/ (lay/pnorm-dist 0.0 %1 0.0 %2 pnorm) search-len 5.0)
+            dist-penalties (mapv #(/ (np/pnorm-dist 0.0 %1 0.0 %2 pnorm) search-len 5.0)
                              (first xs-ys-ds) (second xs-ys-ds))
             ix (np/argmin (mapv + dist-penalties (last xs-ys-ds)))
 
@@ -39,8 +43,8 @@
             move-comp (fn [c] (update c :position #(mapv + % [move-x move-y])))
             camera1 (xform/xx (xform/x-1 [move-x move-y 1.0 1.0]) (:camera s)) ;xforms are [x y scalex scaley]
 
-            z1 (inc (lay/max-z s))
-            comp-copies (zipmap (mapv selectmovesize/derive-key screen-kys0)
+            z1 (inc (collide/max-z s))
+            comp-copies (zipmap (mapv derive-key screen-kys0)
                           (mapv #(assoc (move-comp (get (:components s) %1)) :z (+ z1 %2)) screen-kys0 (range)))
             ghost (move-comp (get (:components s) k-screen))
             comp1 (assoc (merge comp (select-keys ghost [:position :size])) :z z1)]

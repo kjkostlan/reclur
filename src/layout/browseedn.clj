@@ -65,7 +65,8 @@
                        (let [ellipse (if (= n "???") "(???)"
                                         (str "<" n "-" (* n-used uno-dos) ">"))
                              midpiece [(str (if from-head? "..." "") ellipse (if from-tail? "..." ""))]
-                             midpiece (if (map? x) [(conj midpiece (to-sym "<kys>"))] midpiece)]
+                             midpiece (mapv symbol midpiece)
+                             midpiece (if (map? x) [(conj midpiece (symbol "<kys>"))] midpiece)]
                          (concat acc-head midpiece acc-tail)))]
         (cond (and from-head? from-tail? (= (* n-used uno-dos) (dec n)))
           (mk2sym (_as-counted (concat acc-head [(get-h)] acc-tail) x))

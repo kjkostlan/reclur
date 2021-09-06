@@ -1,10 +1,14 @@
-; Set and adjust layouts.
-(ns layout.layouts
-  (:require
-    [layout.lmodes.stack :as stack]
-    [layout.lmodes.dogpile :as dogpile]
-    [layout.lmodes.split :as split]
-    [layout.lmodes.teleport :as teleport]))
+; Tools that are useful for making layouts.
+(ns layout.spatial.layoutcore
+  (:require [globals]
+    [layout.spatial.xform :as xform]
+    [layout.spatial.lmodes.stack :as stack]
+    [layout.spatial.lmodes.dogpile :as dogpile]
+    [layout.spatial.lmodes.split :as split]
+    [layout.spatial.lmodes.teleport :as teleport]
+    [c] [np]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Library of layouts ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def all-layouts [(stack/layout) (dogpile/layout) (split/layout) (teleport/layout)])
 (defn default-lmode [] (stack/layout))

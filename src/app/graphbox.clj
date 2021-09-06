@@ -4,7 +4,7 @@
     [coder.textparse :as textparse]
     [coder.cbase :as cbase] [coder.cnav :as cnav] [coder.crosslang.langs :as langs]
     [app.orepl :as orepl] [app.hintbox :as hintbox] [app.codebox :as codebox]
-    [layout.selectmovesize :as selectmovesize]
+    [layout.spatial.selectmovesize :as selectmovesize]
     [app.fbrowser :as fbrowser] [app.rtext :as rtext]))
 
 

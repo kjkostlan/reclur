@@ -1,19 +1,20 @@
 ; Dogpile mode: adding stuff finds the least compressed space and goes there.
-(ns layout.lmodes.dogpile
+(ns layout.spatial.lmodes.dogpile
   (:require [np]
-    [layout.layoutcore :as lay]
-    [layout.lmodes.stack :as stack]))
+    [layout.spatial.lmodes.stack :as stack]
+    [layout.spatial.xform :as xform]
+    [layout.spatial.collide :as collide]))
 
 (defn add-component [s comp kwd]
   "Uses s to position the new comp."
-  (let [ty (:type comp) k-screen (lay/most-on-screen s #(= (:type %) ty))
+  (let [ty (:type comp) k-screen (collide/most-on-screen s #(= (:type %) ty))
         halfwidth 0.15
-        cam-xxyy (lay/visible-xxyy (:camera s))
-        query-range-xxyy (lay/scale-xxyy cam-xxyy (- 1.0 (* halfwidth 2.0))) ; smaller so comp is 100% on screen.
+        cam-xxyy (xform/visible-xxyy (:camera s))
+        query-range-xxyy (xform/scale-xxyy cam-xxyy (- 1.0 (* halfwidth 2.0))) ; smaller so comp is 100% on screen.
 
-        xxyys (mapv #(lay/xxyy %) (vals (:components s)))
+        xxyys (mapv #(xform/box-xxyy %) (vals (:components s)))
         resolution 20
-        xs-ys-ds (lay/boxed-density-measure xxyys query-range-xxyy resolution)
+        xs-ys-ds (collide/boxed-density-measure xxyys query-range-xxyy resolution)
         ix (np/argmin (last xs-ys-ds))
         center-x (nth (first xs-ys-ds) ix)
         center-y (nth (second xs-ys-ds) ix)
@@ -23,7 +24,7 @@
 
         xxyy1 [(- center-x (* halfwidth sx)) (+ center-x (* halfwidth sx))
                (- center-y (* halfwidth sy)) (+ center-y (* halfwidth sy))]
-        comp1 (assoc (lay/set-xxyy comp xxyy1) :z (inc (lay/max-z s)))]
+        comp1 (assoc (xform/set-xxyy comp xxyy1) :z (inc (collide/max-z s)))]
     (if k-screen
       (assoc-in s [:components kwd] comp1)
       (stack/add-component s comp1 kwd)))) ; New type of comp => no need to dogpile.

@@ -1,25 +1,30 @@
 ; Handles selection (single or multible), moving and resizing.
 
-(ns layout.selectmovesize
-  (:require [layout.xform :as xform]
+(ns layout.spatial.selectmovesize
+  (:require [globals] 
+    [layout.spatial.xform :as xform]
+    [layout.spatial.collide :as collide]
+    [layout.spatial.lmodes.stack :as lstack]
+    [layout.spatial.lmodes.teleport :as lteleport]
+    [layout.keyanal :as ka] [layout.mouseanal :as ma]
     [app.multicomp :as multicomp]
     [clojure.string :as string]
-    [layout.keyanal :as ka] [layout.mouseanal :as ma]
-    [layout.layoutcore :as layoutcore]
-    [clojure.set :as set]
-    [globals]))
-
-;;;;;;;;;;; Support functions ;;;;;;;;;;;
+    [clojure.set :as set]))
 
 (def ^:dynamic *handle-pixels* 25)
+(def ^:dynamic *overlap-frac-selectionbox* 0.3)
+(def ^:dynamic *instazoom-tol* 0.333)
+
+;;;;;;;;;;; Support functions ;;;;;;;;;;;
 
 (defn is-sh? [] (:ShiftDown @globals/external-state-atom))
 (defn is-alt? [] (:AltDown @globals/external-state-atom))
 (defn is-mouse? [] (let [ext @globals/external-state-atom]
                      (or (:Button0 ext) (:Button1 ext) (:Button2 ext))))
 
-(defn derive-key [kwd]
-  (keyword (gensym 'copy)))
+(defn order [x0 x1 y0 y1]
+  (let [v1 (if (<= x0 x1) [x0 x1] [x1 x0])
+        v2 (if (<= y0 y1) [y0 y1] [y1 y0])] (into [] (concat v1 v2))))
 
 (defn add-defaults [tool-state] ; nil check. ;TODO: code can be simplified with collections.
   (let [addy (fn [def x] (reduce #(if (get x %2) (assoc %1 %2 (get x %2)) %1) def (keys x)))
@@ -31,78 +36,65 @@
 (defn sts [s ts] (assoc-in s [:tool-state :selectmovesize] ts))
 (defn uts [s f] (update-in s [:tool-state :selectmovesize] f))
 
-;;;;;;;;;;; Collision detection ;;;;;;;;;;;
-
-(defn order [x0 x1 y0 y1]
-  (let [v1 (if (<= x0 x1) [x0 x1] [x1 x0])
-        v2 (if (<= y0 y1) [y0 y1] [y1 y0])] (into [] (concat v1 v2))))
-
-(defn comp-xxyy [comp]
-  (let [p (:position comp) sz (:size comp)]
-    [(p 0) (+ (p 0) (sz 0)) (p 1) (+ (p 1) (sz 1))]))
-
-(defn hit-rect? [x y x0 x1 y0 y1]
-  (and (>= x x0) (<= x x1) (>= y y0) (<= y y1)))
-
-(defn engulfs? [xxyy-big xxyy-small]
-  (and (< (xxyy-big 0) (xxyy-small 0)) (> (xxyy-big 1) (xxyy-small 1))
-    (< (xxyy-big 2) (xxyy-small 2)) (> (xxyy-big 3) (xxyy-small 3))))
-
-(defn xxyy-union [& xxyys]
-  "Similar to bounding boxes of compund objects in physics engines."
-  [(apply min (mapv #(nth % 0) xxyys))
-   (apply max (mapv #(nth % 1) xxyys))
-   (apply min (mapv #(nth % 2) xxyys))
-   (apply max (mapv #(nth % 3) xxyys))])
-
-(defn bounding-xxyy [comps]
-  (if (= (count comps) 0) [-1e100 -1e100 -1e100 -1e100]
-    (apply xxyy-union (mapv comp-xxyy comps))))
-
-(defn click? [x y comp]
-  (if (or (nil? x) (nil? y)) (throw (Exception. "Nil coords")))
-  (let [x0 (first (:position comp))
-        y0 (second (:position comp))
-        sx (first (:size comp))
-        sy (second (:size comp))]
-    (and (>= x x0) (>= y y0) (<= x (+ x0 sx)) (<= y (+ y0 sy)))))
-
-(defn unders-cursor [x y comps]
-  (filterv #(click? x y (get comps %)) (keys comps)))
-
-(defn under-cursor [x y comps]
-  "Returns the key to the highest z-valued comp under the mouse, nil if nothing is under the mouse."
-  (let [clickks (unders-cursor x y comps)
-        clickzs (mapv #(if-let [z (:z (get comps %))] z 0) clickks)]
-    (second (last (sort-by first (mapv vector clickzs clickks))))))
-
-(defn click-test [mevt-c ts zoom]
-  "Which part of the selection rectangle we are in."
-  (let [x (:X mevt-c) y (:Y mevt-c) sz (/ *handle-pixels* zoom)
-        xxyy (apply order (:xxyy ts))
-        x0 (first xxyy) x1 (second xxyy) y0 (nth xxyy 2) y1 (nth xxyy 3)]
-    (cond
-      (hit-rect? x y x0 (+ x0 sz) y0 (+ y0 sz)) :corner-nw
-      (hit-rect? x y (- x1 sz) x1 y0 (+ y0 sz)) :corner-ne
-      (hit-rect? x y (- x1 sz) x1 (- y1 sz) y1) :corner-se
-      (hit-rect? x y x0 (+ x0 sz) (- y1 sz) y1) :corner-sw
-      (hit-rect? x y x0 x1 y0 y1) :main-rect
-      :else :miss)))
-
 (defn _sel-hit? [x0 y0 x1 y1 comp]
   (let [cx0 (first (:position comp))
         cy0 (second (:position comp))
         cx1 (+ cx0 (first (:size comp)))
         cy1 (+ cy0 (second (:size comp)))
-        overlap-frac 0.3] ; needed to trigger a selection.
+        overlap-frac *overlap-frac-selectionbox*] ; needed to trigger a selection.
     (and (<= x0 (+ (* cx0 overlap-frac) (* cx1 (- 1 overlap-frac))))
       (>= x1 (+ (* cx1 overlap-frac) (* cx0 (- 1 overlap-frac))))
       (<= y0 (+ (* cy0 overlap-frac) (* cy1 (- 1 overlap-frac))))
       (>= y1 (+ (* cy1 overlap-frac) (* cy0 (- 1 overlap-frac)))))))
-(defn selected-comp-keys [comps x0 x1 y0 y1]
+(defn trapped-box-keys [comps x0 x1 y0 y1]
   (let [xxyy (order x0 x1 y0 y1)
         x0 (first xxyy) x1 (second xxyy) y0 (nth xxyy 2) y1 (nth xxyy 3)]
     (filterv #(_sel-hit? x0 y0 x1 y1 (get comps %)) (keys comps))))
+
+(defn selection-rect-click-test [mevt-c ts zoom]
+  "Which part of the selection rectangle we are in."
+  (let [x (:X mevt-c) y (:Y mevt-c) sz (/ *handle-pixels* zoom)
+        xxyy (apply order (:xxyy ts))
+        x0 (first xxyy) x1 (second xxyy) y0 (nth xxyy 2) y1 (nth xxyy 3)]
+    (cond
+      (collide/hit-rect? x y x0 (+ x0 sz) y0 (+ y0 sz)) :corner-nw
+      (collide/hit-rect? x y (- x1 sz) x1 y0 (+ y0 sz)) :corner-ne
+      (collide/hit-rect? x y (- x1 sz) x1 (- y1 sz) y1) :corner-se
+      (collide/hit-rect? x y x0 (+ x0 sz) (- y1 sz) y1) :corner-sw
+      (collide/hit-rect? x y x0 x1 y0 y1) :main-rect
+      :else :miss)))
+
+;;;;;;;;;;;;; Moving components around ;;;;;;;;;;;;;;;
+
+(defn _apply-xform [comp xform] "TODO: rename x-box and put into xform"
+  (let [not1? #(or (< % 0.99999) (> % 1.00001)) ; don't let rounding errors force re-draws.
+        resize? (or (not1? (nth xform 2)) (not1? (nth xform 3)))
+        comp1 (if resize? (update comp :size #(vector (max 1e-6 (* (first %) (nth xform 2))) (max 1e-6 (* (second %) (nth xform 3))))) comp)]
+    (update comp1 :position #(apply xform/xv xform %))))
+(defn apply-xform [comps keys xform] "TODO: rename as apply-xforms"
+  (reduce (fn [acc k] (update acc k #(_apply-xform % xform))) comps keys))
+
+(defn dont-move [box cam0 cam1]
+  "Keeps the screen-position the same, by changing comp's position."
+  (let [u-xxyy (xform/unitscreen-xxyy (xform/visible-xxyy cam0) (xform/box-xxyy box))]
+    (lstack/set-unitscreen-xxyy box (xform/visible-xxyy cam1) u-xxyy)))
+
+(defn fit-to-screen [s comp]
+  "Moves the comp, and resizes it if necessary, to make it fit in the screen."
+  (let [screen-pix (xform/screen-pixels)
+        i-cam (xform/x-1 (:camera s))
+        corner-nw (xform/xv i-cam 0 0) corner-se (apply xform/xv i-cam screen-pix)
+        pos (:position comp) sz (:size comp)
+        sz (mapv min sz (mapv - corner-se corner-nw))
+        pos (mapv max pos corner-nw)
+        pos (mapv min pos (mapv - corner-se sz))]
+    (assoc comp :position pos :size sz)))
+
+(defn unique-z [components]
+  "Assigns each component a unique z-value."
+  (loop [acc (zipmap (keys components) (mapv #(if (:z %) % (assoc % :z 1)) (vals components)))]
+    (if (= (count (apply hash-set (mapv :z (vals acc)))) (count acc)) acc
+      (recur (zipmap (keys acc) (mapv (fn [c] (update c :z #(+ (* % (+ 1 (* (Math/random) 1e-10))) 1e-100))) (vals acc)))))))
 
 ;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;
 
@@ -131,16 +123,6 @@
     (= mode :corner-sw) [(+ bx0 dmx) bx1 by0 (+ by1 dmy)]
     :else [bx0 bx1 by0 by1]))
 
-(defn _apply-xform [comp xform]
-  (let [not1? #(or (< % 0.99999) (> % 1.00001)) ; don't let rounding errors force re-draws.
-        resize? (or (not1? (nth xform 2)) (not1? (nth xform 3)))
-        comp1 (if resize? (update comp :size #(vector (max 1e-6 (* (first %) (nth xform 2))) (max 1e-6 (* (second %) (nth xform 3))))) comp)]
-    (update comp1 :position #(apply xform/xv xform %))))
-(defn apply-xform [comps keys xform]
-  (reduce (fn [acc k] (update acc k #(_apply-xform % xform))) comps keys))
-
-;;;;;;;;;;;;; Specific UI functions ;;;;;;;;;;;;;;;
-
 (defn seltool-render [s]
   (let [ts (gts s) zoom (last (:camera s))
         _ (if (< zoom 1e-10) (throw (Exception. "The zoom got set to zero somehow.")))
@@ -150,13 +132,15 @@
     (if (and (or sh? alt?) (or (not mouse?) (:insta-drag? ts)))
       [] (apply draw-box-handle (/ *handle-pixels* zoom) (:corner-mode s) (:xxyy ts)))))
 
+;;;;;;;;;;;;; Specific UI functions ;;;;;;;;;;;;;;;
+
 (defn seltool-mousepress [mevt-c s]
   (let [ts (gts s) x (:X mevt-c) y (:Y mevt-c)
         sh? (:ShiftDown mevt-c) ; shift adds to the selection.
         alt? (:AltDown mevt-c) ; alt subtracts
-        comps (:components s) target (click-test mevt-c ts (last (:camera s)))
+        comps (:components s) target (selection-rect-click-test mevt-c ts (last (:camera s)))
         target (if (or sh? alt?) :miss target) ; shift/alt means don't drag the selection box.
-        khit (under-cursor x y comps)
+        khit (collide/under-cursor x y comps)
         insta-drag? (and (= target :miss) khit)
         ts (assoc ts :fresh-press? true :insta-drag? insta-drag?
              :corner-mode (if (and insta-drag? (not sh?) (not alt?)) :main-rect target))]
@@ -177,9 +161,9 @@
              sel-kys (if (= (:corner-mode ts) :miss)
                         ((if (is-alt?) set/difference set/union)
                           (set (:selected-comp-keys s))
-                          (set (apply selected-comp-keys (:components s) xxyy-loose)))
+                          (set (apply trapped-box-keys (:components s) xxyy-loose)))
                          (set (:selected-comp-keys s)))
-             xxyy-tight (bounding-xxyy (mapv #(get (:components s) %) sel-kys))
+             xxyy-tight (collide/bounding-xxyy (mapv #(get (:components s) %) sel-kys))
              ts (assoc ts :fresh-press? false :xxyy xxyy-tight :corner-mode :miss)]
          (assoc (sts s ts) :selected-comp-keys sel-kys))
        s)))
@@ -190,10 +174,10 @@
         mx (:X mevt-c) my (:Y mevt-c) target0 (:corner-mode ts)]
     (if (= target0 :miss)
       (cond (and (is-sh?) insta-drag?)
-        (let [khit (under-cursor mx my (:components s))]
+        (let [khit (collide/under-cursor mx my (:components s))]
           (if khit (update s :selected-comp-keys #(conj % khit)) s))
         (and (is-alt?) insta-drag?)
-        (let [khit (under-cursor mx my (:components s))]
+        (let [khit (collide/under-cursor mx my (:components s))]
           (if khit (update s :selected-comp-keys #(disj % khit)) s))
         :else (sts s (update ts :xxyy #(assoc % 1 mx 3 my)))) ; creating a rectangle, no selection.
       (let [dx (- mx mx1) dy (- my my1)
@@ -218,7 +202,7 @@
             dy (- my (:copy-my ts))
             raise-z (inc (- (apply max (mapv :z (vals (:components s))))
                             (apply min (mapv :z (vals (:copied-comps ts))))))
-            comp-kys (mapv derive-key (keys (:copied-comps ts)))
+            comp-kys (mapv lteleport/derive-key (keys (:copied-comps ts)))
             comp-vals (mapv (fn [c] (update (update c :position #(vector (+ (first %) dx) (+ (second %) dy)))
                                       :z #(+ % raise-z)))
                         (vals (:copied-comps ts)))]
@@ -226,17 +210,6 @@
             #(merge % (zipmap comp-kys comp-vals)))
           (assoc ts :copied-comps (zipmap comp-kys (vals (:copied-comps ts))))))
       :else s)))
-
-(defn fit-to-screen [s comp]
-  "Moves the comp, and resizes it if necessary, to make it fit in the screen."
-(let [screen-pix (layoutcore/screen-pixels)
-      i-cam (xform/x-1 (:camera s))
-      corner-nw (xform/xv i-cam 0 0) corner-se (apply xform/xv i-cam screen-pix)
-      pos (:position comp) sz (:size comp)
-      sz (mapv min sz (mapv - corner-se corner-nw))
-      pos (mapv max pos corner-nw)
-      pos (mapv min pos (mapv - corner-se sz))]
-  (assoc comp :position pos :size sz)))
 
 ;(defn clear-selection [s] (assoc s :selected-comp-keys #{})) ; doesn't work.
 (defn clear-selection [s]
@@ -250,7 +223,7 @@
   (let [s (assoc-in s [:precompute :desync-safe-mod?] true)
         x (first (:mouse-pos-world s)) y (second (:mouse-pos-world s))
         comps (:components s)
-        kys (unders-cursor x y comps)
+        kys (collide/unders-cursor x y comps)
 
         zs (mapv #(double (if-let [z (:z (get comps %1))] z %2)) kys (range))
         min-z (apply min 1e100 zs)
@@ -280,7 +253,7 @@
   (let [dx (- (second target-xxyy) (first target-xxyy))
         dy (- (nth target-xxyy 3) (nth target-xxyy 2))
         r (* 0.5 (+ (- (nth target-xxyy 3) (nth target-xxyy 2)) (- (nth target-xxyy 1) (nth target-xxyy 0))))
-        tol 0.333
+        tol *instazoom-tol*
         if< #(if (< %1 %2) %1 0.0)
         pull (fn [sxxyy cxxyy tol-pix] ; returns [dx dx dy dy]
                (let [-x (max 0 (- (nth sxxyy 0) (nth cxxyy 0)))
@@ -291,65 +264,28 @@
                   (- (if< -y tol-pix)) (+ (if< +y tol-pix))]))
         max-pull (fn [sxxyy tol-pix]
                    (let [pulls (mapv #(pull sxxyy % tol-pix) comp-xxyys)]
-                     (apply xxyy-union pulls)))
+                     (apply collide/xxyy-union pulls)))
 
         the-pull (max-pull target-xxyy (* tol r))
         enclosing (mapv + target-xxyy the-pull [-1 1 -1 1])
-        xxyys-hot (filterv #(engulfs? enclosing %) comp-xxyys)]
-    (if (> (count xxyys-hot) 0) (apply xxyy-union xxyys-hot)
+        xxyys-hot (filterv #(collide/engulfs? enclosing %) comp-xxyys)]
+    (if (> (count xxyys-hot) 0) (apply collide/xxyy-union xxyys-hot)
       target-xxyy)))
 
-(defn xxyy2camera [xxyy screen-sz]
-  "screen-sz = (layoutcore/screen-pixels) usually.
-   Scales square so xxyy is the included bounds."
-  (let [scale-x (/ (first screen-sz) (- (nth xxyy 1) (nth xxyy 0)))
-        scale-y (/ (second screen-sz) (- (nth xxyy 3) (nth xxyy 2)))
-        sc (min scale-x scale-y)
-        sc-xform [0.0 0.0 sc sc]
-        mv-xform [(- (nth xxyy 0)) (- (nth xxyy 2)) 1.0 1.0]]
-    (xform/xx sc-xform mv-xform)))
-
 (defn insta-zoom [k-evt s]
-  (let [screen-sz (layoutcore/screen-pixels)
+  (let [screen-sz (xform/screen-pixels)
         srx (* (first screen-sz) 0.5) sry (* (second screen-sz) 0.5)
         target [(first (:mouse-pos-world s)) (second (:mouse-pos-world s))]
         target-xxyy [(- (target 0) (* 0.5 (first screen-sz)))
                      (+ (target 0) (* 0.5 (first screen-sz)))
                      (- (target 1) (* 0.5 (second screen-sz)))
                      (+ (target 1) (* 0.5 (second screen-sz)))]
-        comp-xxyys (mapv comp-xxyy (vals (:components s)))
+        comp-xxyys (mapv xform/box-xxyy (vals (:components s)))
         zoom-xxyy (insta-zoom-region target-xxyy comp-xxyys)
-        cam (xxyy2camera zoom-xxyy screen-sz)]
+        cam (xform/xxyy2camera zoom-xxyy screen-sz)]
     (assoc s :camera cam)))
 
-#_(defn insta-zoom [k-evt s]
-  (let [radius-range 1.75 ; for counting as "nearby".
-        screen-sz (layoutcore/screen-pixels)
-        srx (* (first screen-sz) 0.5) sry (* (second screen-sz) 0.5)
-        target [(first (:mouse-pos-world s)) (second (:mouse-pos-world s))]
-        target-xxyy [(- (target 0) (* srx radius-range))
-                     (+ (target 0) (* srx radius-range))
-                     (- (target 1) (* sry radius-range))
-                     (+ (target 1) (* sry radius-range))]
-
-        comp-xxyys (mapv comp-xxyy (vals (:components s)))
-
-        ; All nearby xxyys:
-        near-xxyys (filterv #(engulfs? target-xxyy %) comp-xxyys)
-
-        ; Bounding box thereof:
-        bound-xxyy [(apply min 1e10 (mapv first near-xxyys))
-                    (apply max -1e10 (mapv second near-xxyys))
-                    (apply min 1e10 (mapv #(nth % 2) near-xxyys))
-                    (apply max -1e10 (mapv #(nth % 3) near-xxyys))]
-
-        target1 [(+ (* (bound-xxyy 0) 0.5) (* (bound-xxyy 1) 0.5))
-                 (+ (* (bound-xxyy 2) 0.5) (* (bound-xxyy 3) 0.5))]
-        target1-corner [(- (target1 0) srx) (- (target1 1) sry)]]
-    (assoc s :camera [(- (target1-corner 0)) (- (target1-corner 1)) 1 1])))
-
 ;;;;;;;;;;; Major tools with multiple operating modes ;;;;;;;;;;;
-
 
 (defn get-selection-tool [] ; Inkscape-like selection tool.
   {:render seltool-render

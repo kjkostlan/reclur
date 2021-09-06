@@ -2,7 +2,6 @@
 (ns navigate.strfind
   (:require [clojure.string :as string] [clojure.set :as set] [clojure.pprint] [clojure.walk :as walk]
             [javac.file :as jfile]
-            [layout.layoutcore :as layoutcore]
             [app.rtext :as rtext]
             [app.multicomp :as multicomp]
             [app.fbrowser :as fbrowser]

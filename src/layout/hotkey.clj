@@ -2,7 +2,8 @@
 (ns layout.hotkey
   (:require
     [javac.warnbox :as warnbox]
-    [layout.layouts :as layouts]
+    [layout.spatial.layoutcore :as layoutcore]
+    [layout.spatial.selectmovesize :as selectmovesize]
     [app.orepl :as orepl]
     [app.hintbox :as hintbox]
     [app.graphbox :as graphbox]
@@ -13,7 +14,6 @@
     [javac.cpanel :as cpanel]
     [navigate.strfind :as strfind]
     [navigate.funcjump :as funcjump]
-    [layout.selectmovesize :as selectmovesize]
     [coder.logger :as logger]
     [coder.crosslang.langs :as langs]))
 
@@ -66,8 +66,8 @@
    "C-r" (fn [s] (do-to-selected-box s codebox/hint-sym-qual #{:codebox :orepl :siconsole})) ;Don't worry about having to type the whole symbol
    "C-S-r r r" #(if (warnbox/yes-no? "Relaunch app, losing any unsaved work?" false)
                   (do (future (eval 'core.launch-main-app!)) (throw (Exception. "This iteration is dead, reloading."))) %)
-   "C-l" (fn [s] (layouts/next-layout s))
-   "C-S-l" (fn [s] (layouts/prev-layout s))
+   "C-l" (fn [s] (layoutcore/next-layout s))
+   "C-S-l" (fn [s] (layoutcore/prev-layout s))
    "C-`" selectmovesize/swap-on-top
    "C-f" (fn [s] (strfind/add-search-box s))
    "C-p p" (fn [s] (orepl/log-and-toggle-viewlogbox s))

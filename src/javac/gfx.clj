@@ -27,7 +27,7 @@
     [java.awt.geom AffineTransform])
   (:require [clojure.set :as set] [clojure.string :as string]
     [crossplatform.cp :as cp]
-    [layout.xform :as xform]
+    [layout.spatial.xform :as xform]
     [javac.gfxcustom :as gfxcustom] [javac.thread :as jthread]))
 
 (def ^:dynamic *sprite-cache-ms* 500) ; render components as sprites when we aren't actively using them, unless the no-sprite flag is used.

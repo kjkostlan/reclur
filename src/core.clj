@@ -7,7 +7,6 @@
 ; Trying not to have too much component-specific code here, but the coupling is just so tight for the structural editor.
 
 (ns core
-  (:import [java.awt.image BufferedImage])
   (:require
     [clojure.string :as string]
     [clojure.set :as set]
@@ -16,7 +15,6 @@
     [javac.warnbox :as warnbox]
     [javac.clojurize :as clojurize]
     [javac.gfxcustom :as gfxcustom]
-    [layout.layouts :as layouts]
     [layout.undo :as undo]
     [app.orepl :as orepl]
     [app.fbrowser :as fbrowser]
@@ -27,9 +25,11 @@
     [app.iteration :as iteration]
     [layout.keyanal :as ka]
     [layout.hotkey :as hk]
-    [layout.selectmovesize :as selectmovesize]
-    [layout.xform :as xform]
-    [layout.layoutcore :as layoutcore]
+    [layout.background :as background]
+    [layout.spatial.collide :as collide]
+    [layout.spatial.xform :as xform]
+    [layout.spatial.selectmovesize :as selectmovesize]
+    [layout.spatial.layoutcore :as layoutcore]
     [coder.cnav :as cnav]
     [coder.cbase :as cbase]
     [coder.unerror :as unerror]
@@ -129,7 +129,7 @@
 
 (defn expand-child [mevt-c s]
   (let [x (:X mevt-c) y (:Y mevt-c) comps (:components s)]
-    (if-let [target-key (selectmovesize/under-cursor x y comps)]
+    (if-let [target-key (collide/under-cursor x y comps)]
       (multicomp/expand-child target-key (gensym "child") mevt-c s) s)))
 
 (defn expand-child-tool []
@@ -178,7 +178,7 @@
         cam (selectmovesize/get-camera-tool)
         ut #(maybe-use-tool evt-c s %)
 
-        click-target (if (= ek :mousePressed) (selectmovesize/under-cursor (:X evt-c) (:Y evt-c) (:components s)))
+        click-target (if (= ek :mousePressed) (collide/under-cursor (:X evt-c) (:Y evt-c) (:components s)))
         double? (and (= ek :mousePressed) (= (:ClickCount evt-c) 2))
         shift? (:ShiftDown evt-c)
         ctrl? (:ControlDown evt-c)
@@ -218,74 +218,28 @@
     (on-quit-attempt evt-g s)
     :else
     (let [k (:type evt-g)
-          s0 s evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g)
+          evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g)
           x (if (= k :parent-in) ; only used to update namespaces for now.
               (let [txt (:contents evt-g)]
                 (try (eval (read-string txt))
                   (catch Exception e
                     (throw (Exception. (str "Eval of: " txt "\n Produced this error: " (.getMessage e))))))))
-          s (if x (siconsole/log s (str "Parent command result:\n" x)) s)
-          s (update-mouse evt-g evt-c s k)
-          s (diff-checkpoint s #(hotkey-cycle evt-g evt-c % k))
+          s1 (if x (siconsole/log s (str "Parent command result:\n" x)) s)
+          s2 (update-mouse evt-g evt-c s1 k)
+          s3 (diff-checkpoint s2 #(hotkey-cycle evt-g evt-c % k))
           hk? (boolean (:tmp-hotkey-block? s)) ; a recognized hotkey.
-          s (dissoc s :tmp-hotkey-block?)]
+          s4 (dissoc s3 :tmp-hotkey-block?)]
       (update-hot-boxes
-        (if hk? s ; hotkeys block other actions.
+        (if hk? s4 ; hotkeys block other actions.
             (let [; Typing mode forces single component use.
-                  s (if (and (:typing-mode? s) (= k :mousePressed)) (single-select evt-c s) s)
-                  s (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c)))
-                      (maybe-use-tool evt-c s (selectmovesize/get-camera-tool))
-                      (:typing-mode? s) (diff-checkpoint s #(single-comp-dispatches evt-c %))
-                      :else (diff-checkpoint s #(maybe-common-tools evt-c %)))
-                  ] s))))))
+                  s5 (if (and (:typing-mode? s4) (= k :mousePressed)) (single-select evt-c s4) s4)
+                  s6 (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c)))
+                      (maybe-use-tool evt-c s5 (selectmovesize/get-camera-tool))
+                      (:typing-mode? s5) (diff-checkpoint s5 #(single-comp-dispatches evt-c %))
+                      :else (diff-checkpoint s5 #(maybe-common-tools evt-c %)))
+                  ] s6))))))
 
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
-
-(def bg-filename "./assets/forest.jpg")
-(def bg-scale 16.0)
-(def bg-perspective-effect 4.0) ; make it slightly in the background.
-
-(def bg-size (let [^BufferedImage img (gfxcustom/filename2BufferedImage bg-filename)]
-               [(.getWidth img) (.getHeight img)]))
-
-(defn limit-cam [s]
-  "Cameras are transformations, [x y scalex scaley], scaling first."
-  (let [cam (:camera s)
-        bg-scale0 (- bg-scale bg-perspective-effect)
-        bound-xxyy [(- (* 0.5 bg-scale0 (first bg-size))) (* 0.5 bg-scale0 (first bg-size))
-                    (- (* 0.5 bg-scale0 (second bg-size))) (* 0.5 bg-scale0 (second bg-size))]
-        cam-limit (layoutcore/visible-xxyy-to-cam bound-xxyy)
-
-        min-zoom (nth cam-limit 2)
-        max-zoom 64.0
-        zoom (* 0.5 (+ (nth cam 2) (nth cam 3)))
-        zoom1 (max min-zoom (min max-zoom zoom))
-
-        cam-xxyy0 (layoutcore/visible-xxyy cam)
-        mX (* 0.5 (+ (nth cam-xxyy0 0) (nth cam-xxyy0 1)))
-        mY (* 0.5 (+ (nth cam-xxyy0 2) (nth cam-xxyy0 3)))
-        rzoom (/ max-zoom zoom)
-        cam1 (if (> zoom max-zoom)
-              (xform/xx cam [(* mX (- 1 rzoom)) (* mY (- 1 rzoom)) zoom1 zoom1]) cam)
-
-        cam-xxyy (layoutcore/visible-xxyy cam1)
-
-        ; It works "backwards":
-        move+x (* (- (nth cam-xxyy 1) (nth bound-xxyy 1)) zoom1)
-        move-x (* (- (nth bound-xxyy 0) (nth cam-xxyy 0)) zoom1)
-        move+y (* (- (nth cam-xxyy 3) (nth bound-xxyy 3)) zoom1)
-        move-y (* (- (nth bound-xxyy 2) (nth cam-xxyy 2)) zoom1)
-
-        conflictx (max 0.0 (* 0.5 (+ move-x move+x))) conflicty (max 0.0 (* 0.5 (+ move-y move+y)))
-        move+x (- move+x conflictx) move-x (- move-x conflictx)
-        move+y (- move+y conflicty) move-y (- move-y conflicty)
-
-        ;_ (println "Stuff:" cam-xxyy bound-xxyy move+x move-x move+y move-y)
-        ;move+x 0 move-x 0 move+y 0 move-y 0
-        cam2x (cond (> move+x 0) (+ (first cam1) move+x) (> move-x 0) (- (first cam1) move-x) :else (first cam1))
-        cam2y (cond (> move+y 0) (+ (second cam1) move+y) (> move-y 0) (- (second cam1) move-y) :else (second cam1))
-        cam2 [cam2x cam2y zoom1 zoom1]]
-    (assoc s :camera cam2)))
 
 (defn globalize-gfx [comps cam local-comp-renders selected-comp-keys tool-sprite sel-move-sz-sprite typing?]
   "Takes the local gfx of components as well as tool information to make the global gfx"
@@ -297,13 +251,13 @@
                                  {:bitmap-cache? true :camera cam1 :gfx (get local-comp-renders k) :z (:z c)}))
                              (keys comps)))
         bg {:camera cam :z -1e100
-            :gfx [[:bitmap [(* bg-scale (* -0.5 (first bg-size)))
-                            (* bg-scale (* -0.5 (second bg-size)))
-                            bg-scale bg-perspective-effect bg-filename]]]}
+            :gfx [[:bitmap [(* background/bg-scale (* -0.5 (first background/bg-size)))
+                            (* background/bg-scale (* -0.5 (second background/bg-size)))
+                            background/bg-scale background/bg-perspective-effect background/bg-filename]]]}
         sel-sprite {:camera cam :z 2e10
                     :gfx (into [] (apply concat (mapv #(multicomp/draw-select-box comps % [0 0 1 1]) sel-keys)))}
         haze-sprite {:camera [0 0 1 1] :z -1e99
-                     :gfx (if typing? [[:fillRect [0 0 1500 1500] {:Color [0 0 0 0.333]}]] [])}]
+                     :gfx (if typing? [[:fillRect [0 0 1500 2500] {:Color [0 0 0.5 0.333]}]] [])}]
     (assoc comp-sprites ::TOOL-SPRITE-CORE tool-sprite ::TOOL-SMS-SPRITE sel-move-sz-sprite ::TOOL-SEL-SPRITE sel-sprite
     ::BACKGROUND-SPRITE bg ::HAZE-SPRITE haze-sprite)))
 
@@ -352,8 +306,6 @@
 
 ;;;;;;;;;;;;;;;; The setup ;;;;;;;;;;;;;;;;;;;;;
 
-(defonce modified-files (atom {})) ; name -> new text. Disk singleton.
-
 (defn get-tools []
   "Non-common tools that are interactive versions of commands."
   [{:name :no-tool}])
@@ -378,7 +330,7 @@
         err? (instance? java.lang.Exception s1-or-ex)
         s2 (if err? s s1-or-ex)
         s3 (if (= (count txt) 0) s2 (siconsole/log s2 txt))
-        s4 (limit-cam s3)
+        s4 (background/limit-cam s3)
         s5 (if err? (attempt-repair s4) s4)]
      (if err? (do (println (unerror/pr-error s1-or-ex)) (siconsole/log s5 (unerror/pr-error s1-or-ex))) s5)))
 
@@ -392,7 +344,7 @@
 
 (defn _init-state-fn []
   "Opening the window first then setting up the app state should be better."
-  (let [layout (layouts/default-lmode)
+  (let [layout (layoutcore/default-lmode)
         s {:layout layout :components {} :camera [0 0 1 1] :typing-mode? true :active-tool (first (get-tools))}
         s1 ((:initial-position layout) s (fbrowser/add-root-fbrowser s) (orepl/new-repl) (siconsole/new-console))
         s2 (assoc s1 :selected-comp-keys #{})]

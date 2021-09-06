@@ -31,3 +31,15 @@
   "Different from max-key in that it returns the key not the value."
   ([x] (argmax #(- %) x))
   ([f x] (argmax #(- (bool2num (f %))) x)))
+
+(defn pnorm-dist [x1 x2 y1 y2 pnorm]
+  "1-norm vs 2-norms battle it out."
+  (let [dx (- x2 x1)
+        dy (- y2 y1)]
+    (cond (<= pnorm 1e-6)
+      (+ (Math/abs dx) (Math/abs dy))
+      (= pnorm 2.0)
+      (Math/sqrt (+ (* dx dx) (* dy dy)))
+      (< pnorm 1e6)
+      (Math/pow (+ (Math/pow dx pnorm) (Math/pow dy pnorm)) (/ pnorm))
+      :else (max (Math/abs dx) (Math/abs dy)))))

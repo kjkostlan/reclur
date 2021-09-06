@@ -14,7 +14,6 @@
     [clojure.test :as test]
     [clojure.set :as set]
     [clojure.string :as string]
-    [layout.layoutcore :as layoutcore]
     [layout.blit :as blit]
     [globals]))
 
