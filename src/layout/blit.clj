@@ -3,6 +3,7 @@
 ; Lisps love nesting. Lets make it well-indented!
 ; This isn't designed to be bulletproof in terms of printing and reading; possible edge-cases; it is mostly for human consumption.
 (ns layout.blit
+  (:import [java.util Random])
   (:require [coder.crosslang.langs :as langs] [coder.cbase :as cbase]
     [coder.textparse :as textparse]
     [c]
@@ -194,10 +195,10 @@
         (do (aset-int open (- ntok ix 1) (- ntok (aget openr ix) 1))
           (recur (inc ix)))))))
 
-(defmacro dice [p]
-  `(< (Math/random) ~p))
+(defmacro dice [p ^java.util.Random seeded]
+  `(< (.nextDouble ~seeded) ~p))
 
-(defn change-loop! [^ints allowed-toggle-ixs ntog ^ints loop-storage nloop last-sucessful-changeix]
+(defn change-loop! [^ints allowed-toggle-ixs ntog ^ints loop-storage nloop last-sucessful-changeix ^java.util.Random seeded]
   "Randomized change ixs that get back to where we started.
    Modifies loop in place."
   (let [ntog (int ntog) last-sucessful-changeix (int last-sucessful-changeix)
@@ -207,14 +208,14 @@
     (if (= nloop2 0) (throw (Exception. "The loop must be at least two elements long.")))
     (loop [ix 0]
       (if (= ix nloop2) "First half done"
-        (let [trial-ix (int (cond (and (> ix 0) (dice nearby-chance)) ; nearby change.
+        (let [trial-ix (int (cond (and (> ix 0) (dice nearby-chance seeded)) ; nearby change.
                               (+ (aget loop-storage (dec ix))
-                                (if (dice 0.5) -1 1))
-                              (dice old-boys-chance)
+                                (if (dice 0.5 seeded) -1 1))
+                              (dice old-boys-chance seeded)
                               (+ last-sucessful-changeix
-                                (cond (dice 0.333333) -1
-                                  (dice 0.5) 1 :else 0))
-                              :else (int (* (Math/random) ntog))))
+                                (cond (dice 0.333333 seeded) -1
+                                  (dice 0.5 seeded) 1 :else 0))
+                              :else (int (* (.nextDouble seeded) ntog))))
               trial-ix (int (cond (< trial-ix 0) 0 (>= trial-ix ntog) (dec ntog) :else trial-ix))
               trial-ix (aget allowed-toggle-ixs trial-ix)]
           (aset loop-storage ix trial-ix)
@@ -291,13 +292,15 @@
           (aset x-ends jx xe-new)
           (recur (inc jx) jx11 (+ delta-cost (- cost-new cost-old))))))))
 
-(defn optimize! [^ints newline?s ^ints x-ends ^ints force-nl?s ^ints allow-nl?s ^ints allowed-toggle-ixs ^ints open-ix ^ints close-ix max-free-x quad-wt spaces-per-indent]
+(defn optimize! [^ints newline?s ^ints x-ends ^ints force-nl?s ^ints allow-nl?s ^ints allowed-toggle-ixs ^ints open-ix ^ints close-ix max-free-x quad-wt spaces-per-indent
+                 seed]
   "Modifies newlines and x-ends. Use those arrays to make the token order."
   (let [ntok (int (alength x-ends)) n-outer-loops (int (* ntok 16)) loop-size 4 ; TODO: better system for iterations.
         ^ints loop-storage (make-array Integer/TYPE loop-size)
         spaces-per-indent (int *spaces-per-indent*)
         quad-wt (float quad-wt)
-        ntog (int (alength allowed-toggle-ixs))]
+        ntog (int (alength allowed-toggle-ixs))
+        ^java.util.Random seeded (java.util.Random. seed)]
     (loop [ix (int 0)]
       (if (= ix ntok) "Done force newlines part."
         (do
@@ -307,7 +310,7 @@
           (recur (inc ix))))))
     (loop [loopx (int 0) last-sucessful-changeix -1] ; the core optimization step.
       (if (= loopx n-outer-loops) "DONE!"
-        (do (change-loop! allowed-toggle-ixs ntog loop-storage loop-size last-sucessful-changeix)
+        (do (change-loop! allowed-toggle-ixs ntog loop-storage loop-size last-sucessful-changeix seeded)
           (let [change-ix (loop [jx 0 total-delta 0.0]
                             (let [toggle-ix (int (aget loop-storage jx))
                                   delta-lin (if (= (aget newline?s toggle-ix) 1) -1 1)
@@ -337,6 +340,11 @@
 
 (defn to-code [code-or-str] (if (string? code-or-str) (read-string code-or-str) code-or-str))
 
+(defn code2seed [code-or-str]
+  "Hash the code."
+  (let [^String txt (pr-str code-or-str)]
+    (.hashCode txt)))
+
 (defn _vps-core [code-or-str]
   (let [code (to-code code-or-str)
         _ (try (pr-str code) (catch Exception e (throw (Exception. "Badly formatted code.")))) ; does this ever happen?
@@ -347,8 +355,9 @@
         max-free-x (int (* *width-target* 0.4)) ; exact scaling here is heuristic.
         quad-wt (/ 1.0 max-free-x max-free-x)
         spaces-per-indent *spaces-per-indent*
+        seed (code2seed code-or-str)
         _ (optimize! ^ints (:newline?s x) ^ints (:x-ends x) ^ints (:force-nl?s x) ^ints (:allow-nl?s x) ^ints (:allowed-toggle-ixs x)
-            ^ints (:open-ix x) ^ints (:close-ix x) max-free-x quad-wt spaces-per-indent)]
+            ^ints (:open-ix x) ^ints (:close-ix x) max-free-x quad-wt spaces-per-indent seed)]
     [tok-strs ^ints (:newline?s x) ^ints (:x-ends x)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;; API ;;;;;;;;;;;;;;;;;;;;;;
