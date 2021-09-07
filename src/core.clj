@@ -203,17 +203,35 @@
           (= choice :no) (System/exit 0)
           (= choice :yes) (do (iteration/save-state-to-disk!! s) (System/exit 0)))))))
 
+(defn send-off-resize-listeners [s0 s]
+  "If the :size is changed."
+  (let [boxes0 (:components s0) boxes (:components s)
+        kys (set/intersection (set (keys (:components s0))) (set (keys (:components s))))
+        boxes1 (reduce
+                 (fn [acc k]
+                   (let [box0 (get boxes0 k)
+                         box (get boxes k)
+                         box1 (if (or (not (:size box0)) (not (:size box)) (= (:size box0) (:size box))) box
+                                (if-let [f (get-in box [:dispatch :resized])]
+                                  (let [evt {:Time (System/currentTimeMillis)
+                                             :type :resized
+                                             :sz-old (:size box0) :sz-new (:size box)}]
+                                    (f evt box)) box))]
+                     (assoc acc k box1))) boxes kys)]
+    (assoc s :components boxes1)))
+
 (defn dispatch-listener [evt-g s]
   "Transforms and dispatches an event (that doesn't change :typing-mode? and :active-tool).
    Only certain changes to f need diff checking."
   (cond
     (= (:type evt-g) :everyFrame)
-    (if (> (count (:hot-boxes s)) 0) (let [evt-c evt-g] (dispatch-hot-events s evt-c)) s)
+    (if (> (count (:hot-boxes s)) 0) (let [evt-c evt-g] (send-off-resize-listeners s (dispatch-hot-events s evt-c))) s)
     (= (:type evt-g) :mouseMoved)
     (let [evt-c (xform/xevt (xform/x-1 (:camera s)) evt-g)
           s1 (update-mouse evt-g evt-c s :mouseMoved)]
-      (if (> (count (:hot-boxes s)) 0) ; Only dispatch any mouse-moves if there are hot repls.
-        (dispatch-hot-events s evt-c) s1))
+      (send-off-resize-listeners s
+        (if (> (count (:hot-boxes s)) 0) ; Only dispatch any mouse-moves if there are hot repls.
+          (dispatch-hot-events s evt-c) s1)))
     (= (:type evt-g) :quit)
     (on-quit-attempt evt-g s)
     :else
@@ -230,14 +248,14 @@
           hk? (boolean (:tmp-hotkey-block? s)) ; a recognized hotkey.
           s4 (dissoc s3 :tmp-hotkey-block?)]
       (update-hot-boxes
-        (if hk? s4 ; hotkeys block other actions.
+        (if hk? (send-off-resize-listeners s s4) ; hotkeys block other actions.
             (let [; Typing mode forces single component use.
                   s5 (if (and (:typing-mode? s4) (= k :mousePressed)) (single-select evt-c s4) s4)
                   s6 (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c)))
                       (maybe-use-tool evt-c s5 (selectmovesize/get-camera-tool))
                       (:typing-mode? s5) (diff-checkpoint s5 #(single-comp-dispatches evt-c %))
-                      :else (diff-checkpoint s5 #(maybe-common-tools evt-c %)))
-                  ] s6))))))
+                      :else (diff-checkpoint s5 #(maybe-common-tools evt-c %)))]
+              (send-off-resize-listeners s s6)))))))
 
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
 

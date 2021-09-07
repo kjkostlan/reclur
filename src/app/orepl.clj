@@ -103,7 +103,10 @@
    Only use this for repl successes."
   (let [view-path (get box :view-path [])
         x-piece (t/cget-in (:value (:result box)) view-path)
-        xp-summary (browseedn/summarize x-piece)
+        h-pixels (max 20 (get-in box [:size 1] 210))
+        xp-summary (binding [browseedn/*target-fillchars* (int (* h-pixels 2))
+                             browseedn/*min-child-fraction* (/ 20.0 h-pixels)]
+                     (browseedn/summarize x-piece))
         txt (str "\n" (if (= view-path []) "" (str ";" view-path "\n")) ; Prepends must not change the string's value.
               (try (limit-length (blit/vps xp-summary))
                 (catch Exception e (str "LIMIT LEN NOT WORKING BUG IN OUR CODE " e))))]
@@ -271,6 +274,9 @@
         (show-result box2))
       :else box1)))
 
+(defn on-resize [evt box]
+  (show-result box))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;; Component interface ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn dispatch-heavy-doubleclick [s s1 k]
@@ -300,6 +306,7 @@
    :mouseDragged rtext/mouse-drag
    :mouseWheelMoved rtext/mouse-wheel
    :keyPressed key-press
+   :resized (fn [evt box] (on-resize evt box))
    :keyReleased rtext/key-release})
 
 (defn interact-fns []
