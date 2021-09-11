@@ -92,7 +92,7 @@
 ;;;;;;;;;;; Querying logs and loggers ;;;;;;;;;;;;
 
 (defn get-logs [] (:logs @*log-atom*)) ; logs are a vector of :path :start-time :end-time :value :Thead.
-(defn get-loggers [] (:loggers @globals/log-atom)) ; loggers are {symbol {path ...}} format.
+(defn get-loggers [] "loggers are {symbol {path ...}} format." (:loggers @globals/log-atom))
 (defn clear-logs! [] (do (let [n-log (count (get-logs))]
                            (if (> n-log 0) (println "Removing all" n-log "logs")
                              (println "No logs to remove."))
@@ -100,10 +100,14 @@
 (defn logged? [sym-qual path]
   (boolean (get-in (:loggers @globals/log-atom) [sym-qual path])))
 
-(defn last-log-of [sym-qual path-within-code]
+(defn all-logs-of [sym-qual path-within-code]
   "Useful for debugging. Nil on failure."
   (let [logs (get-logs) lpath (c/vcat [sym-qual] path-within-code)]
-    (last (filter #(= (:path %) lpath) logs))))
+    (filterv #(= (:path %) lpath) logs)))
+
+(defn last-log-of [sym-qual path-within-code]
+  "Useful for debugging. Nil on failure."
+  (last (all-logs-of sym-qual path-within-code)))
 
 (defn logpath2code [log-path]
   "The code that was logged in log-path. It may be macroexpanded code."
@@ -135,9 +139,10 @@
             (if (and firstph
                   (or (< (count firstph) 1)
                     (and def? (< (first firstph) (dec (count code))))
-                    (and (not def?)
-                      (let [cx (c/cget code (first firstph))]
-                        (and (not (coll? cx)) (not (string? cx)))))))
+                    (and (not def?) ; usually defn.
+                      (let [ix-args? (first (c/where vector? code))]
+                        (if ix-args? (< (first firstph) ix-args?)
+                          (< (first firstph) (dec (count code))))))))
               (throw (Exception.
                        (str "All logpaths must be inside the function part of a defn, but " firstph " isn't for: " sym-qual)))))
         logged-code (reduce #(logify-code1 %1 (c/vcat [sym-qual] %2) %2) code paths-sort)
@@ -284,7 +289,7 @@
           (throw (Exception. "See console for error report.")))
         (set minbad-paths)))))
 
-(defn reload-tryto-keep-loggers! [ns-sym & quiet?]
+(defn _reload-maby-keep-loggers-core! [ns-sym keep? quiet?]
   "Reloads the namespace, attempts keeping all loggers we need.
    Even if no code changes it will wipe the loggers so we need to re-add them."
   (let [_ (binding [*ns* _junk-ns]
@@ -293,7 +298,7 @@
         sym-quals (set (mapv #(langs/resolved ns-sym %) syms))
         loggers (:loggers @globals/log-atom)
         sym-logged (set (keys loggers))
-        need-logged (set/intersection sym-quals sym-logged)]
+        need-logged (if keep? (set/intersection sym-quals sym-logged) #{})]
     (mapv
       (fn [sym-qual]
         (let [loggers-for-sym (get loggers sym-qual)
@@ -303,9 +308,18 @@
               code (symqual2code sym-qual mexpand?)
               paths1 (set (filterv identity
                             (mapv #(cnav/drag-path old-code code %) paths)))
-              _ (if (not (first quiet?))
+              _ (if (not quiet?)
                   (println "Reloading logged symbol:" ns-sym (count paths1) "of" (count (keys loggers-for-sym)) "kept."))] ; this may get annoying.
            (set-logpaths! sym-qual paths1 mexpand?))) need-logged)))
+
+(defn reload-try-to-keep-loggers! [ns-sym & quiet?]
+  "Reloads the namespace, attempts keeping all loggers we need.
+   Even if no code changes it will wipe the loggers so we need to re-add them."
+  (_reload-maby-keep-loggers-core! ns-sym true (first quiet?)))
+
+(defn reload-lose-loggers! [ns-sym & quiet?]
+  "Reloads a ns, removes all loggers."
+  (_reload-maby-keep-loggers-core! ns-sym false (first quiet?)))
 
 ;;;;;;;;;;;; Debugger system based on key-symbols instead of logging paths ;;;;;;;;;;;;;;;;;;
 

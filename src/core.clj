@@ -146,24 +146,6 @@
 
 ;;;;;;;;;;;;;;;; High level control flow ;;;;;;;;;;;;;;;;;;;;;
 
-(defn hotkey-cycle [evt-g evt-c s k]
-  "The emacs-like command's counter (per-command) gets incremented for multi-key commands.
-   Any commands that are triggered reset all counters."
-  (if (and (= k :keyPressed) (or (ka/normal? evt-g) (ka/escape? evt-g) (ka/backspace? evt-g) (ka/enter? evt-g)))
-    (let [hotkey-map (hk/hotkeys) hotlist (keys hotkey-map)
-          lengths (zipmap hotlist (mapv ka/emacs-count hotlist))
-          hot-ix (if-let [x (:hotkey-indexes s)] x {})
-          hot-ix (reduce #(if (get %1 %2) %1 (assoc %1 %2 0)) hot-ix hotlist)
-          next-ix (fn [ix txt] (if (ka/emacs-hit? txt evt-g ix) (inc ix) 0)) ; reset if we fail.
-          hot-ix1 (zipmap hotlist (mapv #(next-ix (get hot-ix %) %) hotlist))
-          triggers (filterv #(= (get hot-ix1 %) (get lengths %)) hotlist)
-          triggered? (> (count triggers) 0)
-          active? (or triggered? (first (filter #(> % 0) (vals hot-ix1))))
-          hot-ix2 (if triggered? (reduce #(assoc %1 %2 0) hot-ix1 (keys hot-ix1)) hot-ix1)
-          s1 (reduce #((get hotkey-map %2) %1) s triggers)]
-      (assoc s1 :hotkey-indexes hot-ix2 :tmp-hotkey-block? (or active? triggered?)))
-    (assoc s :tmp-hotkey-block? false)))
-
 (defn maybe-use-tool [evt-c s tool]
   (let [k (:type evt-c)] (if (not tool) (throw (Exception. "nil tool.")))
     (if-let [f (get tool k)] (f evt-c s) s)))
@@ -244,10 +226,10 @@
                     (throw (Exception. (str "Eval of: " txt "\n Produced this error: " (.getMessage e))))))))
           s1 (if x (siconsole/log s (str "Parent command result:\n" x)) s)
           s2 (update-mouse evt-g evt-c s1 k)
-          s3 (diff-checkpoint s2 #(hotkey-cycle evt-g evt-c % k))
-          hk? (boolean (:tmp-hotkey-block? s)) ; a recognized hotkey.
+          s3 (diff-checkpoint s2 #(hk/hotkey-cycle evt-g evt-c % k))
+          hk? (boolean (:tmp-hotkey-block? s3)) ; a recognized hotkey.
           s4 (dissoc s3 :tmp-hotkey-block?)]
-      (update-hot-boxes
+      (#(update-hot-boxes (orepl/orepl-based-updates! s %))
         (if hk? (send-off-resize-listeners s s4) ; hotkeys block other actions.
             (let [; Typing mode forces single component use.
                   s5 (if (and (:typing-mode? s4) (= k :mousePressed)) (single-select evt-c s4) s4)

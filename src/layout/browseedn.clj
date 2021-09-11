@@ -43,7 +43,7 @@
 (declare _summarize) ; _summarize <-> _summarize1 circular.
 (defn _summarize1 [path x n from-head? from-tail? opts]
   "One step, on a collection, with specified head and tail directions."
-  (let [m? (map? x) s? (set? x) chars (:target-fillchars opts) dig (opts :max-dig-range opts)
+  (let [m? (map? x) s? (set? x) chars (:target-fillchars opts) dig (:max-dig-range opts)
         uno-dos (if (and from-head? from-tail?) 2 1)
         ch-frac-min (get opts :min-child-fraction *min-child-fraction*)
         ch-frac (max ch-frac-min (/ 1.0 (if (number? n) n dig)))
