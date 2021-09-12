@@ -26,7 +26,7 @@
   (reduce c/cget x ks))
 
 (defn _find-value-in [x v p include-map-keys?]
-  (cond (= x v) p
+  (cond (or (= x v) (and (fn? v) (v x))) p
     (coll? x)
     (let [kys (c/ckeys x) vls (c/cvals x)
           mk? (and (map? x) include-map-keys?
@@ -34,11 +34,23 @@
       (if mk? (conj p mk?)
         (first (filter identity (mapv #(_find-value-in %2 v (conj p %1) include-map-keys?) kys vls)))))))
 (defn find-value-in [x v & include-map-keys?]
-  "Finds the first path to value v in x.
+  "Finds the first path to value v in x; v can be a function.
    The path can't go through a key in maps.
    Value is determied by cvals. nil for not found.
    include-map-keys?: Stuff that is or is inside of a map's keys paths to the map key itself."
   (_find-value-in x v [] (first include-map-keys?)))
+
+(defn find-deepest-value-in [x v & include-map-keys?]
+  "Finds the first path which satisfies v but no subpath does.
+   I.e. (v (c/cget-in p)) is true but (v (c/cget-in (c/vcat p p1))) is false for all non-empty p1."
+  (let [include-map-keys? (first include-map-keys?)
+        v (if (fn? v) v #(= % v))
+        v1 (fn [xi] (and (v xi)
+                      (if (not (coll? xi)) true
+                        (let [xiv (if (and (map? xi) include-map-keys?)
+                                    (concat (keys xi) (vals xi)) (into [] xi))]
+                          (not (first (filter #(find-value-in % v include-map-keys?) xiv)))))))]
+   (find-value-in x v1 include-map-keys?)))
 
 ;;;;;;;;;;;;;;;; Small modification fns, i.e. most elements unchanged may be shifted ;;;;;;;;;;;;;;;;
 

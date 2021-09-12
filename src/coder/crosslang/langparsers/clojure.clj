@@ -127,7 +127,7 @@
             stops " \t\n()[]{};,'\"~@"
             last-ix (apply max -1 (mapv lx stops))]
         [(symbol (subs s (inc last-ix)))])
-      (read-string (str "[" s "\n]")))))
+      (binding [*default-data-reader-fn* tagged-literal] (read-string (str "[" s "\n]"))))))
 
 (defn interstitial-depth [s]
   "A fast parser used for indent hiliting et al."

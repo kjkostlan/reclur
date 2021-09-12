@@ -112,7 +112,7 @@
                              browseedn/*min-child-fraction* (/ 20.0 h-pixels)]
                      (browseedn/summarize x-piece))
         txt (str "\n" (if (= view-path []) "" (str ";" view-path "\n")) ; Prepends must not change the string's value.
-              (try (limit-length (blit/vps xp-summary))
+              (try (limit-length (binding [*print-namespace-maps* false] (blit/vps xp-summary)))
                 (catch Exception e (str "LIMIT LEN NOT WORKING BUG IN OUR CODE " e))))]
     [xp-summary txt]))
 

@@ -142,7 +142,10 @@
         sym (gensym "IAmUnique")
         txt1 (str (subs txt 0 c0) " " sym " " (subs txt c1))
         x1 (reads-string-fn txt1)
-        path (t/find-value-in x1 sym true)]
+        path (t/find-value-in x1 sym true)
+        path (if path path
+               (t/find-deepest-value-in
+                 x1 #(string/includes? (pr-str %) (str sym)) sym true))] ; Slower but more robust.
     (if (not path) (throw (Exception. (str "String-to-wpath not working: ..." (subs txt1 (max 0 (- ix 20)) (min (+ ix 20) (count txt1))) "..."))))
     path))
 

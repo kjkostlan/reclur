@@ -2,7 +2,6 @@
 
 (ns layout.browseedn
   (:require [clojure.set :as set] [clojure.string :as string] [clojure.walk :as walk]
-    [layout.blit :as blit]
     [app.codebox :as codebox]
     [coder.cbase :as cbase]
     [c] [t]))
