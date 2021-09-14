@@ -120,7 +120,8 @@
                                (symbol? x) ; Includes the x in (fn [x y z]), etc.
                                (let [phs (t/find-values-in code-ex x)
                                      same-sym-allowed-phs (remove #(get forbidden-set %) phs)]
-                                 (cond (and (not (first same-sym-allowed-phs))
+                                 (cond (= x '&) "No warning to print"
+                                       (and (not (first same-sym-allowed-phs))
                                          (vector? x+) (not (first (remove symbol? x+))))
                                    (println "Warning:" (second code-ex) "Unused fn symbol:" x " bindings = " x+)
                                    (and (not (first same-sym-allowed-phs)) (vector? x+))

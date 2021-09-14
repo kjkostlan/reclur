@@ -360,10 +360,10 @@
     (or (.contains ^String code-str "^:active-logview")
       (= code-str "(+ 1 2)"))))
 
-(defn box2sym+path [box]
-  (let [swallow-err? false
-        f #(sym+path-convert (codebox/cursor2cpath box))]
-    (if swallow-err? (try (f) (catch Exception e false)) (f))))
+(defn box2sym+path [box & throw-err?]
+  "Allows alternative log paths."
+  (let [f #(sym+path-convert (codebox/cursor2cpath box))]
+    (if (first throw-err?) (f) (try (f) (catch Exception e false)))))
 
 (defn add-cursor-lrepl [s]
   "Adds a repl that will log the cursor."
@@ -427,7 +427,16 @@
   (let [sym+paths (repl-log-sym+paths s)
         currently-logged-sym2paths (logger/get-loggers)
         box (get s ::last-codebox-used)
-        last-loggable-sym+path (if box (box2sym+path box))]
+        is-at-curosr-lrepl? (fn [box]
+                              (let [sbox (str box)
+                                    lsym 'log-and-see-what-is-at-cursor!]
+                                (and (= (:type box) :orepl)
+                                  (string/includes? sbox (str lsym))
+                                  (string/includes? sbox (str :global)))))
+        last-loggable-sym+path (if (and box
+                                     (first (filter is-at-curosr-lrepl?
+                                              (vals (:components s)))))
+                                 (box2sym+path box))]
     (mapv (fn [sym-qual]
             (let [lpack (get currently-logged-sym2paths sym-qual)
                   lphs (keys lpack)
@@ -445,8 +454,7 @@
   "Sets the log to the cursor, if any, and reports the output (most recent log is the default).
    Uses ::last-codebox-used."
   (let [box (get s ::last-codebox-used)
-        sym+ph (if box (try (codebox/cursor2cpath box)
-                          (catch Exception e false)))
+        sym+ph (if box (box2sym+path box true))
         logpath (into [] (rest sym+ph))
         _ (if (not (empty? logpath)) (add-marked-logger! (first sym+ph) logpath false))
         log-val (if (not (empty? logpath))
