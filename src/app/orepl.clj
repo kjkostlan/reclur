@@ -401,8 +401,9 @@
 (defn log-and-toggle-viewlogbox! [s]
    "This function toggles the logger and the cooresponding repl."
     (let [sym+path (sym+path-at-cursor s)
-          logpath (into [] (rest sym+path))]
-      (if (not (empty? logpath))
+          _ (if (not sym+path) (println "Cannot find valid logpath at current cursor location (or it's not a codebox)"))
+          logpath (if sym+path (into [] (rest sym+path)))]
+      (if (empty? logpath) s
         (let [comps (:components s)
               sym-qual (first sym+path)
               added? (add-marked-logger! sym-qual logpath true)
@@ -419,8 +420,7 @@
                       #(assoc-in % (conj path-to-new-logger repl-log-tag) repl-log-tag))]
               (if logviewk (assoc-in s [:components logviewk] lrepl1)
                 ((:add-component (:layout s)) s lrepl1 (keyword (gensym "logviewrepl")))))
-            (if logviewk (update s :components #(dissoc % logviewk)) s)))
-        (do (println "Must select something in a codebox to use this function") s))))
+            (if logviewk (update s :components #(dissoc % logviewk)) s))))))
 
 (defn remove-closed-repl-logpaths! [s]
   "Don't let zombie loggers slow everything down. Still does not remove the logs themselves, however."

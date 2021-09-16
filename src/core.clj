@@ -313,7 +313,7 @@
 (defn attempt-repair [s]
   "Tries to remove common problems with s that can throw an exception.
    Does not remove all problems and will not help if the event function is broken, etc."
-  (print "ATTEMPT REPAIR" (keys s) "\n")
+  ;(print "ATTEMPT REPAIR" (keys s) "\n")
   (let [ensure-place #(let [c1 (if (:position %) % (assoc % :position [0.0 0.0]))
                             c2 (if (:size c1) c1 (assoc c1 :size [800.0 600.0]))
                             c3 (if (:z c2) c2 (assoc c2 :z 0.0))] c3) ; Easily forgotten.

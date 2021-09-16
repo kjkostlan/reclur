@@ -67,8 +67,9 @@
   "Paths that can't be logged. For example, the [foo bar] in (fn [foo bar]).
    Convention: Assume 'fn isn't overloaded. Code must be expanded with pathedmexp or macroexpand-all."
   (let [prepends (fn [k phs] (mapv #(c/vcat [k] %) phs))
-        vmapv (fn [f & args] (apply c/vcat (apply mapv f args)))]
-    (into [] (sort
+        vmapv (fn [f & args] (apply c/vcat (apply mapv f args)))
+        sort1 (fn [x] (sort-by identity t/path-order-compare x))]
+    (into [] (sort1
         (cond (map? code-ex)
           (vmapv #(prepends %1 (forbidden-paths %2)) (keys code-ex) (vals code-ex))
           (set? code-ex)
@@ -103,7 +104,7 @@
           :else [])))))
 
 (defn alternative-paths [code-ex forbidden]
-  "Map from forbidden paths to equivelent, allowed paths. Some paths cannot be remapped.
+  "Map from forbidden paths to the first equivelent, allowed paths. Some paths cannot be remapped.
    Code must be expanded with pathedmexp or macroexpand-all."
   (let [forbidden-set (set forbidden)
         obs (mapv #(t/cget-in code-ex %) forbidden)
@@ -119,7 +120,8 @@
                                (update ph (dec (count ph)) inc) ; bind to the value, not the definition.
                                (symbol? x) ; Includes the x in (fn [x y z]), etc.
                                (let [phs (t/find-values-in code-ex x)
-                                     same-sym-allowed-phs (remove #(get forbidden-set %) phs)]
+                                     same-sym-allowed-phs (remove #(get forbidden-set %) phs)
+                                     same-sym-allowed-phs (sort-by identity t/path-order-compare same-sym-allowed-phs)]
                                  (cond (= x '&) "No warning to print"
                                        (and (not (first same-sym-allowed-phs))
                                          (vector? x+) (not (first (remove symbol? x+))))

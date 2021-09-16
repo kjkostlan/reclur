@@ -12,9 +12,6 @@
 (def specials #{'def 'let* 'fn* 'var 'quote 'if 'loop* 'recur '. 'new 'throw 'catch 'monitor-enter 'monitor-exit 'set! 'do})
 (def def-variants #{'def 'defn `defn 'defmacro `defmacro 'def*})
 
-(defn vcons [a x]
-  (into [] (concat [a] x)))
-
 (defn _lty [x]
   (cond (not (coll? x)) -1
     (vector? x) 0
