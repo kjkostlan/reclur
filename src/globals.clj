@@ -1,19 +1,20 @@
 ; Global singleton atoms.
 (ns globals)
 
-; Main atom holding the app state and event queue.
+; Holds the app state and event queue.
 ; Changes to this may mutate the disk or be expensive so we can't risk them running more than once.
-; We need to use (locking ...) rather than swap! for this atom (maybe an atom isn't the most idiomatic way ...)
-; This atom holds only the minimum it needs to hold. Other atoms hold information that doesn't need locking syncs.
-(defonce sync-app-atom (atom {}))
+; Thus we use agents, not atoms.
+(defonce app-agent (agent {}))
 
 ; Stores information about the mouse, time, etc.
+; This singleton is mutated by actions in the physical world.
 (defonce external-state-atom (atom {}))
 
 ; The logging code needs to mutate some atom from deep within any arbitrary code.
+; Thus this lives meta to the app state.
 (defonce log-atom (atom {}))
 
-; The undo atom also lives outside the state:
+; The undo atom also lives meta to the app state:
 (defonce undo-atom (atom {}))
 
 (defn get-working-folder [] "Gets the folder we save files in." ".")
