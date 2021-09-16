@@ -98,7 +98,7 @@
   "Keeps dispatching events from x until it's queue is empty."
   (if (empty? (:evt-queue app)) app
     (let [evts-unsorted (into [] (:evt-queue app))
-          evts (sort-by #(get % :Time 0) evts-unsorted); Sort by time because the future does not preserve order.
+          evts (sort-by #(get % :Time 0) evts-unsorted); Don't know if this is necessary
           app1 (reduce (fn [app-acc evt]
                        (try (dispatch app-acc evt)
                          (catch Exception e (do (println "dequeue error:" e) app-acc)))) app evts)]
@@ -119,7 +119,7 @@
         (if-let [panel (:JPanel @globals/external-state-atom)]
           (try (do (gfx/update-graphics! panel (:last-drawn-gfx app) new-gfx) (reset! success? true))
             (catch Exception e (println "gfx/update-graphics! error:" e))))
-        (if success? (assoc app :last-drawn-gfx new-gfx :app-state gfx-updated-app-state :needs-gfx-update? false) app)) app)))
+        (if @success? (assoc app :last-drawn-gfx new-gfx :app-state gfx-updated-app-state :needs-gfx-update? false) app)) app)))
 
 (defn evt2clj [e]
  "Must be called on the EDT thread if e is a java event."
@@ -153,7 +153,7 @@
         app1 (if add-frame-evt?
                 (jthread/swing-wait (event-queue-core app {} :everyFrame)) app)
         app2 (dispatch-all app1)]
-    (if (:needs-gfx-update? app2) (update-graphics! app2)) app2))
+    (if (:needs-gfx-update? app2) (update-graphics! app2) app2)))
 
 (if (not (:main-polling-loop? @globals/external-state-atom))
   (future
