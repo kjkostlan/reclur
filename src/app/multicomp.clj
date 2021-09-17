@@ -50,10 +50,20 @@
           (mapv _wrap-tree (vals paths-uprootm)))))))
 (defn wrap-tree [paths] [(_wrap-tree paths)])
 
-(defn get-filelist [s old? allow-false-old?]
+(defn _get-fname2fbrowser-stuff [s]
   (let [comps (:components s)
         fbrowserk (filterv #(= (:type (get comps %)) :fbrowser) (keys comps))
-        filepath2elem (apply merge (mapv #(fbrowser/unwrapped-tree (get comps %)) fbrowserk))
+        filepath2elem (apply merge (mapv #(fbrowser/unwrapped-tree (get comps %)) fbrowserk))] filepath2elem))
+
+(defn get-fname2is-folder [s]
+  "Map from filename (full path) to whether or not we are a folder."
+  (let [filepath2elem (_get-fname2fbrowser-stuff s)
+        is-folder?s (mapv :folder? (vals filepath2elem))
+        kys-out (mapv #(fbrowser/devec-file %) (keys filepath2elem))]
+    (zipmap kys-out is-folder?s)))
+
+(defn get-filelist [s old? allow-false-old?]
+  (let [filepath2elem (_get-fname2fbrowser-stuff s)
         ffil (if allow-false-old? identity #(filterv identity %))]
     (mapv #(if % (fbrowser/devec-file %) %) (if old? (ffil (mapv :fullname0 (vals filepath2elem))) (keys filepath2elem)))))
 

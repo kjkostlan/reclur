@@ -41,12 +41,12 @@
   (or (.endsWith (.getName file) ".clj") (.endsWith (.getName file) ".java") (.endsWith (.getName file) ".js")
       (.endsWith (.getName file) ".txt") (.endsWith (.getName file) ".text"))))
 (defn _folder? [^File file] (.isDirectory file))
-(defn clj? [^String file] (_clj? (File. file)))
-(defn java? [^String file] (_java? (File. file)))
-(defn texty? [^String file] (_texty? (File. file)))
-(defn folder? [^String file] (_folder? (File. file)))
-(defn file? [^String file] (.isFile (File. file)))
-(defn exists? [^String file] (.exists (File. file)))
+(defn clj? [file] (_clj? (File. file)))
+(defn java? [file] (_java? (File. file)))
+(defn texty? [file] (_texty? (File. file)))
+(defn folder? [file] (_folder? (File. file)))
+(defn file? [file] (.isFile (File. file)))
+(defn exists? [file] (.exists (File. file)))
 
 ;;;;;;;;;;;;;;;;;;;;; Trees:
 
@@ -57,10 +57,10 @@
        (remove #(.endsWith (.getName %) "~"))
        vec))
 
-(defn visible-children-leaf-names [^String file] ; Returns the leaf name.
+(defn visible-children-leaf-names [file] ; Returns the leaf name.
   (mapv #(let [^File f %] (unwindoze (.getName f))) (_visible-children-file-obj (File. file))))
 
-(defn visible-children-full-names [^String file] ; Returns the full path.
+(defn visible-children-full-names [file] ; Returns the full path.
   (mapv #(let [^File f %] (unwindoze (.getCanonicalPath f))) (_visible-children-file-obj (File. file))))
 
 (defn visible-children [folder full-path?]
@@ -85,16 +85,16 @@
   "Gets the absolute project folder, the reclur folder's full path."
   (unwindoze (System/getProperty "user.dir")))
 
-(defn absolute-path [^String file]
+(defn absolute-path [file]
   "Simplifies it as much as possible."
   (unwindoze (.getCanonicalPath ^File (File. file))))
 
 (defn assert-in-our-folders [file]
   "Safety feature to ensure we only modify our own directories, which is either our reclur directory or the child iteration thereof."
   (if *file-safety?*
-    (let [^String fullpath (absolute-path file)
+    (let [fullpath (absolute-path file)
           us-folder (absolute-path (globals/get-working-folder))
-          contained-in? (fn [^String folder] (.startsWith fullpath folder))]
+          contained-in? (fn [folder] (.startsWith fullpath folder))]
       (if (contained-in? us-folder) true
         (throw (Exception. (str file " = " fullpath " is not in our project folder. It may be safe/desirable to do so, but be careful before removing this error!")))))))
 
@@ -106,23 +106,23 @@
   [c]
   (re-pattern (java.util.regex.Pattern/quote (str c))))
 
-(defn file2dotpath [^String file]
+(defn file2dotpath [file]
   "./src/clooj/java/file.clj into clooj.java.file, etc"
   (string/replace (subs file 6 (- (count file) 4)) "/" "."))
 
-(defn dotpath2file [^String dotpath]
+(defn dotpath2file [dotpath]
   "inverse of file2dotpath."
   ; TODO: rename and possibly change these two fns since we return a string representation.
   (str "./" "src/" (string/replace dotpath "." "/") ".clj"))
 
-(defn file2folder [^String file]
+(defn file2folder [file]
   "extracts the folder that the file (which is NOT a folder) is in."
   (let [match (last (re-index (str-to-regex "/") file))]
     (if (nil? match)
       file ; no change.
       (subs file 0 match))))
 
-(defn full-to-leaf [^String file]
+(defn full-to-leaf [file]
   (last (string/split file (str-to-regex "/"))))
 
 (defn full-to-local [file]
@@ -134,9 +134,9 @@
             (throw (Exception. "Need to use .. for local TODO")))]
     (str "." (subs file (count root)))))
 
-(defn local-to-full [^String file]
+(defn local-to-full [file]
   "Does nothing for files already fullpath execpt for formatting."
-  (unwindoze (.getCanonicalPath ^String (File. file))))
+  (unwindoze (.getCanonicalPath ^File (File. file))))
 
 ;;;;;;;;;;;;;;;;;;;; Saving and loading, etc:
 
@@ -152,7 +152,7 @@
 ; Save and load, simplified with strings. Use ./src/foo/bar/etc to save your .clj files.
 ;http://stackoverflow.com/questions/326390/how-to-create-a-java-string-from-the-contents-of-a-file
 ; Technically load mutates ourselves but the end-user does not really need to know.
-(defn open [^String file]
+(defn open [file]
   "False when the file doesn't exist."
   (try (let [out (String. (Files/readAllBytes (Paths/get file (into-array [""]))) (StandardCharsets/UTF_8))
              n (count out) ntot (get-buf-size)]
@@ -165,22 +165,11 @@
     false ;(println (.getMessage e))
     )))
 
-(defn save!! [^String file ^String contents] ; three ! means that the disk is mutated.
-  (assert-in-our-folders file)
-  (try (do
-         ; check for folder:
-         (let [folder (File. (file2folder file))]
-           (.mkdirs folder))
-         (with-open [writer (BufferedWriter. (OutputStreamWriter. (FileOutputStream. (File. file)) "UTF-8"))]
-                    (.write writer contents)))
-  (catch Exception e
-    (println (.getMessage e)))))
-
-(defn rename!! [^String file-old ^String file-new]
+(defn rename!! [file-old file-new]
   (assert-in-our-folders file-old) (assert-in-our-folders file-new)
   (let [^File f0 (File. file-old) ^File f1 (File. file-new)] (.renameTo f0 f1)))
 
-(defn delete!! [^String file]
+(defn delete!! [file]
   "File or folder, all contents in folder (if it is a folder) are also deleted just like GUI delete."
   (assert-in-our-folders file)
   (let [^File f (File. file)]
@@ -188,11 +177,26 @@
       (.isFile f) (.delete f)
       :else (throw (Exception. (str "File isn't a file or folder. " file))))))
 
-(defn get-last-modified [^String file]
+(defn save!! [file contents & is-folder?]
+  "UTF-8 txt and option to make folder instead of file (ignoring the contents)."
+  (assert-in-our-folders file)
+  (try (if (first is-folder?)
+         (.mkdirs (File. file))
+         (let [folder-str (file2folder file)
+               _ (if (and (exists? folder-str) (not (folder? folder-str)))
+                   (delete!! folder-str))
+               ^File folder (File. folder-str)]
+           (.mkdirs folder)
+           (with-open [writer (BufferedWriter. (OutputStreamWriter. (FileOutputStream. (File. file)) "UTF-8"))]
+                      (.write writer (str contents)))))
+  (catch Exception e
+    (println "Save failed:" (.getMessage e)))))
+
+(defn get-last-modified [file]
   (.lastModified (let [^File f (File. file)] f)))
 
 ; reverts to a buffered version, if we have one. Also returns the reverted string.
-(defn revert!! [^String file]
+(defn revert!! [file]
   (assert-in-our-folders file)
   (let [old (get-buffer file)]
     (if (nil? old)
@@ -212,7 +216,7 @@
              (if (and folder-r? folder-t?)
                (_delete-missing!! file-ref file-tgt ignore-git?))) common)))
 
-(defn copy!! [^String orig ^String dest & dot-git-kludge]
+(defn copy!! [orig dest & dot-git-kludge]
   "Copies a file/folder from origin to destination, overwriting any data.
    For folders, removes files/folders in the dest that aren't in orig.
   dot-git-kludge fixes a strange not file-not-found error in the .git that I don't understand."

@@ -15,9 +15,9 @@
       (str "Saved:" fname ", Compile error:\n" (:error report)) ; no err in deleted files.
       (str msg fname " Namespaces updated."))))
 
-(defn _save-or-delete1!! [fname txt] ; nil txt = delete file.
+(defn _save-or-delete1!! [fname txt & is-folder?] ; nil txt = delete file.
   (let [del? (nil? txt) clj? (jfile/clj? fname)]
-    (if del? (if (jfile/exists? fname) (jfile/delete!! fname)) (jfile/save!! fname txt))
+    (if del? (if (jfile/exists? fname) (jfile/delete!! fname)) (jfile/save!! fname txt (first is-folder?)))
     (if clj?
       (_update-ns1! (if del? "Deleted: " "Saved: ") fname)
       (str (if del? "Deleted: " "Saved: ") fname))))
@@ -39,7 +39,12 @@
                     (mapv #(jfile/save!! % text) (get copied-map fname))))
             (keys copied-map)) ; No need to namespace-update copied files, as they are always invalid and only when the user changes them.
         copy-msgs [(if (= (count copied-map) 0) "" (str "Copied: " copied-map " No need to update the namespace just yet\n"))]
-        new-save-msgs (mapv #(_save-or-delete1!! % (if-let [x (get open2text %)] x "")) (set/union new-files changed-files))
+
+        files-saved (set/union new-files changed-files)
+        files2folder?s (multicomp/get-fname2is-folder s)
+        folder?s-saved (mapv #(get files2folder?s %) files-saved)
+
+        new-save-msgs (mapv #(_save-or-delete1!! %1 (if-let [x (get open2text %1)] x "") %2) files-saved folder?s-saved)
         del-msgs (mapv #(_save-or-delete1!! % nil) deleted-files)
 
         ; The fbrowser was already updated. Thus only missing files or files the user decided not to delete:
@@ -54,7 +59,7 @@
     (siconsole/log s1 msg)))
 
 (defn get-disk [folder only-clj?] ; set/difference, etc is useful for this.
-  (let [disk (multicomp/get-filelist {:components {:tmp (fbrowser/load-from-folder folder) :type :fbrowser}} false nil)]
+  (let [disk (keys (multicomp/get-fname2is-folder {:components {:tmp (fbrowser/load-from-folder folder) :type :fbrowser}}))]
     (apply hash-set (filterv (if only-clj? jfile/clj? identity) disk))))
 
 (defn file-status [s]
