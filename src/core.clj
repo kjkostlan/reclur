@@ -257,7 +257,7 @@
         sel-sprite {:camera cam :z 2e10
                     :gfx (into [] (apply concat (mapv #(multicomp/draw-select-box comps % [0 0 1 1]) sel-keys)))}
         haze-sprite {:camera [0 0 1 1] :z -1e99
-                     :gfx (if typing? [[:fillRect [0 0 1500 2500] {:Color [0 0 0.5 0.333]}]] [])}]
+                     :gfx (if typing? [[:fillRect [0 0 3200 1600] {:Color [0 0 0.5 0.333]}]] [])}]
     (assoc comp-sprites ::TOOL-SPRITE-CORE tool-sprite ::TOOL-SMS-SPRITE sel-move-sz-sprite ::TOOL-SEL-SPRITE sel-sprite
     ::BACKGROUND-SPRITE bg ::HAZE-SPRITE haze-sprite)))
 
