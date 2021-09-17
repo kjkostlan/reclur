@@ -1,4 +1,4 @@
-# A clojure editor written in pure clojure #
+# 99% pure, functional, immutable clojure editor #
 
 Reclur is functional from the ground up and employs several unique UI design principles.
 
