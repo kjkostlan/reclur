@@ -55,52 +55,18 @@
    :data-browse-path []
    :path "repl" :show-line-nums? false :colorize-fn colorize))
 
-;;;;;;;;;;;;;;;;;;;;;;;;; Low level repl running ;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(def r-ns *ns*) ; default ns for the repls.
-
-(def ^:dynamic *this-k* nil) ; so we know who we are.
-(def ^:dynamic *world* nil) ; access to the (almost?) entire application's state.
-
-(defn auto-require! [e]
-  "Attempts to require a namespace given a java.lang.ClassNotFoundException e.
-   Returns false and does nothing if the exception isnt that.
-   Requires the needed class and returns true if the exception is that (TODO: import as well).
-   Will throw an exception if the require does so."
-  (let [msg (.getMessage e)
-        pieces (string/split msg #"[ :,]+")
-        ix0 (first (filter #(= (nth pieces %) "java.lang.ClassNotFoundException") (range (count pieces))))
-        ns-str (get pieces (inc ix0))]
-    (if ns-str
-      (do (println "Loading:" ns-str)
-        (require (symbol ns-str)) true) false)))
-
-(defn wrapped-auto-require! [e]
-  (try (auto-require! e)
-    (catch Exception e false)))
+;;;;;;;;;;;;;;;;;;;;;;;;; Representing repl results ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn repl-err-msg-tweak [msg]
   (string/replace msg #"compiling:\(javac\/cpanel.clj:\d+:\d+\)" ""))
 
-(defn get-repl-result [s repl-k txt tmp-namespace-atom]
-  "Result's :type can be :syntax-err, :runtime-err, :success.
-   :value has not yet been made into a string and could be infinitely big."
-  (let [_syntax-err? (atom true)
-        code-or-e (try (let [codei (read-string txt)]
-                        (reset! _syntax-err? false) codei)
-                        (catch Exception e e))
-        full-state-run? (:global (meta code-or-e))]
-    (if @_syntax-err?
-      {:type :syntax-err :value (str "\nSyntax error:" (.getMessage code-or-e) " " (type code-or-e))}
-      (try
-        (let [current-ns-sym (get-in s [:components repl-k :*ns*])
-              r-ns1 (if current-ns-sym (find-ns current-ns-sym) r-ns)
-              y (binding [*ns* r-ns1 *this-k* repl-k *world* s]
-                  (let [out (if full-state-run? ((eval code-or-e) s) (eval code-or-e))] (reset! tmp-namespace-atom *ns*) out))]
-          {:type :success :value y :full-state-run? full-state-run?})
-        (catch Exception e
-                (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
-                  {:type :runtime-err :value (str "\nRuntime error:\n" (repl-err-msg-tweak (unerror/pr-error e)))}))))))
+(defn ensure-two-pieces [box]
+  "Everything goes into the first peice except the end."
+  (let [pieces (into [] (:pieces box)) n (count pieces)
+        pieces0 (if (> n 1) (butlast pieces) pieces)
+        piece1 (if (> n 1) (last pieces) {:text ""})
+        two-pieces [{:text (apply str (mapv :text pieces0))} piece1]]
+    (assoc box :pieces two-pieces)))
 
 (defn get-summary [box]
   "Returns [summary-object, summary string], depends on the :view-path of the box.
@@ -130,6 +96,214 @@
         box (assoc box :result result1)]
     (codebox/update-precompute (assoc box :pieces pieces1))))
 
+;;;;;;;;;;;;;;;;;;;;;;;;; Interacting with the logger ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def repl-log-tag ::repl-logger?)
+
+(defn sym+path-convert [sym+path]
+  "The sym+path may point to an unloggable path such as a fn argument, this tries to fix it."
+  (let [sym-qual (first sym+path)
+        code (if (symbol? sym-qual) (try (langs/var-source sym-qual) (catch Exception e false)))
+        path2logpath (profiler/unexpanded-pathmap code)]
+    (c/vcat [sym-qual] (get path2logpath (rest sym+path)))))
+
+(defn codebox2sym+path [box & throw-err?]
+  "Allows alternative log paths."
+  (let [f #(sym+path-convert (codebox/cursor2cpath box))]
+    (if (first throw-err?) (f) (try (f) (catch Exception e false)))))
+
+(defn sym+path-at-cursor [s]
+  "The cursor's position in the current codebox, if it exists."
+    (if-let [sel-box (get (:components s) (first (:selected-comp-keys s)))]
+      (if (= (:type sel-box) :codebox)
+        (codebox2sym+path sel-box))))
+
+(defn sym+path-at-cursor-lastcodebox [s]
+  "The last cursor into a codebox."
+    (if-let [box (get s ::last-codebox-used)]
+      (codebox2sym+path box true)))
+
+(defn make-lrepl [sym-qual path-within-code]
+  "Start seeing your log immediately (ok with a ctrl+enter)."
+  (let [path-within-code (into [] path-within-code)
+        src-piece-str (str (t/cget-in (langs/var-source sym-qual) path-within-code))
+        hint-str (if (< (count src-piece-str) 32) src-piece-str
+                   (str (subs src-piece-str 0 14) "..." (subs src-piece-str (- (count src-piece-str) 14))))
+        code-str (str "^:active-logview\n"
+                   "(get (logger/last-log-of '" sym-qual " " path-within-code ") :value \"<No logs yet>\")\n;" hint-str)]
+    (assoc (new-repl) :pieces [{:text code-str} {:text ""}])))
+
+(defn get-lrepl-sym+path [box]
+  "Is the box an active, logging repl? What symbol and path within code is it logging?"
+  (if (= (:type box) :orepl)
+    (let [piece0 (try (read-string (:text (first (:pieces box))))
+                   (catch Exception e false))]
+      (if-let [ph (t/find-value-in piece0 'logger/last-log-of)]
+        (let [ph1 (into [] (butlast ph)) ensure-c? #(if (sequential? %) % [%])]
+          (c/vcat [(t/cget-in piece0 (conj ph1 1 1))]
+             (ensure-c? (t/cget-in piece0 (conj ph1 2)))))))))
+
+(defn repl-log-sym+paths [s] "Does not include the at-cursor box."
+  (set (filter identity (map get-lrepl-sym+path (vals (:components s))))))
+
+(defn make-cursor-lrepl [replk]
+  "Like l-repl but it logs what is at the cursor."
+  (let [code '(fn [s] (log-and-see-what-is-at-cursor! s replk false))
+        code (walk/postwalk #(if (= % 'replk) replk %) code)
+        code (with-meta code {:global true})
+        code-string (binding [*print-meta* true] (layout.blit/vps code))
+        box (codebox/update-precompute (new-repl code-string))] box))
+
+(defn add-cursor-lrepl [s]
+  "Adds a repl that will log the cursor."
+  (let [replk (keyword (gensym "clicklog"))
+        box (make-cursor-lrepl replk)]
+    ((:add-component (:layout s)) s box replk)))
+
+(defn cursor-lrepl? [box]
+  (let [sbox (str box)
+        lsym 'log-and-see-what-is-at-cursor!]
+    (and (= (:type box) :orepl)
+      (string/includes? sbox (str lsym))
+      (string/includes? sbox (str :global)))))
+
+(defn any-cursor-lrepl? [s]
+  "Anything is a cursor-lrepl."
+  (first (filter cursor-lrepl? (vals (:components s)))))
+
+(defn add-marked-logger! [sym-qual logpath toggle?]
+  "Adds a logger then adds repl-log-tag to it. This allows us to remove only the repl-added loggers.
+   Returns whether or not we added the logger."
+  (let [added? (if toggle?
+                 (logger/toggle-logger! sym-qual logpath false ["" :quiet])
+                 (do (logger/add-logger! sym-qual logpath false "" :quiet) true))
+        path-to-new-logger [:loggers sym-qual logpath]]
+    (if added?
+      (do (if (not (get-in @globals/log-atom path-to-new-logger))
+            (throw (Exception. "No logger seemed to be added, or at least we can't find it.")))
+        (swap! globals/log-atom
+                      #(assoc-in % (conj path-to-new-logger repl-log-tag) repl-log-tag))))
+    added?))
+
+(defn log-and-toggle-viewlogbox! [s]
+   "This function toggles the logger and the cooresponding repl."
+    (let [sym+path (sym+path-at-cursor s)
+          _ (if (not sym+path) (println "Cannot find valid logpath at current cursor location (or it's not a codebox)"))
+          logpath (if sym+path (into [] (rest sym+path)))]
+      (if (empty? logpath) s
+        (let [comps (:components s)
+              sym-qual (first sym+path)
+              added? (add-marked-logger! sym-qual logpath true)
+              sym+path1 (c/vcat [sym-qual] logpath)
+              logviewk (first (filter #(= (get-lrepl-sym+path (get comps %)) sym+path1) (keys comps)))]
+          (if added?
+            (let [lrepl (make-lrepl sym-qual logpath)
+                  lrepl1 (if logviewk (assoc (get comps logviewk) :pieces (:pieces lrepl)) lrepl)
+                  sym+path1 (c/vcat [sym-qual] logpath)
+                  path-to-new-logger [:loggers sym-qual logpath]
+                  _ (if (not (get-in @globals/log-atom path-to-new-logger))
+                      (throw (Exception. "No logger seemed to be added, or at least we can't find it.")))
+                  _ (swap! globals/log-atom
+                      #(assoc-in % (conj path-to-new-logger repl-log-tag) repl-log-tag))]
+              (if logviewk (assoc-in s [:components logviewk] lrepl1)
+                ((:add-component (:layout s)) s lrepl1 (keyword (gensym "logviewrepl")))))
+            (if logviewk (update s :components #(dissoc % logviewk)) s))))))
+
+(defn remove-closed-repl-logpaths! [s]
+  "Don't let zombie loggers slow everything down. Still does not remove the logs themselves, however."
+  (let [sym+paths (repl-log-sym+paths s)
+        currently-logged-sym2paths (logger/get-loggers)
+        last-loggable-sym+path (if (any-cursor-lrepl? s)
+                                 (sym+path-at-cursor-lastcodebox s))]
+    (mapv (fn [sym-qual]
+            (let [lpack (get currently-logged-sym2paths sym-qual)
+                  lphs (keys lpack)
+                  lphs-repl (filterv #(get-in lpack [% repl-log-tag]) lphs)
+                  lphs-keep (filterv #(get sym+paths (c/vcat [sym-qual] %)) lphs-repl)
+                  lphs-keep (if (= (first last-loggable-sym+path) sym-qual)
+                              (conj lphs-keep (into [] (rest last-loggable-sym+path)))
+                              lphs-keep)
+                  lphs-remove (set/difference (set lphs-repl) (set lphs-keep))]
+              ;(if (> (count lphs-remove) 0) (println "Removing:" lphs-remove " for " sym-qual))
+              (mapv #(logger/toggle-logger! sym-qual % false) lphs-remove)))
+      (keys currently-logged-sym2paths))) s)
+
+(defn log-and-see-what-is-at-cursor! [s repl-k & all-logs]
+  "Sets the log to the cursor, if any, and reports the output (most recent log is the default).
+   Uses ::last-codebox-used."
+  (let [box (get s ::last-codebox-used)
+        sym+ph (if box (codebox2sym+path box true))
+        logpath (into [] (rest sym+ph))
+        _ (if (not (empty? logpath)) (add-marked-logger! (first sym+ph) logpath false))
+        log-val (if (not (empty? logpath))
+                  (let [sym-qual (first sym+ph)
+                        all? (first all-logs)]
+                    (if all? (logger/all-logs-of sym-qual logpath)
+                      (:value (logger/last-log-of sym-qual logpath)))))
+        log-val (if log-val log-val "<No logs in cursor-clicked places yet>")
+        result {:type :success :value log-val :full-state-run? false}]
+    (remove-closed-repl-logpaths! s)
+    (update-in s [:components repl-k] #(show-result (assoc % :result result)))))
+
+(defn orepl-based-updates! [s0 s]
+  "Updates to s needed to keep more global functions working."
+  (if (= s0 s) s
+    (let [boxes0 (:components s0) boxes (:components s)
+          selk0 (first (:selected-comp-keys s0)) selk (first (:selected-comp-keys s))
+          clicked-on-codebox (if (or (not= selk0 selk) (not= (get boxes0 selk0) (get boxes selk)))
+                               (get boxes selk))
+          clicked-on-codebox (if (= (:type clicked-on-codebox) :codebox) clicked-on-codebox)
+          _ (if (and (not= boxes0 boxes)
+                  (or (and (any-cursor-lrepl? s0) (not (any-cursor-lrepl? s)))
+                    (not= (repl-log-sym+paths s0) (repl-log-sym+paths s))))
+              (remove-closed-repl-logpaths! s))]
+      (if clicked-on-codebox
+        (assoc s ::last-codebox-used clicked-on-codebox) s))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;; Repl running ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def r-ns *ns*) ; default ns for the repls.
+
+(def ^:dynamic *this-k* nil) ; so we know who we are.
+(def ^:dynamic *world* nil) ; access to the (almost?) entire application's state.
+
+(defn auto-require! [e]
+  "Attempts to require a namespace given a java.lang.ClassNotFoundException e.
+   Returns false and does nothing if the exception isnt that.
+   Requires the needed class and returns true if the exception is that (TODO: import as well).
+   Will throw an exception if the require does so."
+  (let [msg (.getMessage e)
+        pieces (string/split msg #"[ :,]+")
+        ix0 (first (filter #(= (nth pieces %) "java.lang.ClassNotFoundException") (range (count pieces))))
+        ns-str (get pieces (inc ix0))]
+    (if ns-str
+      (do (println "Loading:" ns-str)
+        (require (symbol ns-str)) true) false)))
+
+(defn wrapped-auto-require! [e]
+  (try (auto-require! e)
+    (catch Exception e false)))
+
+(defn get-repl-result [s repl-k txt tmp-namespace-atom]
+  "Result's :type can be :syntax-err, :runtime-err, :success.
+   :value has not yet been made into a string and could be infinitely big."
+  (let [_syntax-err? (atom true)
+        code-or-e (try (let [codei (read-string txt)]
+                        (reset! _syntax-err? false) codei)
+                        (catch Exception e e))
+        full-state-run? (:global (meta code-or-e))]
+    (if @_syntax-err?
+      {:type :syntax-err :value (str "\nSyntax error:" (.getMessage code-or-e) " " (type code-or-e))}
+      (try
+        (let [current-ns-sym (get-in s [:components repl-k :*ns*])
+              r-ns1 (if current-ns-sym (find-ns current-ns-sym) r-ns)
+              y (binding [*ns* r-ns1 *this-k* repl-k *world* s]
+                  (let [out (if full-state-run? ((eval code-or-e) s) (eval code-or-e))] (reset! tmp-namespace-atom *ns*) out))]
+          {:type :success :value y :full-state-run? full-state-run?})
+        (catch Exception e
+                (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
+                  {:type :runtime-err :value (str "\nRuntime error:\n" (repl-err-msg-tweak (unerror/pr-error e)))}))))))
+
 (defn run-repl [s repl-k]
   "This returns the modified app state s. Most functions don't work with s and we just add in the report.
    However, ^:global on a function will cause us to run it on s as a whole and we skip the report step."
@@ -144,6 +318,11 @@
   ; If there is a *gui-atom* in the input we run it locally on a future.
     ; Crashes can leak into here but at least this gives us a way to modify the gui.
     (logger/gtime-reset!)
+    (let [has-cursor-repl? (any-cursor-lrepl? s)
+          cursor-sym+path (if has-cursor-repl?
+                            (sym+path-at-cursor-lastcodebox s))]
+      (if cursor-sym+path (add-marked-logger!
+                            (first cursor-sym+path) (rest cursor-sym+path) false)))
     (let [txt (rtext/rendered-string (get-in s [:components repl-k]))
           new-ns-at (atom r-ns)
           result (get-repl-result s repl-k txt new-ns-at)]
@@ -175,22 +354,6 @@
                     (assoc box1 :cursor-ix sel0 :selection-start sel0 :selection-end sel1))
                  box1))
              (recur (inc cx) (inc n))))))))
-
-(defn ensure-two-pieces [box]
-  "Everything goes into the first peice except the end."
-  (let [pieces (into [] (:pieces box)) n (count pieces)
-        pieces0 (if (> n 1) (butlast pieces) pieces)
-        piece1 (if (> n 1) (last pieces) {:text ""})
-        two-pieces [{:text (apply str (mapv :text pieces0))} piece1]]
-    (assoc box :pieces two-pieces)))
-
-(defn key-press [key-evt box]
-  (ensure-two-pieces
-    (cond (ka/emacs-hit? "S-ret" key-evt) box ; this was handled in the heavy dispatch.
-      (ka/emacs-hit? "S-^^" key-evt) (old-cmd-search box -1)
-      (ka/emacs-hit? "S-vv" key-evt) (old-cmd-search box 1)
-      :else
-      (codebox/key-press key-evt box))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Namespace reloading et al ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -259,6 +422,8 @@
 (defn delete-and-update!! [cljfile]
   (jfile/delete!! cljfile) (reload-file! cljfile) {:error false :message (str "Deleted" cljfile)})
 
+;;;;;;;;;;;;;;;;;;;;;;;;; Component interface ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defn mouse-press [m-evt box]
   (let [box1 (codebox/mouse-press m-evt box) ; vanilla.
         nclick (:ClickCount m-evt) code-txt (:text (first (:pieces box)))
@@ -280,10 +445,16 @@
         (show-result box2))
       :else box1)))
 
+(defn key-press [key-evt box]
+  (ensure-two-pieces
+    (cond (ka/emacs-hit? "S-ret" key-evt) box ; this was handled in the heavy dispatch.
+      (ka/emacs-hit? "S-^^" key-evt) (old-cmd-search box -1)
+      (ka/emacs-hit? "S-vv" key-evt) (old-cmd-search box 1)
+      :else
+      (codebox/key-press key-evt box))))
+
 (defn on-resize [evt box]
   (show-result box))
-
-;;;;;;;;;;;;;;;;;;;;;;;;; Component interface ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn dispatch-heavy-doubleclick [s s1 k]
   (let [file-ixs (funcjump/stack-click (get-in s [:components k]))
@@ -322,164 +493,6 @@
    :expandable? expandable?
    :is-child? (fn [box] false)
    :expand-child expand-child :contract-child contract-child})
-
-;;;;;;;;;;;;;;;;;;;;;;;;; Interacting with the logger ;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(def repl-log-tag ::repl-logger?)
-
-(defn sym+path-convert [sym+path]
-  "The sym+path may point to an unloggable path such as a fn argument, this tries to fix it."
-  (let [sym-qual (first sym+path)
-        code (if (symbol? sym-qual) (try (langs/var-source sym-qual) (catch Exception e false)))
-        path2logpath (profiler/unexpanded-pathmap code)]
-    (c/vcat [sym-qual] (get path2logpath (rest sym+path)))))
-
-(defn make-lrepl [sym-qual path-within-code]
-  "Start seeing your log immediately (ok with a ctrl+enter)."
-  (let [path-within-code (into [] path-within-code)
-        src-piece-str (str (t/cget-in (langs/var-source sym-qual) path-within-code))
-        hint-str (if (< (count src-piece-str) 32) src-piece-str
-                   (str (subs src-piece-str 0 14) "..." (subs src-piece-str (- (count src-piece-str) 14))))
-        code-str (str "^:active-logview\n"
-                   "(get (logger/last-log-of '" sym-qual " " path-within-code ") :value \"<No logs yet>\")\n;" hint-str)]
-    (assoc (new-repl) :pieces [{:text code-str} {:text ""}])))
-
-(defn get-lrepl-sym+path [box]
-  "Is the box an active, logging repl? What symbol and path within code is it logging?"
-  (if (= (:type box) :orepl)
-    (let [piece0 (try (read-string (:text (first (:pieces box))))
-                   (catch Exception e false))]
-      (if-let [ph (t/find-value-in piece0 'logger/last-log-of)]
-        (let [ph1 (into [] (butlast ph)) ensure-c? #(if (sequential? %) % [%])]
-          (c/vcat [(t/cget-in piece0 (conj ph1 1 1))]
-             (ensure-c? (t/cget-in piece0 (conj ph1 2)))))))))
-
-(defn is-repl-loggy? [box]
-  "Change the log-view repl immediately."
-  (let [code-str (:text (first (:pieces box)))]
-    (or (.contains ^String code-str "^:active-logview")
-      (= code-str "(+ 1 2)"))))
-
-(defn box2sym+path [box & throw-err?]
-  "Allows alternative log paths."
-  (let [f #(sym+path-convert (codebox/cursor2cpath box))]
-    (if (first throw-err?) (f) (try (f) (catch Exception e false)))))
-
-(defn add-cursor-lrepl [s]
-  "Adds a repl that will log the cursor."
-  (let [replk (keyword (gensym "clicklog"))
-        code '(fn [s] (log-and-see-what-is-at-cursor! s replk false))
-        code (walk/postwalk #(if (= % 'replk) replk %) code)
-        code (with-meta code {:global true})
-        code-string (binding [*print-meta* true] (layout.blit/vps code))
-        box (codebox/update-precompute (new-repl code-string))]
-    ((:add-component (:layout s)) s box replk)))
-
-(defn sym+path-at-cursor [s]
-  "The cursor's position in the current codebox, if it exists."
-    (if-let [sel-box (get (:components s) (first (:selected-comp-keys s)))]
-      (if (= (:type sel-box) :codebox)
-        (box2sym+path sel-box))))
-
-(defn repl-log-sym+paths [s]
-  (set (filter identity (map get-lrepl-sym+path (vals (:components s))))))
-
-(defn add-marked-logger! [sym-qual logpath toggle?]
-  "Adds a logger then adds repl-log-tag to it. This allows us to remove only the repl-added loggers.
-   Returns whether or not we added the logger."
-  (let [added? (if toggle?
-                 (logger/toggle-logger! sym-qual logpath false)
-                 (do (logger/add-logger! sym-qual logpath false) true))
-        path-to-new-logger [:loggers sym-qual logpath]]
-    (if added?
-      (do (if (not (get-in @globals/log-atom path-to-new-logger))
-            (throw (Exception. "No logger seemed to be added, or at least we can't find it.")))
-        (swap! globals/log-atom
-                      #(assoc-in % (conj path-to-new-logger repl-log-tag) repl-log-tag))))
-    added?))
-
-(defn log-and-toggle-viewlogbox! [s]
-   "This function toggles the logger and the cooresponding repl."
-    (let [sym+path (sym+path-at-cursor s)
-          _ (if (not sym+path) (println "Cannot find valid logpath at current cursor location (or it's not a codebox)"))
-          logpath (if sym+path (into [] (rest sym+path)))]
-      (if (empty? logpath) s
-        (let [comps (:components s)
-              sym-qual (first sym+path)
-              added? (add-marked-logger! sym-qual logpath true)
-              sym+path1 (c/vcat [sym-qual] logpath)
-              logviewk (first (filter #(= (get-lrepl-sym+path (get comps %)) sym+path1) (keys comps)))]
-          (if added?
-            (let [lrepl (make-lrepl sym-qual logpath)
-                  lrepl1 (if logviewk (assoc (get comps logviewk) :pieces (:pieces lrepl)) lrepl)
-                  sym+path1 (c/vcat [sym-qual] logpath)
-                  path-to-new-logger [:loggers sym-qual logpath]
-                  _ (if (not (get-in @globals/log-atom path-to-new-logger))
-                      (throw (Exception. "No logger seemed to be added, or at least we can't find it.")))
-                  _ (swap! globals/log-atom
-                      #(assoc-in % (conj path-to-new-logger repl-log-tag) repl-log-tag))]
-              (if logviewk (assoc-in s [:components logviewk] lrepl1)
-                ((:add-component (:layout s)) s lrepl1 (keyword (gensym "logviewrepl")))))
-            (if logviewk (update s :components #(dissoc % logviewk)) s))))))
-
-(defn remove-closed-repl-logpaths! [s]
-  "Don't let zombie loggers slow everything down. Still does not remove the logs themselves, however."
-  (let [sym+paths (repl-log-sym+paths s)
-        currently-logged-sym2paths (logger/get-loggers)
-        box (get s ::last-codebox-used)
-        is-at-curosr-lrepl? (fn [box]
-                              (let [sbox (str box)
-                                    lsym 'log-and-see-what-is-at-cursor!]
-                                (and (= (:type box) :orepl)
-                                  (string/includes? sbox (str lsym))
-                                  (string/includes? sbox (str :global)))))
-        last-loggable-sym+path (if (and box
-                                     (first (filter is-at-curosr-lrepl?
-                                              (vals (:components s)))))
-                                 (box2sym+path box))]
-    (mapv (fn [sym-qual]
-            (let [lpack (get currently-logged-sym2paths sym-qual)
-                  lphs (keys lpack)
-                  lphs-repl (filterv #(get-in lpack [% repl-log-tag]) lphs)
-                  lphs-keep (filterv #(get sym+paths (c/vcat [sym-qual] %)) lphs-repl)
-                  lphs-keep (if (= (first last-loggable-sym+path) sym-qual)
-                              (conj lphs-keep (into [] (rest last-loggable-sym+path)))
-                              lphs-keep)
-                  lphs-remove (set/difference (set lphs-repl) (set lphs-keep))]
-              ;(if (> (count lphs-remove) 0) (println "Removing:" lphs-remove " for " sym-qual))
-              (mapv #(logger/toggle-logger! sym-qual % false) lphs-remove)))
-      (keys currently-logged-sym2paths))) s)
-
-(defn log-and-see-what-is-at-cursor! [s repl-k & all-logs]
-  "Sets the log to the cursor, if any, and reports the output (most recent log is the default).
-   Uses ::last-codebox-used."
-  (let [box (get s ::last-codebox-used)
-        sym+ph (if box (box2sym+path box true))
-        logpath (into [] (rest sym+ph))
-        _ (if (not (empty? logpath)) (add-marked-logger! (first sym+ph) logpath false))
-        log-val (if (not (empty? logpath))
-                  (let [sym-qual (first sym+ph)
-                        all? (first all-logs)]
-                    (if all? (logger/all-logs-of sym-qual logpath)
-                      (:value (logger/last-log-of sym-qual logpath)))))
-        log-val (if log-val log-val "<No logs in cursor-clicked places yet>")
-        result {:type :success :value log-val :full-state-run? false}]
-    (remove-closed-repl-logpaths! s)
-    (update-in s [:components repl-k] #(show-result (assoc % :result result)))))
-
-(defn orepl-based-updates! [s0 s]
-  "Updates to s needed to keep more global functions working."
-  (if (= s0 s) s
-    (let [boxes0 (:components s0) boxes (:components s)
-          selk0 (first (:selected-comp-keys s0)) selk (first (:selected-comp-keys s))
-          clicked-on-codebox (if (or (not= selk0 selk) (not= (get boxes0 selk0) (get boxes selk)))
-                               (get boxes selk))
-          clicked-on-codebox (if (= (:type clicked-on-codebox) :codebox) clicked-on-codebox)
-          _ (if (and (not= boxes0 boxes)
-                  (not= (repl-log-sym+paths s0) (repl-log-sym+paths s)))
-              (remove-closed-repl-logpaths! s))]
-      (if clicked-on-codebox
-        (assoc s ::last-codebox-used clicked-on-codebox) s))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Useful user-to-type-in fns ;;;;;;;;;;;;;;;;;;;;;;;;;;
 

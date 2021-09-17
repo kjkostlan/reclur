@@ -192,23 +192,22 @@
             (throw (Exception. "Other loggers have macro-expansion, but we don't. We can't mix and max (TODO?)."))
             (and (> (count untouched-loggers) 0) (not mexpand?-old) mexpand?)
             (throw (Exception. "Other loggers don't have macro-expansion, but we do. We can't mix and max (TODO?).")))
-
+        messages (into [] messages)
         new-msg (get messages 0 "")
         already-msg (get messages 1 "")
         new? (not (get current-loggers path))]
-    (if (not= (first messages) :quiet)
-      (if new?
-        (println (str new-msg "Adding logger for:") sym-qual path " expand? " mexpand?)
-        (println (str already-msg "Re-Adding logger for:") sym-qual path " expand? " mexpand?)))
+    (if (and new? (not= new-msg :quiet)) (println (str new-msg "Adding logger for:") sym-qual path " expand? " mexpand?))
+    (if (and (not new?) (not= already-msg :quiet)) (println (str already-msg "Re-Adding logger for:") sym-qual path " expand? " mexpand?))
     (set-logpaths! sym-qual (set (conj (keys current-loggers) path)) mexpand?)))
 
-(defn remove-logger! [sym-qual path]
+(defn remove-logger! [sym-qual path & messages]
   (let [path (into [] path)
         old-loggers (get-in @globals/log-atom [:loggers sym-qual])
         old-paths (set (keys old-loggers))
         new-paths (disj old-paths path)
         hit? (< (count new-paths) (count old-paths))]
-    (if hit? (println "Removing logger for" sym-qual path) (println "No logger to remove for" sym-qual path))
+    (if (not= (first messages) :quiet)
+      (if hit? (println "Removing logger for" sym-qual path) (println "No logger to remove for" sym-qual path)))
     (if hit? (set-logpaths! sym-qual new-paths (:mexpand? (first (vals old-loggers)))))))
 
 (defn remove-loggers! [sym-qual]
@@ -224,11 +223,13 @@
          (mapv remove-loggers! syms))
        (println "No loggers anywhere, no need to remove"))))
 
-(defn toggle-logger! [sym-qual path mexpand?]
+(defn toggle-logger! [sym-qual path mexpand? & messagess]
   "Returns true for add, false for remove."
-  (let [add? (not (logged? sym-qual path))]
-    (if add? (add-logger! sym-qual path mexpand?)
-      (remove-logger! sym-qual path)) add?))
+  (let [add? (not (logged? sym-qual path))
+        messages-add (first messagess)
+        messages-remove (second messagess)]
+    (if add? (apply add-logger! sym-qual path mexpand? messages-add)
+      (apply remove-logger! sym-qual path messages-remove)) add?))
 
 ;;;;;;;;;;;;;;; High-level loggering ;;;;;;;;;;;;;;;;
 
