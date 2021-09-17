@@ -14,11 +14,10 @@
 
 ;;;;;;;;;;;;;;;;;;;;; Settings ;;;;;;;;;;;;;;;;;;;;
 
-(def ^:dynamic *frame-time-ms* 30) ; a somewhat complex mechanism to ensure graceful degradation when the events are heavy.
-(def ^:dynamic *nframe-slowdown-when-idle* 15) ; Same CPU when nothing is requesting an every frame event.
-(def ^:dynamic *drop-frames-queue-length-threshold* 1024) ; Not needed for now but we may change how we deal with slow dispatches.
-(def ^:dynamic *drop-frames-report-every* 50)
 (def ^:dynamic *add-keyl-to-frame?* true) ; tab only works on the frame. False goes to panel.
+(def ^:dynamic *frame-time-ms* 30) ; a somewhat complex mechanism to ensure graceful degradation when the events are heavy.
+(def ^:dynamic *nframe-slowdown-when-idle* 15) ; Save CPU when nothing is requesting an every frame event.
+(def ^:dynamic *wait-per-event-ms-fn* (fn [queue-length] (int (* queue-length queue-length 5.0)))) ; Slow down the edt and the loop if there are two many events.
 
 ;;;;;;;;;;;;;;;;;;;;; Other Support functions ;;;;;;;;;;;;;;;;;;;;;
 
@@ -28,21 +27,6 @@
   {:evt-queue (c/queue)})
 
 ;;;;;;;;;;;;;;;;;;;;; Queing ;;;;;;;;;;;;;;;;;;;;;
-
-(defn can-add? [e-clj app report-if-fail?]
-  "Allows dropping of every-frame events."
-  (let [evtq (:evt-queue app)
-        kwd (:type e-clj)
-        add? (or (not (= kwd :everyFrame))
-               (< (count evtq) *drop-frames-queue-length-threshold*))]
-    (cond add? true
-      (not report-if-fail?) false
-      :else
-      (do (swap! globals/external-state-atom
-            #(let [n-drop (get % :dropped-frames-since-last-report 0)]
-               (if (< n-drop *drop-frames-report-every*) (assoc % :dropped-frames-since-last-report (inc n-drop))
-                 (do (println "Dropped many frames due to slow evts and/or gfx: " n-drop)
-                   (assoc % :dropped-frames-since-last-report 0))))) false))))
 
 (defn update-external-state [e-clj kwd old-extern]
   (cond (= kwd :mousePressed)
@@ -73,24 +57,24 @@
         evtq (:evt-queue app)]
     (assoc app :evt-queue (conj evtq e-clj))))
 
-(defn dispatch [app evt]
+(defn dispatch [app e-clj]
   "Processes one event on x. Returns x if evt is nil.
    Does not affect the event queue."
-  (if evt
-    (let [kwd (:type evt)
+  (if e-clj
+    (let [kwd (:type e-clj)
           _ (if (= kwd :mouseWheelMoved)
-              (do (crossp/update-inertial-scroll-guess! evt)
+              (do (crossp/update-inertial-scroll-guess! e-clj)
                 (swap! globals/external-state-atom
                   #(let [sc-h (get % :mouse-wheel-history [])
                          sc-h (if (> (count sc-h) 255) (into [] (rest sc-h)) sc-h)]
-                     (assoc % :mouse-wheel-history (conj sc-h evt))))))
+                     (assoc % :mouse-wheel-history (conj sc-h e-clj))))))
           extern @globals/external-state-atom
-          evt (if (or (= kwd :mouseDragged) (= kwd :mouseMoved))
-                (assoc evt :X0 (:X0 extern) :Y0 (:Y0 extern) :X1 (:X1 extern) :Y1 (:Y1 extern)) evt)
-          _ (swap! globals/external-state-atom #(update-external-state evt (:type evt) %))
+          e-clj (if (or (= kwd :mouseDragged) (= kwd :mouseMoved))
+                  (assoc e-clj :X0 (:X0 extern) :Y0 (:Y0 extern) :X1 (:X1 extern) :Y1 (:Y1 extern)) e-clj)
+          _ (swap! globals/external-state-atom #(update-external-state e-clj (:type e-clj) %))
           f (:dispatch app)
-          new-state (try (if f (f evt (:app-state app)) (:app-state app))
-                      (catch Exception e (println e) (:app-state app)))
+          new-state (try (if f (f e-clj (:app-state app)) (:app-state app))
+                      (catch Exception err (println err) (:app-state app)))
           ud? true] ; TODO: better gfx update rules.
      (assoc app :app-state new-state :needs-gfx-update? ud?)) app))
 
@@ -99,10 +83,17 @@
   (if (empty? (:evt-queue app)) app
     (let [evts-unsorted (into [] (:evt-queue app))
           evts (sort-by #(get % :Time 0) evts-unsorted); Don't know if this is necessary
-          app1 (reduce (fn [app-acc evt]
-                       (try (dispatch app-acc evt)
-                         (catch Exception e (do (println "dequeue error:" e) app-acc)))) app evts)]
+          app1 (reduce (fn [app-acc e-clj]
+                       (try (dispatch app-acc e-clj)
+                         (catch Exception err (do (println "dequeue error:" err) app-acc)))) app evts)]
       (assoc app1 :evt-queue (c/queue)))))
+
+(defn give-the-queue-a-breather []
+  "We don't want to let the queue get too long. However, we can't wait for it to finish because of the risk of edt deadlocks.
+   So we wait quadratically longer and longer as the queue grows leading us to an equilibrium eventually."
+  (let [n (count (:evt-queue @globals/app-agent))
+        ms (*wait-per-event-ms-fn* n)]
+    (Thread/sleep ms)))
 
 ;;;;;;;;;;;;;;;;;;;;; Mutation ;;;;;;;;;;;;;;;;;;;;;
 
@@ -113,28 +104,28 @@
 (defn update-graphics! [app]
   (let [udgfx (:update-gfx-fn app)]
     (if udgfx
-      (let [gfx-updated-app-state (try (udgfx (:app-state app)) (catch Exception e (do (println "app gfx update error:" e) (:app-state app))))
-            new-gfx (try ((:render-fn app) gfx-updated-app-state) (catch Exception e (do (println "gfx render error." e) [])))
+      (let [gfx-updated-app-state (try (udgfx (:app-state app)) (catch Exception err (do (println "app gfx update error:" err) (:app-state app))))
+            new-gfx (try ((:render-fn app) gfx-updated-app-state) (catch Exception err (do (println "gfx render error." err) [])))
             success? (atom false)]
         (if-let [panel (:JPanel @globals/external-state-atom)]
           (try (do (gfx/update-graphics! panel (:last-drawn-gfx app) new-gfx) (reset! success? true))
-            (catch Exception e (println "gfx/update-graphics! error:" e))))
+            (catch Exception err (println "gfx/update-graphics! error:" err))))
         (if @success? (assoc app :last-drawn-gfx new-gfx :app-state gfx-updated-app-state :needs-gfx-update? false) app)) app)))
 
 (defn evt2clj [e]
  "Must be called on the EDT thread if e is a java event."
   (if (map? e) e
     (try (clojurize/translate-event e (.getSource e))
-    (catch Exception e
-      (do (println "Evt failed to be clojurized and will be dropped: " e)
-        (throw e))))))
+    (catch Exception err
+      (do (println "Evt failed to be clojurized and will be dropped: " err)
+        (throw err))))))
 
 (defn event-queue-core [app e kwd]
   (let [e-clj (evt2clj e)
-        e-clj (assoc e-clj :Time (System/currentTimeMillis) :type kwd)
-        add? (can-add? e-clj app true)]
-    (if add? (queue1 app e-clj kwd) app)))
+        e-clj (assoc e-clj :Time (System/currentTimeMillis) :type kwd)]
+    (queue1 app e-clj kwd)))
 (defn event-queue! [e kwd]
+  (give-the-queue-a-breather)
   (let [e-clj (evt2clj e)]
     (send globals/app-agent #(event-queue-core % e-clj kwd))))
 
@@ -143,7 +134,6 @@
     (set-window-size! (.getWidth sz) (.getHeight sz))))
 
 ; Continuously polling is a (tiny) CPU drain, but it is way easier than a lock system that must ensure we don't get overlapping calls to dispatch-loop!
-; The idle CPU is 0.7% of one core for the total program (tested Aug 13th 2019).
 (defn every-frame-loop! [app]
   (let [s (:app-state app)
         t (:frames-since-app-start
@@ -153,6 +143,7 @@
         app1 (if add-frame-evt?
                 (jthread/swing-wait (event-queue-core app {} :everyFrame)) app)
         app2 (dispatch-all app1)]
+    (give-the-queue-a-breather)
     (if (:needs-gfx-update? app2) (update-graphics! app2) app2)))
 
 (if (not (:main-polling-loop? @globals/external-state-atom))
