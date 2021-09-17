@@ -31,8 +31,8 @@
     [javac.gfxcustom :as gfxcustom] [javac.thread :as jthread]))
 
 (def ^:dynamic *sprite-cache-ms* 500) ; render components as sprites when we aren't actively using them, unless the no-sprite flag is used.
-
-(def ^:dynamic *image-scaleup* 2.0) ; Usually make sprite caching look better
+(def ^:dynamic *image-scaleup* 2.0) ; Higher resolution looks better.
+(def ^:dynamic *max-image-pixels* 3e7) ; Protect against extreme image size crash.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;; Specific code.
@@ -190,10 +190,10 @@
   (let [^RenderingHints rh (RenderingHints. ^java.awt.RenderingHints.Key (RenderingHints/KEY_INTERPOLATION) ^java.awt.RenderingHints.Key (RenderingHints/VALUE_INTERPOLATION_BILINEAR))]
     (.setRenderingHints g rh)))
 
-(defn healthy-stroke! [^Graphics2D g]
+(defn healthy-stroke! [^Graphics2D g width]
   "More than 1 is enough so that downscaled images don't look so horrible, at least with bilinear interp.
    Does not affect fonts, but as long as fonts render thick enough it should be OK."
-  (.setStroke g ^BasicStroke (BasicStroke. (float *image-scaleup*))))
+  (.setStroke g ^BasicStroke (BasicStroke. (float width))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;; How cameras xform clojure gfx structures ;;;;;;;;
@@ -369,7 +369,8 @@
         pad 5 ; padding since gfx-bound isn't perfect. Accuracy vs performance.
         x0 (- (first xxyy) pad) x1 (+ (second xxyy) pad) y0 (- (nth xxyy 2) pad) y1 (+ (nth xxyy 3) pad)
 
-        scaleup *image-scaleup* ; scaleup so the image is higher fidelity.
+        pixels (float (* (max 1 (- x1 x0)) (max 1 (- y1 y0))))
+        scaleup (min *image-scaleup* (Math/sqrt (/ *max-image-pixels* pixels))) ; scaleup so the image is higher fidelity, or scale down to not have huge images.
         xf [(- (* x0 scaleup)) (- (* y0 scaleup)) scaleup scaleup] ; xform to not cut off the up or left and to scale up.
 
         sx (* scaleup (- x1 x0)) sy (* scaleup (- y1 y0))
@@ -379,10 +380,10 @@
         ^GraphicsEnvironment ge (GraphicsEnvironment/getLocalGraphicsEnvironment);
         ^GraphicsDevice gd (.getDefaultScreenDevice ge)
         ^GraphicsConfiguration gc (.getDefaultConfiguration gd);
-        ^BufferedImage img (.createCompatibleImage gc (int sx) (int sy) (int Transparency/TRANSLUCENT))
+        ^BufferedImage img (.createCompatibleImage gc (int (+ sx 0.5)) (int (+ sy 0.5)) (int Transparency/TRANSLUCENT))
         ;(BufferedImage. (int sx) (int sy) (int BufferedImage/TYPE_INT_ARGB))
         ^Graphics2D g (.createGraphics img)
-        _ (healthy-stroke! g)]
+        _ (healthy-stroke! g scaleup)]
     (cp/fixed-width-font! g)
     (paint-gfx! g xf cmds) [img xf]))
 

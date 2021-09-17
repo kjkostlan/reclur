@@ -3,8 +3,6 @@
 
 (ns layout.spatial.xform)
 
-(def ^:dynamic *max-pixel-radius* 2048) ; Protect against extreme size.
-
 ;;;;;;;;;;;;;;;;; Transform multiplication ;;;;;;;;;;;;;;;;;;
 
 (defn xv [xform x y]
@@ -117,9 +115,9 @@
         [(apply min kpx) (apply max kpx) (apply min kpy) (apply max kpy)])
       [-128 1024 -128 1024])) ; Default when non-sequential
 
-(defn xxyy-gfx-bound [g-cmds]
+(defn xxyy-gfx-bound [g-cmds & max-pixel-radius]
   "Computes bounds of the graphics, xxyy format. Includes a bound to prevent huge images crashing us."
-  (let [maxpix *max-pixel-radius* -maxpix (- maxpix)
+  (let [maxpix (if-let [mpx (first max-pixel-radius)] mpx 1e100) -maxpix (- maxpix)
         no-limit-xxyy (into [] (xxyy-gfx-bound-nolimit g-cmds))]
     [(max -maxpix (nth no-limit-xxyy 0)) (min maxpix (nth no-limit-xxyy 1))
      (max -maxpix (nth no-limit-xxyy 2)) (min maxpix (nth no-limit-xxyy 3))]))
