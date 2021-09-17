@@ -18,7 +18,7 @@ Reclur is functional from the ground up and employs several unique UI design pri
 
 *Multiple views:* A single file can have multiple views open, editing one edits all in sync, code-folded or not.
 
-# Currently in alpha #
+## Currently in alpha ##
 
 We have left pre-alpha with the commit on 2021-Sept-17!
 
@@ -26,7 +26,7 @@ This means that catastrophic bugs with crashing is fixed. Also, basic file-safet
 
 A few common features are still missing and minor bugs are fairly common, but we are at least *usable*.
 
-# Other active (~90 days or less) clojure editors as of fall 2021 #
+## Other active (~90 days or less) clojure editors as of fall 2021 ##
 
 *LightTable/LightTable*: Enables vary real-time coding. Also handles javascript and has an extensive plugin system. This branch is the development branch.
 
