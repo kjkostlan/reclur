@@ -17,7 +17,7 @@
 (def ^:dynamic *add-keyl-to-frame?* true) ; tab only works on the frame. False goes to panel.
 (def ^:dynamic *frame-time-ms* 30) ; a somewhat complex mechanism to ensure graceful degradation when the events are heavy.
 (def ^:dynamic *nframe-slowdown-when-idle* 15) ; Save CPU when nothing is requesting an every frame event.
-(def ^:dynamic *wait-per-event-ms-fn* (fn [queue-length] (int (* queue-length queue-length 5.0)))) ; Slow down the edt and the loop if there are two many events.
+(def ^:dynamic *wait-per-event-ms-fn* (fn [queue-length] (int (* queue-length queue-length 0.1)))) ; Slow down the edt and the loop if there are two many events.
 
 ;;;;;;;;;;;;;;;;;;;;; Other Support functions ;;;;;;;;;;;;;;;;;;;;;
 

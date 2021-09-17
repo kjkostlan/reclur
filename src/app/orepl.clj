@@ -161,11 +161,11 @@
     ((:add-component (:layout s)) s box replk)))
 
 (defn cursor-lrepl? [box]
-  (let [sbox (str box)
-        lsym 'log-and-see-what-is-at-cursor!]
-    (and (= (:type box) :orepl)
-      (string/includes? sbox (str lsym))
-      (string/includes? sbox (str :global)))))
+  (let [lsym 'log-and-see-what-is-at-cursor!]
+    (if (= (:type box) :orepl)
+      (let [sp0 (str (get-in box [:pieces 0 :text]))]
+        (and (string/includes? sp0 (str lsym))
+          (string/includes? sp0 (str :global)))))))
 
 (defn any-cursor-lrepl? [s]
   "Anything is a cursor-lrepl."
