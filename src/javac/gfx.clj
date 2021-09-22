@@ -26,7 +26,7 @@
     [java.awt.image BufferedImage]
     [java.awt.geom AffineTransform])
   (:require [clojure.set :as set] [clojure.string :as string]
-    [crossplatform.cp :as cp]
+    [javac.crossplatform :as cp]
     [layout.spatial.xform :as xform]
     [javac.gfxcustom :as gfxcustom] [javac.thread :as jthread]))
 

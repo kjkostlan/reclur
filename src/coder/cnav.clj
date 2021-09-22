@@ -176,6 +176,15 @@
 
 ;;;;;;;; Clojure-aware, vector of paths return ;;;;;;
 
+(defn fnargpack-paths [defn-code]
+  "Paths to the argpacks in code. Returns a vector with only one element for single arity functions."
+  (if (contains? #{'def 'def*} (first defn-code))
+    (let [ix (dec (count defn-code))]
+      (mapv #(c/vcat [ix] %) (fnargpack-paths (last defn-code))))
+    (if (vector? (second defn-code)) [[1]]
+      (let [ixs (filterv #(c/listy? (c/cget defn-code %)) (range (count defn-code)))]
+        (mapv #(conj [%] 0) ixs)))))
+
 (defn fnresult-paths [code]
   "Log paths to the function's result. One path per each arity. Flexible to macroexpanding vs not and other formatting."
   (let [cl (last code) cl0 (if (coll? cl) (first cl))

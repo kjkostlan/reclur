@@ -2,7 +2,7 @@
 ; Uses reflections and getters.
 (ns javac.clojurize
   (:require [clojure.string :as string]
-    [crossplatform.cp :as crossp]
+    [javac.crossplatform :as crossp]
     [javac.thread :as jthread])
   (:import [java.awt Point Rectangle Dimension]
     [java.io StringWriter]

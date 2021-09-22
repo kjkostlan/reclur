@@ -126,7 +126,7 @@
                                        (and (not (first same-sym-allowed-phs))
                                          (vector? x+) (not (first (remove symbol? x+))))
                                    (println "Warning:" (second code-ex) "Unused fn symbol:" x " bindings = " x+)
-                                   (and (not (first same-sym-allowed-phs)) (vector? x+))
+                                   (and (not (first same-sym-allowed-phs)) (vector? x+) (not= x (symbol "_")))
                                    (println "Warning:" (second code-ex) "Unused let symbol:" x " bindings = " (c/evens x+)))
                                  (first same-sym-allowed-phs))
                                :else false)))

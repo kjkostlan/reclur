@@ -1,6 +1,6 @@
 ; Simple functions that analyze mouse events.
 (ns layout.mouseanal
-  (:require [crossplatform.cp :as crossp] [globals]))
+  (:require [javac.crossplatform :as crossp] [globals]))
 
 (defn get-scroll-xy-vanilla [wheel-evt precise?]
   "Option for precise inertial scrolling."

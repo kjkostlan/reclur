@@ -243,7 +243,7 @@
         log-val (if log-val log-val "<No logs in cursor-clicked places yet>")
         result {:type :success :value log-val :full-state-run? false}]
     (remove-closed-repl-logpaths! s)
-    (update-in s [:components repl-k] #(show-result (assoc % :result result)))))
+    (update-in s [:components repl-k] #(show-result (assoc (update % :num-run-times inc) :result result)))))
 
 (defn orepl-based-updates! [s0 s]
   "Updates to s needed to keep more global functions working."

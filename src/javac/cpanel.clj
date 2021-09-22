@@ -6,7 +6,7 @@
     [javac.gfx :as gfx] [javac.thread :as jthread]
     [javac.clojurize :as clojurize]
     [coder.unerror :as unerror]
-    [crossplatform.cp :as crossp]
+    [javac.crossplatform :as crossp]
     [c])
   (:import [java.awt.event KeyAdapter MouseAdapter WindowEvent ComponentAdapter WindowAdapter]
     [java.awt FlowLayout]

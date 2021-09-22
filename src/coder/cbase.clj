@@ -33,26 +33,6 @@
 
 ;;;;;;;;;; Files and texts ;;;;;;
 
-(defn tokenize [txt langkwd]
-  "Creats [strs tys]. It is a different format than tokenize-ints as well as being clojure native datastructures."
-  (textparse/tokenize-from-ints txt (langs/tokenize-ints txt langkwd)))
-
-(defn stringlang-to-wpath [txt ix langkwd]
-  "Like textparse/string-to-wpath but using the langkwd to look up the function to use."
-  (let [tokenize-ints-fn #(langs/tokenize-ints % langkwd)
-        reads-string-fn #(langs/reads-string % langkwd)]
-   (textparse/string-to-wpath txt ix tokenize-ints-fn reads-string-fn)))
-
-(defn x-at-stringlang [txt ix langkwd]
-  "Like textparse/x-at-string but using the langkwd to look up the function to use."
-  (let [tokenize-ints-fn #(langs/tokenize-ints % langkwd)
-        reads-string-fn #(langs/reads-string % langkwd)]
-    (textparse/x-at-string txt ix tokenize-ints-fn reads-string-fn)))
-
-(defn file2langkwd [fname]
-  (let [ext (last (string/split fname #"\."))]
-    (langs/fileext2langkwd ext)))
-
 (defn file2codes [fname]
   "Reads the file into a clojure datastructure so long as it is a supported language.
    Uses the extension (primarly) to determine language.
@@ -61,14 +41,14 @@
    flatten-classes? flattens java classes and makes each def include the class-name."
   (let [txt (jfile/open fname)
         _ (if (or (not txt) (not (string? txt))) (throw (Exception. (str "Can't load file:" fname))))
-        langkwd (file2langkwd fname)]
+        langkwd (langs/file2langkwd fname)]
     (langs/reads-string txt langkwd)))
 
 (defn file2defmap [fname]
   "Returns qual-sym -> source code."
   (let [txt (jfile/open fname)
         _ (if (or (not txt) (not (string? txt))) (throw (Exception. (str "Can't load file:" fname))))
-        langkwd (file2langkwd fname)
+        langkwd (langs/file2langkwd fname)
         codes (try (langs/reads-string txt langkwd)
                 (catch Exception e
                   (do (println "Parsing failed for" fname " see thrown error") (throw e))))
@@ -87,7 +67,7 @@
         def-wpath (cnav/symbol2defpath-qual codes sym-qual)
         _ (if (not def-wpath) (throw (Exception. (str "Can't find symbol: " sym-qual " in a top or class-level def in " filename))))
         wpath (into [] (concat def-wpath path-within-def))
-        langkwd (file2langkwd filename)
+        langkwd (langs/file2langkwd filename)
         tokenize-ints-fn #(langs/tokenize-ints % langkwd)
         reads-string-fn #(langs/reads-string % langkwd)
         txt (jfile/open filename)

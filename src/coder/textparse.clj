@@ -1,4 +1,8 @@
-; Text-base finding given the tokens and indent levels
+; Functions that parse strings and care about the spacing or other particular characters.
+; Examples:
+ ; Indent level between each character.
+ ; What path would bring us to the 47'th character in the string (and visa-versia)?
+ ; Is a symbol qualed?
 
 (ns coder.textparse
   (:require
@@ -229,13 +233,7 @@
     (apply str (interpose "." (if lang? (rest pieces) pieces)))))
 
 (defn sym2ns [qual-sym]
-  "Returns the namespace/class. Classes from non-clojure have i.e. !java.my.class rather than my.namespace."
+  "Returns the namespace/class from a qualified symbol"
   (cond (or (= qual-sym '/) (= qual-sym "/")) 'clojure.core
     (.contains ^String (str qual-sym) "/")
     (symbol (first (string/split (str qual-sym) #"\/")))))
-
-(defn ns2langkwd [ns-sym]
-  "Clojure languages don't have a specified ! at the beginning."
-  (let [pieces (string/split (str ns-sym) #"\.")
-        p0 (first pieces)]
-    (if (= (first p0) \! ) (keyword (.replace ^String p0 "!" "")) :clojure)))

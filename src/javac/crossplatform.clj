@@ -2,7 +2,7 @@
 ; Note: Code here is and/or returns values that are dependent on the platform.
 ; We normalize filenames to / not \ but that code is not platform *dependent* so isn't here.
 
-(ns crossplatform.cp
+(ns javac.crossplatform
   (:import [java.awt Graphics2D Font])
   (:require [javac.warnbox :as warnbox] [globals]))
 

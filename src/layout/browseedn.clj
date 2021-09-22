@@ -3,7 +3,7 @@
 (ns layout.browseedn
   (:require [clojure.set :as set] [clojure.string :as string] [clojure.walk :as walk]
     [app.codebox :as codebox]
-    [coder.cbase :as cbase]
+    [coder.crosslang.langs :as langs]
     [c] [t]))
 
 (def ^:dynamic *max-dig-range* 1e5)
@@ -111,7 +111,7 @@
 
 (defn path-at-cursor [x-summarized x-summarized-txt cursor-ix]
   "What path on the original x the cursor in x-summarized is at, nil if failure. Does not work for *print-meta*."
-  (if-let [hot-path (into [] (rest (cbase/stringlang-to-wpath x-summarized-txt cursor-ix :clojure)))]
+  (if-let [hot-path (into [] (rest (langs/stringlang-to-wpath x-summarized-txt cursor-ix :clojure)))]
     (let [_ (if (string/includes? (str (first hot-path)) "IAmUnique")
               (println "You must click on map values, not keys (bug)."))
           x-piece (reduce (fn [branch k]

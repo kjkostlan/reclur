@@ -241,7 +241,7 @@
         c-ix1 (loop [ix c-ix] ; has this code been written somewhere else?
                 (if (>= ix (dec n)) (dec n)
                   (if (and (> l0 0) (= (nth ils ix) (dec l0))) ix (recur (inc ix)))))
-        toksty (cbase/tokenize (subs st c-ix0 c-ix1) (:langkwd box))
+        toksty (langs/tokenize (subs st c-ix0 c-ix1) (:langkwd box))
         toks (first toksty) ty (second toksty)
 
         cur-jx (- c-ix c-ix0)
@@ -251,7 +251,7 @@
         jx01 (if (and (not (first suppress-human)) (= (get ty tix-in) 0)
                    (re-find #"[a-zA-Z0-9]+" t-in)) ; Trigger for in-comment mode which uses human language instead.
                (let [jx0 (first jx01-tix)
-                     piecesty (cbase/tokenize t-in :human)
+                     piecesty (langs/tokenize t-in :human)
                      pieces (first piecesty) ty (second piecesty)
                      kx01-tix (token-cur-ix01 pieces (repeat true) (inc (- cur-jx jx0)))]
                 [(+ jx0 (first kx01-tix) -1) (+ jx0 (second kx01-tix) -1)])
@@ -438,7 +438,7 @@
      For the first element of the cpath, uses what is stored in the file if read-string fails.
      Example path: [my.ns/my-sym 4 2 5 1]."
   (let [txt (real-string box) ix (cursor-to-real-string box)
-        wpath (cbase/stringlang-to-wpath txt ix (:langkwd box))
+        wpath (langs/stringlang-to-wpath txt ix (:langkwd box))
         codes (langs/reads-string txt (:langkwd box))
         codes (if codes codes (langs/reads-string (jfile/open (fbrowser/devec-file (:path box))) (:langkwd box)))
         subdef-path (cnav/path2subdef-path codes wpath)
@@ -451,7 +451,7 @@
    Tries to return a valid result even if the code is broken (TODO: it will try to qualify local symbols)."
   (let [ns-sym (generic-ns-sym box)
         txt (real-string box) ix (cursor-to-real-string box)
-        thingy (cbase/x-at-stringlang txt ix (:langkwd box))]
+        thingy (langs/x-at-stringlang txt ix (:langkwd box))]
     (if (symbol? thingy) (if-let [xq (langs/resolved ns-sym thingy)] xq thingy) thingy)))
 
 ;;;;;;;;;;;;;;;;;;;;; other child UI functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

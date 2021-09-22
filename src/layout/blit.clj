@@ -102,7 +102,7 @@
    Leaves a single space for space tokens so thingsdontjamtogether."
   (let [s (if (string? code-or-str) code-or-str
             (pr-str code-or-str))
-        vt (cbase/tokenize s :clojure)
+        vt (langs/tokenize s :clojure)
         vt (fuse-meta-tag (first vt) (second vt))
         strings (first vt)
         types (second vt) ; 0 = empty, 4=opening, 5=closing.

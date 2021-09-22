@@ -8,13 +8,13 @@
 ; Token codes (which can generalize to 95% of languages):
   ; 0 = space and comments and #_(foo), includes delimiters as found in java, python, etc, even if they are necessary, includes MOST python whitespace.
   ; 1 = symbols (basically the same in any language, + and = are symbols in java even though they are treated differently).
-  ; 2 = keywords (reserved words like "class" in java, python, etc).
-  ; 3 = literals (boolean, number, string, regexp, etc).
+  ; 2 = keywords (includes reserved words like "class" in java, python, etc).
+  ; 3 = literals (boolean, number, string, regexp, etc, but excludes collections, of course).
   ; 4 = opening ( [ { #{ almost the same in any language, includes opening <tags>, and includes indent whitespace in python.
   ; 5 = closing ) ] } almost the same in any language, includes </tags>, empty for python as there are no chars to be assigned to a dedent.
-  ; 6 = punctuation like ending semicolons. Does not exist in lisp.
+  ; 6 = punctuation like ending semicolons. Does not exist in lisp. TODO: assign as whitespace insead?
   ; 7 = reader macros (does not include metadata, sets, or regexp), includes spaces in reader macros which is possible in poorly formatted code, mostly unique to lisps.
-  ; 8 = meta tag (java annotations and python decorators).
+  ; 8 = meta tag (includes java annotations and python decorators).
 
 ; Notes about files:
 ;   Must take linux newlines, the file reader should automatically replace windows newlines with linux newlines.
@@ -130,10 +130,16 @@
 
 ;;;;;;;;;;;;;;;;;;;;;; Functions that don't require knowing the language itself, but do depend on language ;;;;;;;;;;;;;
 
+(defn ns2langkwd [ns-sym]
+  "TODO: when we are using multible languages we will use !python, etc at the beginning of non-clojure."
+  (let [pieces (string/split (str ns-sym) #"\.")
+        p0 (first pieces)]
+    (if (= (first p0) \! ) (keyword (.replace ^String p0 "!" "")) :clojure)))
+
 (defn resolved [ns-sym code-sym]
   "Resolves code-sym in ns-sym, which depends on the :requires, :imports, etc.
    Returns a fully qualified symbol."
-  (let [langkwd (textparse/ns2langkwd ns-sym)]
+  (let [langkwd (ns2langkwd ns-sym)]
     (cond (= langkwd :clojure)
       (let [ns-ob (find-ns ns-sym)
             _ (if (not ns-ob) (throw (Exception. (str "Namespace: " (pr-str ns-sym) " not found; the clj file must first be compiled at least once."))))
@@ -161,6 +167,11 @@
            :haskell "hs" :segfault "cpp" :shell "sh" :human "txt"}]
     (get m kwd :unknown)))
 
+(defn file2langkwd [fname]
+  "Foo.clj will be :clojure and Bar.py will be :python"
+  (let [ext (last (string/split fname #"\."))]
+    (fileext2langkwd ext)))
+
 (defn file2ns [file]
   "Converts a local filepath to a namespace symbol."
   (let [file-ext (string/split (subs (jfile/full-to-local file) 2) #"\.")
@@ -174,7 +185,7 @@
 
 (defn ns2file [ns-sym]
   "Converts a namespace representation to a file representation."
-  (let [langkwd (textparse/ns2langkwd ns-sym)]
+  (let [langkwd (ns2langkwd ns-sym)]
     (cond (or (= langkwd :clojure) (= langkwd :human))
       (let [ns-sym0 (textparse/rm-lang ns-sym)
             txt (.replace ^String (str ns-sym) "." "/")]
@@ -183,7 +194,7 @@
 
 (defn findable-ns? [ns-sym]
   "Maybe it isn't findable."
-  (let [langkwd (textparse/ns2langkwd ns-sym)]
+  (let [langkwd (ns2langkwd ns-sym)]
     (cond (= langkwd :clojure)
       (boolean (find-ns ns-sym))
       (= langkwd :human) true
@@ -192,7 +203,7 @@
 (defn var-info [qual-sym source?]
   "Gets information about a var in the form of clojure datastructures.
    source? means look for the source as well, which can be a little slow."
-  (let [langkwd (textparse/ns2langkwd (textparse/sym2ns qual-sym))]
+  (let [langkwd (ns2langkwd (textparse/sym2ns qual-sym))]
     (if (not (symbol? qual-sym)) (throw (Exception. (str "Qual-sym must be a symbol not a " (type qual-sym)))))
     (if (not= langkwd :clojure)
       (errlang "var-info" langkwd)))
@@ -213,7 +224,7 @@
 
 (defn defs [ns-sym]
   "Not qualified."
-  (let [langkwd (textparse/ns2langkwd ns-sym)]
+  (let [langkwd (ns2langkwd ns-sym)]
     (cond (= langkwd :clojure)
       (into [] (keys (ns-interns ns-sym)))
       (= langkwd :human) []
@@ -223,7 +234,7 @@
   "All recognized symbols of the namespace, with :as qualifications, etc.
    TODO: java imports for clojure.
    Only includes things that were imported."
- (let [langkwd (textparse/ns2langkwd ns-sym)
+ (let [langkwd (ns2langkwd ns-sym)
        _ (if (not= langkwd :clojure) (errlang "valid-symbols" langkwd))
        x (ns-aliases ns-sym)
        as2ns (zipmap (keys x) (mapv ns-name (vals x)))
@@ -237,7 +248,7 @@
 
 (defn defs [ns-sym]
   "Not qualified."
-  (let [langkwd (textparse/ns2langkwd ns-sym)]
+  (let [langkwd (ns2langkwd ns-sym)]
     (cond (= langkwd :clojure)
       (into [] (keys (ns-interns ns-sym)))
       (= langkwd :human) []
@@ -246,7 +257,7 @@
 (defn mexpand [ns-sym code]
   "Performs a macroexpand-all on the function, as well as some other minor steps to make
    the code easier to work with."
-  (let [langkwd (textparse/ns2langkwd ns-sym)]
+  (let [langkwd (ns2langkwd ns-sym)]
     (#(if (c/listy? %) (apply list %) %) (fn-pack
       (cond (= langkwd :clojure)
         (walk/postwalk unmacro-static-java1
@@ -281,6 +292,10 @@
     (= langkwd :human) (human/tokenize-ints txt)
     :else (errlang "tokenize-ints" langkwd)))
 
+(defn tokenize [txt langkwd]
+  "Creates [strs tys]. It is a different format than tokenize-ints as well as being clojure native datastructures."
+  (textparse/tokenize-from-ints txt (tokenize-ints txt langkwd)))
+
 (defn convert-stack-trace [stack-trace stop-stack langkwd]
   "Converts a stack trace created in language langkwd into a natural clojure data-structure format.
    Stop-stack (which can be empty []) is a vector of stops for the stacktrace."
@@ -311,6 +326,18 @@
             stack-clj (convert-stack-trace stack-trace stop-stack langkwd)]
         {:Message message :StackTrace stack-clj})
         :else (errlang "convert-exception" langkwd)))
+
+(defn stringlang-to-wpath [txt ix langkwd]
+  "Like textparse/string-to-wpath but using the langkwd to look up the function to use."
+  (let [tokenize-ints-fn #(tokenize-ints % langkwd)
+        reads-string-fn #(reads-string % langkwd)]
+   (textparse/string-to-wpath txt ix tokenize-ints-fn reads-string-fn)))
+
+(defn x-at-stringlang [txt ix langkwd]
+  "Like textparse/x-at-string but using the langkwd to look up the function to use."
+  (let [tokenize-ints-fn #(tokenize-ints % langkwd)
+        reads-string-fn #(reads-string % langkwd)]
+    (textparse/x-at-string txt ix tokenize-ints-fn reads-string-fn)))
 
 ;;;;;;;;;;;;;;;;;;;;;; Functions that work with multiple languages at once ;;;;;;;;;;;;;
 
