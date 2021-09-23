@@ -57,10 +57,28 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; siconsole coloring ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn num-cmd-cycle [] 5)
-(defn cmdix2rgb [cmd-ix]
-  (let [brt (mod (/ cmd-ix (double (num-cmd-cycle))) 1.0)]
-    [(Math/pow brt 1.0) (+ 0.5 (* (Math/pow brt 0.5) 0.5)) (+ 0.95 (* (Math/pow brt 0.333) 0.04999))]))
-
 (defn printix2rgb [cmd-ix]
   (let [brt (mod (/ cmd-ix (double (num-cmd-cycle))) 1.0)]
     [(Math/pow brt 1.0) (+ 0.7 (* (Math/pow brt 0.333) 0.29)) (Math/pow brt 0.5)]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Orepl coloring ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn cmdix2rgb [cmd-ix]
+  "Mono-color option, not currently used."
+  (let [brt (mod (/ cmd-ix (double (num-cmd-cycle))) 1.0)]
+    [(Math/pow brt 1.0) (+ 0.5 (* (Math/pow brt 0.5) 0.5)) (+ 0.95 (* (Math/pow brt 0.333) 0.04999))]))
+
+(defn repl-out-multicolor [depth token-ty num-run-times]
+  (let [hue-depth-speed 0.1666667
+        token-tysat     [0.40 0.40 0.20 0.20 1.00 1.00 0.40 0.40 0.40]
+        token-lightness [0.70 0.70 0.70 0.70 0.60 0.60 0.70 0.70 0.70]
+
+        hue-shift       [0 0.05 0.1 0.15 0.2 0.25]
+        light-shift     [-0.05 0.05 -0.05 0.05 -0.05 0.05]
+        sat-shift       [0.0 0.0 0.0 0.0 0.0 0.0]
+
+        shift-ix (int (mod (+ 0.5 num-run-times) (count hue-shift)))
+        hue (mod (+ (* depth hue-depth-speed) 999 (nth hue-shift shift-ix)) 1.0)
+        saturation (+ (get token-tysat token-ty 1.0) (nth sat-shift shift-ix))
+        lightness (+ (get token-lightness token-ty 0.5) (nth light-shift shift-ix))]
+    (hsl2rgb [hue saturation lightness])))

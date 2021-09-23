@@ -25,18 +25,22 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; Look and feel ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(def colorize-top codebox/colorize)
-
-(defn colorize-out [box s piece-ix char-ix0 char-ix1]
-  (let [rgba (conj (colorful/cmdix2rgb (:num-run-times box)) 1)]
-    (into [] (repeat (inc (- char-ix1 char-ix0)) rgba))))
+(defn colorize-output [txt num-run-times]
+  (let [[tokens token-tys] (langs/tokenize txt :clojure)
+        char-token (apply c/vcat
+                     (mapv #(repeat (count %1) %2) tokens token-tys))
+        inter-levels (langs/interstitial-depth txt :clojure)
+        rgba (conj (colorful/cmdix2rgb num-run-times) 1)
+        levels-inclusive (mapv max (butlast inter-levels) (rest inter-levels))]
+    (mapv #(conj (colorful/repl-out-multicolor %1 %2 num-run-times) 1)
+      levels-inclusive char-token)
+    #_(into [] (repeat (count txt) rgba))))
 
 (defn colorize [box s piece-ix char-ix0 char-ix1]
-  (let [cols-if-top (colorize-top box s piece-ix char-ix0 char-ix1)
-        cols-if-out (colorize-out box s piece-ix char-ix0 char-ix1)
-        n0 (dec (count (:pieces box)))]
-    (mapv #(if (< %1 n0) (nth cols-if-top %2)
-             (nth cols-if-out %2)) piece-ix (range (count cols-if-top)))))
+  (let [txt0 (:text (first (:pieces box))) txt1 (:text (second (:pieces box)))
+        cols-if-top (codebox/colorize box s piece-ix char-ix0 char-ix1)
+        cols-out (colorize-output txt1 (:num-run-times box))]
+    (c/vcat (subvec cols-if-top 0 (count txt0)) cols-out)))
 
 (defn limit-length [s]
   (let [max-len 10000 tmp "...<too long to show>"]
