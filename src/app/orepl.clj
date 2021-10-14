@@ -26,7 +26,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;; Look and feel ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn colorize-output [txt num-run-times]
-  (let [[tokens token-tys] (langs/tokenize txt :clojure)
+  (let [txt (if txt txt "")
+        [tokens token-tys] (langs/tokenize txt :clojure)
         char-token (apply c/vcat
                      (mapv #(repeat (count %1) %2) tokens token-tys))
         inter-levels (langs/interstitial-depth txt :clojure)

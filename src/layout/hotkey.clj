@@ -12,6 +12,7 @@
     [app.iteration :as iteration]
     [app.multicomp :as multicomp]
     [app.rtext :as rtext]
+    [app.tabgroup :as tabgroup]
     [javac.cpanel :as cpanel]
     [navigate.strfind :as strfind]
     [navigate.funcjump :as funcjump]
@@ -86,6 +87,11 @@
    "C-^^" (fn [s] (funcjump/try-to-go-ups s true false))
    "C-S-^^" (fn [s] (funcjump/try-to-go-ups s false false))
    "C-vv" (fn [s] (funcjump/try-to-go-into s))
+   "C-t" (fn [s] (let [[x y] (:mouse-pos-world s)
+                       mevt-c {:X x :Y y}
+                       s1 (update s :components #(tabgroup/toggle-tabs-for-boxes-under-mouse % x y))
+                       s2 (selectmovesize/seltool-mousepress mevt-c s1)
+                       s3 (selectmovesize/seltool-mouserelease mevt-c s2)] s3))
    "C-S-M-n ^^ ^^ vv vv << >> << >> b a" (fn [s] (println "We hope you enjoy this sandbox-genre game!") s)})
 
 (defn hotkey-cycle [evt-g evt-c s k]

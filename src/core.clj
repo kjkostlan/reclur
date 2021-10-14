@@ -23,6 +23,7 @@
     [app.multicomp :as multicomp]
     [app.multisync :as multisync]
     [app.iteration :as iteration]
+    [app.tabgroup :as tabgroup]
     [layout.keyanal :as ka]
     [layout.hotkey :as hk]
     [layout.background :as background]
@@ -228,7 +229,8 @@
           s2 (update-mouse evt-g evt-c s1 k)
           s3 (diff-checkpoint s2 #(hk/hotkey-cycle evt-g evt-c % k))
           hk? (boolean (:tmp-hotkey-block? s3)) ; a recognized hotkey.
-          s4 (dissoc s3 :tmp-hotkey-block?)]
+          s3_5 (dissoc s3 :tmp-hotkey-block?)
+          s4 (if (= k :mousePressed) (update s3_5 :components #(tabgroup/tab-group-global-click % evt-c)) s3_5)]
       (#(update-hot-boxes (orepl/orepl-based-updates! s %))
         (if hk? (send-off-resize-listeners s s4) ; hotkeys block other actions.
             (let [; Typing mode forces single component use.
@@ -241,8 +243,10 @@
 
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
 
-(defn globalize-gfx [comps cam local-comp-renders selected-comp-keys tool-sprite sel-move-sz-sprite typing?]
-  "Takes the local gfx of components as well as tool information to make the global gfx"
+(defn make-global-sprites [comps local-comp-renders selected-comp-keys
+                           local-tab-renders tab-zvals
+                           already_global_sprites cam typing?]
+  "Sprites store :camera and :z which allows the graphics to place it in the world."
   (let [sel-keys (apply hash-set selected-comp-keys)
         comp-sprites (zipmap (keys comps)
                        (mapv (fn [k]
@@ -257,9 +261,12 @@
         sel-sprite {:camera cam :z 2e10
                     :gfx (into [] (apply concat (mapv #(multicomp/draw-select-box comps % [0 0 1 1]) sel-keys)))}
         haze-sprite {:camera [0 0 1 1] :z -1e99
-                     :gfx (if typing? [[:fillRect [0 0 3200 1600] {:Color [0 0 0.5 0.333]}]] [])}]
-    (assoc comp-sprites ::TOOL-SPRITE-CORE tool-sprite ::TOOL-SMS-SPRITE sel-move-sz-sprite ::TOOL-SEL-SPRITE sel-sprite
-    ::BACKGROUND-SPRITE bg ::HAZE-SPRITE haze-sprite)))
+                     :gfx (if typing? [[:fillRect [0 0 3200 1600] {:Color [0 0 0.5 0.333]}]] [])}
+        tab2sprite (fn [tab-render z-val]
+                     {:camera cam :z z-val :gfx tab-render})
+        tab-sprites (zipmap (keys local-tab-renders)
+                      (mapv tab2sprite (vals local-tab-renders) (vals tab-zvals)))]
+    (merge comp-sprites tab-sprites already_global_sprites {::BACKGROUND-SPRITE bg ::HAZE-SPRITE haze-sprite})))
 
 (defn draw-component-l [comp focused?]
   (if (nil? comp) (throw (Exception. "nil component")))
@@ -273,29 +280,31 @@
 (defn update-gfx [s]
   "Returns s with updated graphics information. app-render will then use the updated graphics to return a sprite map."
   (let [precompute (if-let [x (:gfx (:precompute s))] x {})
-        comps (:components s)
+        boxes (:components s)
         cam (:camera s)
-        _ (multisync/nil-assert comps "The update-gfx fn is missing comps")
-        old-comps (if-let [x (get precompute :comps-at-render)] x {})
-        old-compgfx (if-let [x (get precompute :comp-renders)] x {})
-        draw-or-reuse (fn [k] (let [c (get comps k) c0 (get old-comps k) g0 (get old-compgfx k)]
+        _ (multisync/nil-assert boxes "The update-gfx fn is missing boxes")
+        old-boxes (if-let [x (get precompute :comps-at-render)] x {})
+        old-boxesgfx (if-let [x (get precompute :comp-renders)] x {})
+        draw-or-reuse (fn [k] (let [c (get boxes k) c0 (get old-boxes k) g0 (get old-boxesgfx k)]
                                 ; Cant use comp-eq? b/c comp-eq? is only for the :pieces not the gfx.
                                 (if (and (:pure-gfx? (:optimize c)) (= (dissoc c0 :position) (dissoc c :position)))
                                   g0 (draw-component-l c true))))
-        gfx-comps-l (zipmap (keys comps) (mapv draw-or-reuse (keys comps)))
-        precompute1 (assoc precompute :comps-at-render comps :comp-renders gfx-comps-l)
+        gfx-boxes-l (zipmap (keys boxes) (mapv draw-or-reuse (keys boxes)))
+        precompute1 (assoc precompute :comps-at-render boxes :comp-renders gfx-boxes-l)
         s1 (assoc-in s [:precompute :gfx] precompute1)
 
-        tool (:active-tool s) ; don't precompute the tools, not necessary, at least for now.
-        ; TODO: use the cam or use no cam?
+        [gfx-tabs-l tab-zvals] (tabgroup/render-tab-groups boxes)
+
+        tool (:active-tool s)
         tool-sprite {:camera cam :gfx (if-let [rf (:render tool)] (rf s) [])}
 
         sel-move-sz-sprite (if (:typing-mode? s) {:camera [0 0 1 1] :gfx []}
                              {:camera cam :gfx ((:render (selectmovesize/get-selection-tool)) s) :z 1e10})
-        ;tool-hud-sprite {:camera [0 0 1 1] :z 1e100
-        ;                 :gfx (multicomp/which-tool-hud s)}
-        global-gfx (globalize-gfx (:components s) (:camera s) gfx-comps-l (:selected-comp-keys s) tool-sprite sel-move-sz-sprite
-                     (:typing-mode? s))]
+
+        global-gfx (make-global-sprites (:components s) gfx-boxes-l (:selected-comp-keys s)
+                     gfx-tabs-l tab-zvals
+                     {::tool-sprite tool-sprite ::sel-move-size-sprite sel-move-sz-sprite}
+                     cam (:typing-mode? s))]
     (assoc-in s1 [:precompute :gfx :global] global-gfx)))
 
 (defn app-render [s]

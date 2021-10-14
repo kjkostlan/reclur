@@ -1,13 +1,14 @@
 ; Handles selection (single or multible), moving and resizing.
 
 (ns layout.spatial.selectmovesize
-  (:require [globals] 
+  (:require [globals]
     [layout.spatial.xform :as xform]
     [layout.spatial.collide :as collide]
     [layout.spatial.lmodes.stack :as lstack]
     [layout.spatial.lmodes.teleport :as lteleport]
     [layout.keyanal :as ka] [layout.mouseanal :as ma]
     [app.multicomp :as multicomp]
+    [app.tabgroup :as tabgroup]
     [clojure.string :as string]
     [clojure.set :as set]))
 
@@ -64,6 +65,10 @@
       (collide/hit-rect? x y x0 x1 y0 y1) :main-rect
       :else :miss)))
 
+(defn tab-sync [s0 s1]
+  "The tabgroup may need synching even if multisync is not called."
+  (assoc s1 :components (tabgroup/sync-on-update (:components s0) (:components s1))))
+
 ;;;;;;;;;;;;; Moving components around ;;;;;;;;;;;;;;;
 
 (defn _apply-xform [comp xform] "TODO: rename x-box and put into xform"
@@ -92,9 +97,7 @@
 
 (defn unique-z [components]
   "Assigns each component a unique z-value."
-  (loop [acc (zipmap (keys components) (mapv #(if (:z %) % (assoc % :z 1)) (vals components)))]
-    (if (= (count (apply hash-set (mapv :z (vals acc)))) (count acc)) acc
-      (recur (zipmap (keys acc) (mapv (fn [c] (update c :z #(+ (* % (+ 1 (* (Math/random) 1e-10))) 1e-100))) (vals acc)))))))
+  (zipmap (keys components) (tabgroup/unique-z-vec (vals components))))
 
 ;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;
 
@@ -169,47 +172,49 @@
        s)))
 
 (defn seltool-mousedrag [mevt-c s]
-  (let [ts (gts s) insta-drag? (:insta-drag? ts)
-        xxyy (:xxyy ts) mx1 (:X1 mevt-c) my1 (:Y1 mevt-c)
-        mx (:X mevt-c) my (:Y mevt-c) target0 (:corner-mode ts)]
-    (if (= target0 :miss)
-      (cond (and (is-sh?) insta-drag?)
-        (let [khit (collide/under-cursor mx my (:components s))]
-          (if khit (update s :selected-comp-keys #(conj % khit)) s))
-        (and (is-alt?) insta-drag?)
-        (let [khit (collide/under-cursor mx my (:components s))]
-          (if khit (update s :selected-comp-keys #(disj % khit)) s))
-        :else (sts s (update ts :xxyy #(assoc % 1 mx 3 my)))) ; creating a rectangle, no selection.
-      (let [dx (- mx mx1) dy (- my my1)
-            new-xxyy (if (:single-drag? ts) (mapv + xxyy [dx dx dy dy])
-                       (apply _new-rect dx dy target0 xxyy))
-            new-xxyy [(first new-xxyy) (max (+ (first new-xxyy) 1e-6) (second new-xxyy))
-                      (nth new-xxyy 2) (max (+ (nth new-xxyy 2) 1e-6) (nth new-xxyy 3))]
-            xform (if (> (count (:selected-comp-keys s)) 0)
-                    (apply _xform-from-rect (first xxyy) (second xxyy) (nth xxyy 2) (nth xxyy 3) new-xxyy))
-            ts-new (assoc ts :xxyy new-xxyy)]
-        (update (sts s ts-new) :components #(apply-xform % (:selected-comp-keys s) xform))))))
+  (#(tab-sync s %)
+    (let [ts (gts s) insta-drag? (:insta-drag? ts)
+          xxyy (:xxyy ts) mx1 (:X1 mevt-c) my1 (:Y1 mevt-c)
+          mx (:X mevt-c) my (:Y mevt-c) target0 (:corner-mode ts)]
+      (if (= target0 :miss)
+        (cond (and (is-sh?) insta-drag?)
+          (let [khit (collide/under-cursor mx my (:components s))]
+            (if khit (update s :selected-comp-keys #(conj % khit)) s))
+          (and (is-alt?) insta-drag?)
+          (let [khit (collide/under-cursor mx my (:components s))]
+            (if khit (update s :selected-comp-keys #(disj % khit)) s))
+          :else (sts s (update ts :xxyy #(assoc % 1 mx 3 my)))) ; creating a rectangle, no selection.
+        (let [dx (- mx mx1) dy (- my my1)
+              new-xxyy (if (:single-drag? ts) (mapv + xxyy [dx dx dy dy])
+                         (apply _new-rect dx dy target0 xxyy))
+              new-xxyy [(first new-xxyy) (max (+ (first new-xxyy) 1e-6) (second new-xxyy))
+                        (nth new-xxyy 2) (max (+ (nth new-xxyy 2) 1e-6) (nth new-xxyy 3))]
+              xform (if (> (count (:selected-comp-keys s)) 0)
+                      (apply _xform-from-rect (first xxyy) (second xxyy) (nth xxyy 2) (nth xxyy 3) new-xxyy))
+              ts-new (assoc ts :xxyy new-xxyy)]
+          (update (sts s ts-new) :components #(apply-xform % (:selected-comp-keys s) xform)))))))
 
 (defn seltool-keypress [k-evt s]
-  (let [mx (first (:mouse-pos-world s)) my (second (:mouse-pos-world s))]
-    (cond (and (ka/c? k-evt) (= (str (ka/lowercase-letter k-evt)) (str "c")))
-      (let [ts (gts s)
-            sel (:selected-comp-keys s)]
-        (sts s (assoc ts :copied-comps (zipmap sel (map #(get (:components s) %) sel))
-                 :copy-mx mx :copy-my my)))
-      (and (ka/c? k-evt) (= (str (ka/lowercase-letter k-evt)) (str "v"))) ; paste.
-      (let [ts (gts s) dx (- mx (:copy-mx ts))
-            dy (- my (:copy-my ts))
-            raise-z (inc (- (apply max (mapv :z (vals (:components s))))
-                            (apply min (mapv :z (vals (:copied-comps ts))))))
-            comp-kys (mapv lteleport/derive-key (keys (:copied-comps ts)))
-            comp-vals (mapv (fn [c] (update (update c :position #(vector (+ (first %) dx) (+ (second %) dy)))
-                                      :z #(+ % raise-z)))
-                        (vals (:copied-comps ts)))]
-        (sts (update s :components
-            #(merge % (zipmap comp-kys comp-vals)))
-          (assoc ts :copied-comps (zipmap comp-kys (vals (:copied-comps ts))))))
-      :else s)))
+  (#(tab-sync s %)
+    (let [mx (first (:mouse-pos-world s)) my (second (:mouse-pos-world s))]
+      (cond (and (ka/c? k-evt) (= (str (ka/lowercase-letter k-evt)) (str "c")))
+        (let [ts (gts s)
+              sel (:selected-comp-keys s)]
+          (sts s (assoc ts :copied-comps (zipmap sel (map #(get (:components s) %) sel))
+                   :copy-mx mx :copy-my my)))
+        (and (ka/c? k-evt) (= (str (ka/lowercase-letter k-evt)) (str "v"))) ; paste.
+        (let [ts (gts s) dx (- mx (:copy-mx ts))
+              dy (- my (:copy-my ts))
+              raise-z (inc (- (apply max (mapv :z (vals (:components s))))
+                              (apply min (mapv :z (vals (:copied-comps ts))))))
+              comp-kys (mapv lteleport/derive-key (keys (:copied-comps ts)))
+              comp-vals (mapv (fn [c] (update (update c :position #(vector (+ (first %) dx) (+ (second %) dy)))
+                                        :z #(+ % raise-z)))
+                          (vals (:copied-comps ts)))]
+          (sts (update s :components
+              #(merge % (zipmap comp-kys comp-vals)))
+            (assoc ts :copied-comps (zipmap comp-kys (vals (:copied-comps ts))))))
+        :else s))))
 
 ;(defn clear-selection [s] (assoc s :selected-comp-keys #{})) ; doesn't work.
 (defn clear-selection [s]

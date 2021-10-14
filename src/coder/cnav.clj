@@ -181,7 +181,7 @@
   (if (contains? #{'def 'def*} (first defn-code))
     (let [ix (dec (count defn-code))]
       (mapv #(c/vcat [ix] %) (fnargpack-paths (last defn-code))))
-    (if (vector? (second defn-code)) [[1]]
+    (if-let [ix (first (c/where vector? defn-code))] [[ix]]
       (let [ixs (filterv #(c/listy? (c/cget defn-code %)) (range (count defn-code)))]
         (mapv #(conj [%] 0) ixs)))))
 

@@ -320,5 +320,6 @@
                       (if (= new new1) new1 (recur new new1 (inc n))))))
         kothers (filterv #(let [ty (:type (get comps1 %))]
                             (and (not= ty :codebox) (not= ty :fbrowser))) (keys comps1))
-        others (zipmap kothers (mapv #(get comps1 %) kothers))]
-    (update-keytags comps0 (merge others fbsync cbsync2))))
+        others (zipmap kothers (mapv #(get comps1 %) kothers))
+        comps2 (merge others fbsync cbsync2)]
+    (update-keytags comps0 comps2)))
