@@ -227,9 +227,9 @@
                     (throw (Exception. (str "Eval of: " txt "\n Produced this error: " (.getMessage e))))))))
           s1 (if x (siconsole/log s (str "Parent command result:\n" x)) s)
           s2 (update-mouse evt-g evt-c s1 k)
-          s3 (diff-checkpoint s2 #(hk/hotkey-cycle evt-g evt-c % k))
-          hk? (boolean (:tmp-hotkey-block? s3)) ; a recognized hotkey.
-          s3_5 (dissoc s3 :tmp-hotkey-block?)
+          s3 (diff-checkpoint s2 #(hk/global-hotkey-cycle % evt-g evt-c k))
+          hk? (hk/global-hotkey-block? s3) ; A hotkey fn has been triggered.
+          s3_5 (hk/global-remove-blocks s3)
           s4 (if (= k :mousePressed) (update s3_5 :components #(tabgroup/tab-group-global-click % evt-c)) s3_5)]
       (#(update-hot-boxes (orepl/orepl-based-updates! s %))
         (if hk? (send-off-resize-listeners s s4) ; hotkeys block other actions.

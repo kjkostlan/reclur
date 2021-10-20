@@ -1,7 +1,7 @@
 ; Handles selection (single or multible), moving and resizing.
 
 (ns layout.spatial.selectmovesize
-  (:require [globals]
+  (:require [globals] [c]
     [layout.spatial.xform :as xform]
     [layout.spatial.collide :as collide]
     [layout.spatial.lmodes.stack :as lstack]
@@ -84,20 +84,44 @@
   (let [u-xxyy (xform/unitscreen-xxyy (xform/visible-xxyy cam0) (xform/box-xxyy box))]
     (lstack/set-unitscreen-xxyy box (xform/visible-xxyy cam1) u-xxyy)))
 
+(defn screen-corners [s]
+  "Where are the xxyy in the world dependent on :camera of s?"
+  (let [screen-pix (xform/screen-pixels)
+        i-cam (xform/x-1 (:camera s))
+        corner-nw (xform/xv i-cam 0 0) corner-se (apply xform/xv i-cam screen-pix)]
+    [(first corner-nw) (first corner-se) (second corner-nw) (second corner-se)]))
+
 (defn fit-to-screen [s comp]
   "Moves the comp, and resizes it if necessary, to make it fit in the screen."
-  (let [screen-pix (xform/screen-pixels)
+  (let [[x0 x1 y0 y1] (screen-corners s)
+        screen-pix (xform/screen-pixels)
         i-cam (xform/x-1 (:camera s))
         corner-nw (xform/xv i-cam 0 0) corner-se (apply xform/xv i-cam screen-pix)
         pos (:position comp) sz (:size comp)
-        sz (mapv min sz (mapv - corner-se corner-nw))
-        pos (mapv max pos corner-nw)
-        pos (mapv min pos (mapv - corner-se sz))]
+        sz (mapv min sz [(- x1 x0) (- y1 y0)])
+        pos (mapv max pos [x0 y0])
+        pos (mapv min pos [x1 y1])]
     (assoc comp :position pos :size sz)))
 
 (defn unique-z [components]
   "Assigns each component a unique z-value."
   (zipmap (keys components) (tabgroup/unique-z-vec (vals components))))
+
+;;;;;;;;;;;;; Selecting components ;;;;;;;;;;;;;;;
+
+(defn update-selection-box [s]
+  "Based on what is in :selected-comp-keys."
+  (let [sel-kys (:selected-comp-keys s)
+        xxyy (if (= (count sel-kys) 0) [-10000 -10000 -9999 -9999] (collide/bounding-xxyy (mapv #(get (:components s) %) sel-kys)))
+        ts (gts s)
+        ts-new (assoc ts :xxyy xxyy)]
+    (sts s ts-new)))
+
+(defn onscreen-kys [s]
+  "Uses the same tolerance selecting does for partially onscreen."
+  (let [screen-xxyy (screen-corners s)
+        kys (apply trapped-box-keys (:components s) screen-xxyy)]
+    (set kys)))
 
 ;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;
 
@@ -129,11 +153,8 @@
 (defn seltool-render [s]
   (let [ts (gts s) zoom (last (:camera s))
         _ (if (< zoom 1e-10) (throw (Exception. "The zoom got set to zero somehow.")))
-        sh? (is-sh?) ; shifting disables seeing the selection (until the mouse gets going), as it disables being to drag the selection.
-        alt? (is-alt?) ; alt is the same idea and it removes selections.
         mouse? (is-mouse?) ts (gts s)]
-    (if (and (or sh? alt?) (or (not mouse?) (:insta-drag? ts)))
-      [] (apply draw-box-handle (/ *handle-pixels* zoom) (:corner-mode s) (:xxyy ts)))))
+    (apply draw-box-handle (/ *handle-pixels* zoom) (:corner-mode s) (:xxyy ts))))
 
 ;;;;;;;;;;;;; Specific UI functions ;;;;;;;;;;;;;;;
 
@@ -148,27 +169,27 @@
         ts (assoc ts :fresh-press? true :insta-drag? insta-drag?
              :corner-mode (if (and insta-drag? (not sh?) (not alt?)) :main-rect target))]
     (cond insta-drag?
-      (let [comp (get comps khit) pos (:position comp) sz (:size comp)
-            ts (assoc ts :xxyy [(first pos) (+ (first pos) (first sz)) (second pos) (+ (second pos) (second sz))])]
-        (assoc (sts s ts) :selected-comp-keys
-          (cond sh? (set/union (set (:selected-comp-keys s)) (hash-set khit))
-            alt? (set/difference (set (:selected-comp-keys s)) (hash-set khit))
-            :else (hash-set khit))))
-      (= target :miss) (sts (if (or sh? alt?) s (assoc s :selected-comp-keys #{})) (assoc ts :xxyy [x x y y] :corner-mode :miss)) ; zero-size rectangle.
-      :else (sts s ts))))
+      (let [comp (get comps khit)]
+        (update-selection-box
+          (assoc (sts s ts) :selected-comp-keys
+            (cond sh? (set/union (set (:selected-comp-keys s)) (hash-set khit))
+              alt? (set/difference (set (:selected-comp-keys s)) (hash-set khit))
+              :else (hash-set khit)))))
+      (= target :miss) (sts (if (or sh? alt?) s (assoc s :selected-comp-keys #{}))
+                         (assoc ts :corner-mode :miss :xxyy [x (inc x) y (inc y)])) ; zero-size rectangle.
+      :else (update-selection-box (sts s ts)))))
 
 (defn seltool-mouserelease [mevt-c s] ; Snap to whatever is selected.
   (let [ts (gts s)]
-     (if (:fresh-press? ts)
+     (if (and (:fresh-press? ts) (not (:ShiftDown mevt-c)))
        (let [xxyy-loose (:xxyy ts)
              sel-kys (if (= (:corner-mode ts) :miss)
                         ((if (is-alt?) set/difference set/union)
                           (set (:selected-comp-keys s))
                           (set (apply trapped-box-keys (:components s) xxyy-loose)))
                          (set (:selected-comp-keys s)))
-             xxyy-tight (collide/bounding-xxyy (mapv #(get (:components s) %) sel-kys))
-             ts (assoc ts :fresh-press? false :xxyy xxyy-tight :corner-mode :miss)]
-         (assoc (sts s ts) :selected-comp-keys sel-kys))
+             ts (assoc ts :fresh-press? false :corner-mode :miss)]
+         (update-selection-box (assoc (sts s ts) :selected-comp-keys sel-kys)))
        s)))
 
 (defn seltool-mousedrag [mevt-c s]
@@ -191,18 +212,18 @@
                         (nth new-xxyy 2) (max (+ (nth new-xxyy 2) 1e-6) (nth new-xxyy 3))]
               xform (if (> (count (:selected-comp-keys s)) 0)
                       (apply _xform-from-rect (first xxyy) (second xxyy) (nth xxyy 2) (nth xxyy 3) new-xxyy))
-              ts-new (assoc ts :xxyy new-xxyy)]
-          (update (sts s ts-new) :components #(apply-xform % (:selected-comp-keys s) xform)))))))
+              ts (assoc ts :xxyy new-xxyy)]
+          (update (sts s ts) :components #(apply-xform % (:selected-comp-keys s) xform)))))))
 
 (defn seltool-keypress [k-evt s]
   (#(tab-sync s %)
     (let [mx (first (:mouse-pos-world s)) my (second (:mouse-pos-world s))]
-      (cond (and (ka/c? k-evt) (= (str (ka/lowercase-letter k-evt)) (str "c")))
+      (cond (and (ka/c? k-evt) (= (str (ka/lowercase-char k-evt)) (str "c")))
         (let [ts (gts s)
               sel (:selected-comp-keys s)]
           (sts s (assoc ts :copied-comps (zipmap sel (map #(get (:components s) %) sel))
                    :copy-mx mx :copy-my my)))
-        (and (ka/c? k-evt) (= (str (ka/lowercase-letter k-evt)) (str "v"))) ; paste.
+        (and (ka/c? k-evt) (= (str (ka/lowercase-char k-evt)) (str "v"))) ; paste.
         (let [ts (gts s) dx (- mx (:copy-mx ts))
               dy (- my (:copy-my ts))
               raise-z (inc (- (apply max (mapv :z (vals (:components s))))

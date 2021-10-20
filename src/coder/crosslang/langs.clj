@@ -296,6 +296,11 @@
   "Creates [strs tys]. It is a different format than tokenize-ints as well as being clojure native datastructures."
   (textparse/tokenize-from-ints txt (tokenize-ints txt langkwd)))
 
+(defn stream-tokenize [txt langkwd]
+  "Creats a single vector, the token of each character.
+   Tokens of the same type could end up back to back"
+  (apply textparse/token-stream-from-ints (tokenize-ints txt langkwd)))
+
 (defn convert-stack-trace [stack-trace stop-stack langkwd]
   "Converts a stack trace created in language langkwd into a natural clojure data-structure format.
    Stop-stack (which can be empty []) is a vector of stops for the stacktrace."

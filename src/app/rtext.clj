@@ -27,7 +27,7 @@
 
 (defn ctrl+ [key-evt]
   "If the user hits Ctrl-a returns the char a, etc. Returns nil otherwise."
-  (if (ka/c? key-evt) (first (ka/lowercase-letter key-evt))))
+  (if (ka/c? key-evt) (first (ka/lowercase-char key-evt))))
 
 ;;;;;;;;;;;;;;;;;;;; Defaults ;;;;;;;;;;;;;;;;
 

@@ -57,6 +57,14 @@
                 (update acc (::tabgroup box) #(conj (if % % []) box)) acc))
       {} (vals boxes))))
 
+(defn this-on-top [box-vector ix]
+  (let [max-z-ix (np/argmax (mapv :z box-vector))
+        max-z (:z (nth box-vector max-z-ix))
+        cur-z (get-in box-vector [ix :z])]
+    (-> box-vector
+      (assoc-in [ix :z] max-z)
+      (assoc-in [max-z-ix :z] cur-z))))
+
 (defn on-tab-group-click [box-vector m-evt]
   "Selects a box within the tab group to put it on top, changes the :z values."
   (let [box-vector (unique-z-vec box-vector)
@@ -66,13 +74,8 @@
         x (get m-evt :X 0) y (get m-evt :Y 0)]
     (if (collide/hit-rect? x y x0 x1 y0 y1)
       (let [n (count box-vector)
-            click-ix (max 0 (min (int (* (/ (- x x0) (- x1 x0)) n)) (dec n)))
-            max-z-ix (np/argmax (mapv :z box-vector))
-            max-z (:z (nth box-vector max-z-ix))
-            cur-z (get-in box-vector [click-ix :z])]
-        (-> box-vector
-          (assoc-in [click-ix :z] max-z)
-          (assoc-in [max-z-ix :z] cur-z)))
+            click-ix (max 0 (min (int (* (/ (- x x0) (- x1 x0)) n)) (dec n)))]
+        (this-on-top box-vector click-ix))
       box-vector)))
 
 (defn group-boxes-under-mouse [boxes mouse-x mouse-y]
@@ -122,6 +125,9 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; API fns ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defn tab-order-of [box]
+  (get box ::taborder -1))
+
 (defn tab-group-global-click [boxes m-evt]
   "Tries to click every tab group."
   (let [boxes-k (zipmap (keys boxes) (mapv #(assoc %2 ::tmp-key %1) (keys boxes) (vals boxes)))
@@ -159,6 +165,19 @@
         has-tab? (get-in boxes [(first kys) ::tabgroup])]
     (if has-tab? (ungroup-boxes-under-mouse boxes mouse-x mouse-y)
       (group-boxes-under-mouse boxes mouse-x mouse-y))))
+
+(defn selected-on-top [s]
+  "Selected on top within each tab group."
+  (let [boxes (:components s) kys (keys boxes)
+        sel-kys (set (:selected-comp-keys s))
+        boxes1 (zipmap kys (mapv #(assoc (get boxes %) ::tmp-key %) kys))
+        box-vecs (into [] (vals (current-tab-groups boxes1)))
+        box-sel? (fn [box] (contains? sel-kys (::tmp-key box)))
+        box-vecs1 (mapv (fn [bvec]
+                          (if-let [ix (first (filter #(box-sel? (nth bvec %)) (range (count bvec))))]
+                            (this-on-top bvec ix) bvec)) box-vecs)
+        boxes2 (reduce #(assoc %1 (::tmp-key %2) (dissoc %2 ::tmp-key)) boxes1 (apply concat box-vecs1))]
+    (assoc s :components boxes2)))
 
 (defn render-tab-groups [boxes]
   "Returns [Map from group name to gfx, Map from group name to :z value]"

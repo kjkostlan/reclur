@@ -1,10 +1,12 @@
 ; Key bindings (hotkeys).
 (ns layout.hotkey
-  (:require
+  (:require [c]
     [javac.warnbox :as warnbox]
     [layout.spatial.layoutcore :as layoutcore]
     [layout.spatial.selectmovesize :as selectmovesize]
+    [layout.spatial.xform :as xform]
     [layout.keyanal :as ka]
+    [layout.lispy :as lispy]
     [app.orepl :as orepl]
     [app.hintbox :as hintbox]
     [app.graphbox :as graphbox]
@@ -16,8 +18,7 @@
     [javac.cpanel :as cpanel]
     [navigate.strfind :as strfind]
     [navigate.funcjump :as funcjump]
-    [coder.logger :as logger]
-    [coder.crosslang.langs :as langs]))
+    [coder.logger :as logger]))
 
 ;;;;;Helper functions ;;;;;
 
@@ -30,26 +31,20 @@
 
 ;;;;; Box-based hotkey functions ;;;;;
 
-(defn splice-at-cursor [box]
-  "Splices at the cursor. (foo | (bar baz)) => (bar baz)"
-  (let [ixs (codebox/contain-ixs box)
-        ix0 (first ixs) ix1 (second ixs)
-        substr (subs (rtext/rendered-string box) (first ixs) (second ixs))
-        inter-levels (langs/interstitial-depth substr (:langkwd box))
-        keeps (filterv #(> (nth inter-levels %) 1) (range (count inter-levels)))
-        keep-ix0 (if (first keeps) (+ ix0 (first keeps)))
-        keep-ix1 (if (last keeps) (+ ix0 (last keeps)))
-
-        box1 (if keep-ix0 (rtext/edit box (inc keep-ix1) ix1 "" []) box)
-        box2 (if keep-ix0 (rtext/edit box1 ix0 (dec keep-ix0) "" []) box1)] box2))
-
-(defn wrap-at-cursor [box txt]
-  "The opposite of splice. For example, wrapping a (time x) around x."
-  (let [ixs (codebox/contain-ixs box)
-        ix0 (first ixs) ix1 (second ixs)
-        edit? (and ix0 ix1)
-        box1 (if edit? (rtext/edit box ix1 ix1 ")" []) box)
-        box2 (if edit? (rtext/edit box1 ix0 ix0 (str "(" txt " ") []) box1)] box2))
+(defn tab-toggle [s delta]
+  (let [kys (selectmovesize/onscreen-kys s)
+        boxes (:components s)
+        reading-score (fn [k] (let [box (get boxes k)
+                                    [x0 x1 y0 y1] (xform/box-xxyy box)]
+                                (+ (* 8 (+ y1 y0)) x0 x1 (tabgroup/tab-order-of box))))
+        kys-sort (into [] (sort-by reading-score kys))
+        sel-kys (set (:selected-comp-keys s))
+        ix (first (c/where #(contains? sel-kys %) kys-sort)) ix (if ix ix -1)
+        ix1 (mod (+ ix delta) (count kys))
+        ky1 (nth kys-sort ix1)
+        s1 (assoc s :selected-comp-keys #{ky1})]
+    (selectmovesize/update-selection-box
+      (tabgroup/selected-on-top s1))))
 
 ;;;;; State hotkey functions ;;;;;
 
@@ -60,11 +55,95 @@
 
 (defn toggle-typing [s] (update s :typing-mode? not))
 
+;;;;;;;;;;;;; Misc hotkey fns ;;;;;;
+
+(defn move-view [s xf]
+  "Hotkeys vs mouse."
+  (let [cam0 (:camera s)
+        cam1 (xform/xx xf cam0)]
+    (assoc s :camera cam1)))
+
+(defn move-some-boxes [s kys xf]
+  (let [s1 (update s :components #(selectmovesize/apply-xform % kys xf))
+        s2 (assoc s1 :components (tabgroup/sync-on-update (:components s) (:components s1)))]
+    (selectmovesize/update-selection-box s2)))
+
+(defn generic-move [s dx0 dy0 zoom0]
+  "Move selected boxes or the camera.
+   How far we move depends on the movement priors."
+  (let [cam? (empty? (:selected-comp-keys s))
+        prph [::hotkey-state :move-priors]
+        priors (get-in s prph {})
+
+        px (get priors :dx 0) py (get priors :dy 0) pz (get priors :dlogz 0)
+        momentum-dot (+ (* px dx0) (* py dy0) (* pz (Math/log zoom0)))
+
+        speed-old (get priors :speed 1.0)
+        speed (cond (> momentum-dot 0.0005) (* speed-old 2.0)
+                (< momentum-dot -0.0005) (* speed-old 0.5)
+                :else speed-old)
+        speed (min 8.0 (max speed (/ 1.0 32.0)))
+
+        dx (* (if cam? dx0 (- dx0)) speed)
+        dy (* (if cam? dy0 (- dy0)) speed)
+        zoom-modifier-power 0.5
+        zoom (Math/pow (if cam? zoom0 (/ 1.0 zoom0)) (Math/pow speed zoom-modifier-power))
+        xc [dx dy zoom zoom]
+        pix (xform/screen-pixels)
+        xj [(* (first pix) -0.5) (* (second pix) -0.5) 1 1]
+        xj-1 (xform/x-1 xj)
+        xform-total (xform/xx (xform/xx xj-1 xc) xj)
+        s1 (assoc-in s prph (assoc priors :dx dx0 :dy dy0 :dlogz (Math/log zoom0) :speed speed))]
+    (if cam?
+      (move-view s1 xform-total) (move-some-boxes s1 (:selected-comp-keys s) xform-total))))
+
 ;;;;; The hotkeys themselves ;;;;;
 
-(defn hotkeys [] ; fn [s] => s, where s is the state.
+(defn hotkeys-typing-mode []
+  "Only active when typing mode is active."
+  {"M-s" (fn [s] (do-to-selected-box s lispy/splice-at-cursor))
+   "M-9" (fn [s] (do-to-selected-box s #(lispy/wrap-at-cursor % "" "(" ")")))
+   "M-[" (fn [s] (do-to-selected-box s #(lispy/wrap-at-cursor % "" "[" "]")))
+   "M-S-[" (fn [s] (do-to-selected-box s #(lispy/wrap-at-cursor % "" "{" "}")))
+   "M-S-C-[" (fn [s] (do-to-selected-box s #(lispy/wrap-at-cursor % "" "#{" "}")))
+   "M-'" (fn [s] (do-to-selected-box s #(lispy/wrap-at-cursor % "" "\"" "\"")))
+   "M->>" (fn [s] (do-to-selected-box s #(lispy/slurp-barf % true 1)))
+   "M-<<" (fn [s] (do-to-selected-box s #(lispy/slurp-barf % true -1)))
+   "M-S->>" (fn [s] (do-to-selected-box s #(lispy/slurp-barf % false -1)))
+   "M-S-<<" (fn [s] (do-to-selected-box s #(lispy/slurp-barf % false 1)))
+   "C->>" (fn [s] (do-to-selected-box s #(lispy/next-tok % 1 false)))
+   "C-<<" (fn [s] (do-to-selected-box s #(lispy/next-tok % -1 false)))
+   "C-S->>" (fn [s] (do-to-selected-box s #(lispy/next-tok % 1 true)))
+   "C-S-<<" (fn [s] (do-to-selected-box s #(lispy/next-tok % -1 true)))
+   "C-vv" (fn [s] (do-to-selected-box s #(lispy/next-thing % 1 false)))
+   "C-^^" (fn [s] (do-to-selected-box s #(lispy/next-thing % -1 false)))
+   "C-S-vv" (fn [s] (do-to-selected-box s #(lispy/next-thing % 1 true)))
+   "C-S-^^" (fn [s] (do-to-selected-box s #(lispy/next-thing % -1 true)))
+   "C-g vv" (fn [s] (funcjump/try-to-go-into s))
+   "C-g ^^" (fn [s] (funcjump/try-to-go-ups s true false))
+   "C-S-g ^^" (fn [s] (funcjump/try-to-go-ups s false false))
+   "C-M-p" (fn [s] (do-to-selected-box s #(lispy/wrap-at-cursor % "coder.logger/pr-reportm " "(" ")")))
+   "C-p p" (fn [s] (orepl/log-and-toggle-viewlogbox! s))
+   "C-p ;" (fn [s] (orepl/add-cursor-lrepl s))})
+
+(defn hotkeys-notype-mode []
+  "Only active when typing mode is INactive."
+  {"w" (fn [s] (generic-move s 0 32 1.0))
+   "s" (fn [s] (generic-move s 0 -32 1.0))
+   "a" (fn [s] (generic-move s 32 0 1.0))
+   "d" (fn [s] (generic-move s -32 0 1.0))
+   "q" (fn [s] (generic-move s 0 0 (/ 1.0 (Math/pow 2.0 0.125))))
+   "e" (fn [s] (generic-move s 0 0 (Math/pow 2.0 0.125)))
+   "`" (fn [s] (selectmovesize/update-selection-box (assoc s :selected-comp-keys #{})))
+   "C-a" (fn [s] (selectmovesize/update-selection-box
+                   (assoc s :selected-comp-keys (set (selectmovesize/onscreen-kys s)))))
+   "tab" (fn [s] (tab-toggle s 1))
+   "S-tab" (fn [s] (tab-toggle s -1))})
+
+(defn hotkeys-both-modes [] ; fn [s] => s, where s is the state.
+  "Active when both typing and non-typing mode is at play."
   {"C-w" close ; all these are (fn [s]).
-   "esc" toggle-typing
+   "esc" (fn [s] (assoc-in (toggle-typing s) [::hotkey-state :move-priors] {}))
    "C-r" (fn [s] (do-to-selected-box s codebox/hint-sym-qual #{:codebox :orepl :siconsole})) ;Don't worry about having to type the whole symbol
    "C-S-r r r" #(if (warnbox/yes-no? "Relaunch app, losing any unsaved work?" false)
                   (do (future (eval 'core.launch-main-app!)) (throw (Exception. "This iteration is dead, reloading."))) %)
@@ -72,8 +151,6 @@
    "C-S-l" (fn [s] (layoutcore/prev-layout s))
    "C-`" selectmovesize/swap-on-top
    "C-f" (fn [s] (strfind/add-search-box s))
-   "C-p p" (fn [s] (orepl/log-and-toggle-viewlogbox! s))
-   "C-p ;" (fn [s] (orepl/add-cursor-lrepl s))
    "C-p x" (fn [s] (do (logger/remove-all-loggers!) ; clear loggers
                       #_(println "Cleared all loggers") s))
    "C-p C-x" (fn [s] (do (logger/clear-logs!) ; clear logs
@@ -82,11 +159,6 @@
    "C-s" (fn [s] (iteration/save-state-to-disk!! s))
    "C-S-h" (fn [s] (hintbox/try-to-toggle-hint-box s))
    "C-S-g" (fn [s] (graphbox/try-to-toggle-graph-box s))
-   "M-s" (fn [s] (do-to-selected-box s splice-at-cursor))
-   "M-p" (fn [s] (do-to-selected-box s #(wrap-at-cursor % "coder.logger/pr-reportm")))
-   "C-^^" (fn [s] (funcjump/try-to-go-ups s true false))
-   "C-S-^^" (fn [s] (funcjump/try-to-go-ups s false false))
-   "C-vv" (fn [s] (funcjump/try-to-go-into s))
    "C-t" (fn [s] (let [[x y] (:mouse-pos-world s)
                        mevt-c {:X x :Y y}
                        s1 (update s :components #(tabgroup/toggle-tabs-for-boxes-under-mouse % x y))
@@ -94,13 +166,15 @@
                        s3 (selectmovesize/seltool-mouserelease mevt-c s2)] s3))
    "C-S-M-n ^^ ^^ vv vv << >> << >> b a" (fn [s] (println "We hope you enjoy this sandbox-genre game!") s)})
 
-(defn hotkey-cycle [evt-g evt-c s k]
+(defn hotkey-cycle [evt-g evt-c hotkey-state k typing-mode?]
   "The emacs-like command's counter (per-command) gets incremented for multi-key commands.
    Any commands that are triggered reset all counters."
-  (if (and (= k :keyPressed) (or (ka/normal? evt-g) (ka/escape? evt-g) (ka/backspace? evt-g) (ka/enter? evt-g)))
-    (let [hotkey-map (hotkeys) hotlist (keys hotkey-map)
+  (if (and (= k :keyPressed) (or (ka/normal? evt-g) (ka/escape? evt-g) (ka/backspace? evt-g) (ka/enter? evt-g)
+                               (ka/arrow-key evt-g)))
+    (let [hotkey-map (merge (if typing-mode? (hotkeys-typing-mode) (hotkeys-notype-mode)) (hotkeys-both-modes))
+          hotlist (keys hotkey-map)
           lengths (zipmap hotlist (mapv ka/emacs-count hotlist))
-          hot-ix (if-let [x (:hotkey-indexes s)] x {})
+          hot-ix (if-let [x (:indexes hotkey-state)] x {})
           hot-ix (reduce #(if (get %1 %2) %1 (assoc %1 %2 0)) hot-ix hotlist)
           next-ix (fn [ix txt] (if (ka/emacs-hit? txt evt-g ix) (inc ix) 0)) ; reset if we fail.
           hot-ix1 (zipmap hotlist (mapv #(next-ix (get hot-ix %) %) hotlist))
@@ -108,6 +182,27 @@
           triggered? (> (count triggers) 0)
           active? (or triggered? (first (filter #(> % 0) (vals hot-ix1))))
           hot-ix2 (if triggered? (reduce #(assoc %1 %2 0) hot-ix1 (keys hot-ix1)) hot-ix1)
-          s1 (reduce #((get hotkey-map %2) %1) s triggers)]
-      (assoc s1 :hotkey-indexes hot-ix2 :tmp-hotkey-block? (or active? triggered?)))
-    (assoc s :tmp-hotkey-block? false)))
+          fns-to-run (mapv #(get hotkey-map %) triggers)]
+      (assoc hotkey-state :indexes hot-ix2 :block? (boolean (or active? triggered?))
+        :fns-to-run fns-to-run))
+    (assoc hotkey-state :block? false :fns-to-run [])))
+
+(defn global-hotkey-cycle [s evt-g evt-c k]
+  (let [tymod? (:typing-mode? s)
+        ph (if tymod? [::hotkey-state :yestype] [::hotkey-state :notype])
+        hk0 (get-in s ph)
+        hk1 (hotkey-cycle evt-g evt-c hk0 k tymod?)
+        fns-to-run (:fns-to-run hk1)
+        hk2 (dissoc hk1 :fns-to-run)
+        s1 (reduce #(%2 %1) s fns-to-run)]
+    (assoc-in s1 ph hk2)))
+
+(defn global-hotkey-block? [s]
+  "Are hotkeys blocking anything?"
+  (let [hk-state (get s ::hotkey-state)]
+    (or (:block? (:notype hk-state)) (:block? (:yestype hk-state)))))
+
+(defn global-remove-blocks [s]
+  "Remove any blocks to the hotkeys."
+  (-> (assoc-in s [::hotkey-state :notype :block?] false)
+    (assoc-in [::hotkey-state :yestype :block?] false)))

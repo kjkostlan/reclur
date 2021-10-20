@@ -213,6 +213,15 @@
   (let [^ints st (first x) ^ints en (second x) ^ints ty (nth x 2)]
     (javar/token-native2vector txt st en ty)))
 
+(defn token-stream-from-ints [^ints st ^ints en ^ints ty]
+  "Returns a single clojure vector of ty."
+  (let [n (count st)]
+    (loop [acc [] ix 0]
+      (if (= ix n) acc
+        (let [k (- (aget en ix) (aget st ix))
+              tyi (aget ty ix)]
+          (recur (reduce conj acc (repeat k tyi)) (inc ix)))))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Parsing symbols as strings ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn qual [ns-sym code-sym]
