@@ -72,6 +72,41 @@
                           (apply codebox/select-on-real-string component ixs1?)))]
     comp1))
 
+(defn search-step1-fbrowser [s box opts]
+  "f-browsers allow searching all files within the fbrowser, and open codeboxes in doing so."
+  (let [boxk (:boxk opts)
+        fail (fn [] (siconsole/log s (str "not found: " (pr-str (:key opts)))))
+        files (into [] (sort (filterv jfile/texty? (fbrowser/recursive-unwrap (fbrowser/devec-file (:path comp))))))
+        file-order (zipmap files (range))
+        boxes (:components s) nf (count files)
+        codeboxks (filterv #(= (:type (get boxes %) :codebox)) (keys boxes))
+        cur-box (apply max-key #(get-in boxes [% :z]) codeboxks)
+        first-match? (fn [fname] (find1 (jfile/open fname) opts (if (:reverse? opts) 1e100 0) false))
+        next-file (fn [fname]
+                    (let [maybe-r #(if (:reverse? opts) (reverse %) %)
+                          fiix (get file-order fname 0)
+                          flist (apply concat (maybe-r [(maybe-r (subvec files (inc fiix))) (maybe-r (subvec files 0 fiix))]))]
+                      (first (filter first-match? flist))))
+        go-fn0 (:goto (:layout s)) ;[s k key-is-file? char-ix0 char-ix1]
+        afloat (fn [s1 fname]
+                 (let [max-z (apply max (mapv :z (vals boxes)))]
+                   (assoc s1 :components
+                     (zipmap (keys (:components s1))
+                       (mapv #(if (and (= (:type %) :codebox)
+                                    (= (fbrowser/devec-file (:path %)) fname))
+                                (assoc % :z (inc max-z)) %)
+                         (vals (:components s1)))))))
+        go-fn (fn [fname ix0 ix1] (afloat (go-fn0 s fname ix0 ix1) fname))
+        local-attempt (if cur-box (search-step1-codebox (get boxes cur-box) opts false))]
+        (assoc
+          (cond (= nf 0) (fail)
+            (not local-attempt)
+            (let [current-file (fbrowser/devec-file (:path (get boxes cur-box)))
+                  next-file (next-file current-file)]
+              (if next-file (apply go-fn next-file (first-match? next-file)) (fail)))
+            :else (assoc-in s [:components cur-box] local-attempt))
+          :selected-comp-keys #{boxk})))
+
 (defn search-step [s opts]
   "Every time search is called, returns the modified state."
   (let [boxk (:boxk opts) comps (:components s)
@@ -81,36 +116,8 @@
       (if-let [comp1 (search-step1-naive comp opts true)] (assoc-in s [:components compk] comp1) (fail))
       (= (:type comp) :codebox)
       (if-let [comp1 (search-step1-codebox comp opts true)] (assoc-in s [:components compk] comp1) (fail))
-      :else ;fbrowser
-      (let [files (into [] (sort (filterv jfile/texty? (fbrowser/recursive-unwrap (fbrowser/devec-file (:path comp))))))
-            file-order (zipmap files (range))
-            comps (:components s) nf (count files)
-            codeboxks (filterv #(= (:type (get comps %) :codebox)) (keys comps))
-            cur-box (apply max-key #(get-in comps [% :z]) codeboxks)
-            first-match? (fn [fname] (find1 (jfile/open fname) opts (if (:reverse? opts) 1e100 0) false))
-            next-file (fn [fname]
-                        (let [fiix (get file-order fname 0)
-                              flist ((if (:reverse? opts) reverse identity)
-                                     (concat (subvec files 0 fiix) (subvec files (inc fiix))))]
-                          (first (filter first-match? flist))))
-            go-fn0 (:goto (:layout s)) ;[s k key-is-file? char-ix0 char-ix1]
-            afloat (fn [s1 fname]
-                     (let [max-z (apply max (mapv :z (vals comps)))]
-                       (assoc s1 :components
-                         (zipmap (keys (:components s1))
-                           (mapv #(if (and (= (:type %) :codebox)
-                                        (= (fbrowser/devec-file (:path %)) fname))
-                                    (assoc % :z (inc max-z)) %)
-                             (vals (:components s1)))))))
-            go-fn (fn [fname ix0 ix1] (afloat (go-fn0 s fname ix0 ix1) fname))
-            local-attempt (if cur-box (search-step1-codebox (get comps cur-box) opts false))]
-        (assoc
-          (cond (= nf 0) (fail)
-            (not local-attempt)
-            (let [file1 (next-file (fbrowser/devec-file (:path (get comps cur-box))))]
-              (if file1 (apply go-fn file1 (first-match? file1)) (fail)))
-            :else (assoc-in s [:components cur-box] local-attempt))
-          :selected-comp-keys #{boxk})))))
+      :else
+      (search-step1-fbrowser s (get comps boxk) opts))))
 
 (defn pretty [code]
   (with-out-str (clojure.pprint/pprint code)))
