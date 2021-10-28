@@ -309,7 +309,7 @@
                 (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
                   {:type :runtime-err :value (str "\nRuntime error:\n" (repl-err-msg-tweak (unerror/pr-error e)))}))))))
 
-(defn run-repl [s repl-k]
+(defn run-repl-core [s repl-k]
   "This returns the modified app state s. Most functions don't work with s and we just add in the report.
    However, ^:global on a function will cause us to run it on s as a whole and we skip the report step."
   ; TODO: put repls on another process with it's own threads.
@@ -340,6 +340,14 @@
                       (update :num-run-times inc)
                       (update :cmd-history #(conj % txt)))]
           (assoc-in s [:components repl-k] (codebox/update-precompute repl1))))))
+
+(defn run-repl [s repl-k]
+  "Calls run-repl-core on repl-k, but first also runs all cursor-lrepls if repl-k isn't a cursor repl."
+  (let [boxes (:components s)
+        cursor-lrepl-kys (set (filterv #(cursor-lrepl? (get boxes %)) (keys boxes)))
+        is-cursor-lrepl? (get cursor-lrepl-kys repl-k)]
+    (if is-cursor-lrepl? (run-repl-core s repl-k)
+      (reduce run-repl-core s (concat cursor-lrepl-kys [repl-k])))))
 
 (defn old-cmd-search [box delta]
    "Select a region of text to narrow-down old cmds."
