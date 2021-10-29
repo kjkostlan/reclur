@@ -219,7 +219,8 @@
   (let [sym+paths (repl-log-sym+paths s)
         currently-logged-sym2paths (logger/get-loggers)
         last-loggable-sym+path (if (any-cursor-lrepl? s)
-                                 (sym+path-at-cursor-lastcodebox s))]
+                                 (if-let [x (::precompute-lastcodebox-sym+path s)]
+                                   x (sym+path-at-cursor-lastcodebox s)))]
     (mapv (fn [sym-qual]
             (let [lpack (get currently-logged-sym2paths sym-qual)
                   lphs (keys lpack)
@@ -237,7 +238,9 @@
   "Sets the log to the cursor, if any, and reports the output (most recent log is the default).
    Uses ::last-codebox-used."
   (let [box (get s ::last-codebox-used)
-        sym+ph (if box (codebox2sym+path box true))
+
+        sym+ph (if box (if-let [ph (::precompute-lastcodebox-sym+path s)]
+                         ph (codebox2sym+path box true)))
         logpath (into [] (rest sym+ph))
         _ (if (not (empty? logpath)) (add-marked-logger! (first sym+ph) logpath false))
         log-val (if (not (empty? logpath))
@@ -322,12 +325,6 @@
     ; Have two servers open at once for insta-switch.
   ; If there is a *gui-atom* in the input we run it locally on a future.
     ; Crashes can leak into here but at least this gives us a way to modify the gui.
-    (logger/gtime-reset!)
-    (let [has-cursor-repl? (any-cursor-lrepl? s)
-          cursor-sym+path (if has-cursor-repl?
-                            (sym+path-at-cursor-lastcodebox s))]
-      (if cursor-sym+path (add-marked-logger!
-                            (first cursor-sym+path) (rest cursor-sym+path) false)))
     (let [txt (rtext/rendered-string (get-in s [:components repl-k]))
           new-ns-at (atom r-ns)
           result (get-repl-result s repl-k txt new-ns-at)]
@@ -343,11 +340,17 @@
 
 (defn run-repl [s repl-k]
   "Calls run-repl-core on repl-k, but first also runs all cursor-lrepls if repl-k isn't a cursor repl."
+  (logger/gtime-reset!)
   (let [boxes (:components s)
         cursor-lrepl-kys (set (filterv #(cursor-lrepl? (get boxes %)) (keys boxes)))
-        is-cursor-lrepl? (get cursor-lrepl-kys repl-k)]
-    (if is-cursor-lrepl? (run-repl-core s repl-k)
-      (reduce run-repl-core s (concat cursor-lrepl-kys [repl-k])))))
+        is-cursor-lrepl? (get cursor-lrepl-kys repl-k)
+        has-cursor-repl? (any-cursor-lrepl? s)
+        cursor-sym+path (if has-cursor-repl? (sym+path-at-cursor-lastcodebox s))
+        _ (if cursor-sym+path (add-marked-logger! (first cursor-sym+path) (rest cursor-sym+path) false))
+        s (assoc s ::precompute-lastcodebox-sym+path cursor-sym+path)
+        s1 (if is-cursor-lrepl? (run-repl-core s repl-k)
+             (reduce run-repl-core s (concat cursor-lrepl-kys [repl-k])))]
+    (dissoc s1 ::precompute-lastcodebox-sym+path)))
 
 (defn old-cmd-search [box delta]
    "Select a region of text to narrow-down old cmds."

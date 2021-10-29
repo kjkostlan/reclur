@@ -107,7 +107,8 @@
 
 (defn last-log-of [sym-qual path-within-code]
   "Useful for debugging. Nil on failure."
-  (last (all-logs-of sym-qual path-within-code)))
+  (let [logs (reverse (get-logs)) lpath (c/vcat [sym-qual] path-within-code)]
+    (first (filter #(= (:path %) lpath) logs))))
 
 (defn logpath2code [log-path]
   "The code that was logged in log-path. It may be macroexpanded code."
