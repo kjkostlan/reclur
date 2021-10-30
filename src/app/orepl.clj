@@ -68,10 +68,15 @@
 (defn ensure-two-pieces [box]
   "Everything goes into the first peice except the end."
   (let [pieces (into [] (:pieces box)) n (count pieces)
-        pieces0 (if (> n 1) (butlast pieces) pieces)
-        piece1 (if (> n 1) (last pieces) {:text ""})
-        two-pieces [{:text (apply str (mapv :text pieces0))} piece1]]
-    (assoc box :pieces two-pieces)))
+        pieces1 (cond (< n 2) (c/vcat [{:text " "}] pieces)
+                  (= n 2) pieces
+                  :else (conj [{:text (apply str (mapv :text (butlast pieces)))}] (last pieces)))]
+   (assoc box :pieces pieces1)))
+
+(defn constrain-selection-piece0 [box]
+  "The first piece is the only editable part."
+  (let [n0 (count (get-in box [:pieces :text 0]))]
+    (-> (update box :selection-start #(min % n0)) (update :selection-end #(min % n0)))))
 
 (defn get-summary [box]
   "Returns [summary-object, summary string], depends on the :view-path of the box.
@@ -467,7 +472,7 @@
       (ka/emacs-hit? "S-^^" key-evt) (old-cmd-search box -1)
       (ka/emacs-hit? "S-vv" key-evt) (old-cmd-search box 1)
       :else
-      (codebox/key-press key-evt box))))
+      (codebox/key-press key-evt (constrain-selection-piece0 box)))))
 
 (defn on-resize [evt box]
   (show-result box))
