@@ -1,6 +1,6 @@
-; Java 8 is the minimum version supported.
-; Note: Code here is and/or returns values that are dependent on the platform.
-; We normalize filenames to / not \ but that code is not platform *dependent* so isn't here.
+; Supports Java 8-Java 1.17 (at least) and windows/max/linux (mac testing needed to be 100% sure)
+; Functions in this file are either fns that query the version/os/etc, or
+; functions that do different things depending on the version/os/etc.
 
 (ns javac.crossplatform
   (:import [java.awt Graphics2D Font])
@@ -106,7 +106,7 @@
   (cond (linux?) `(fn [ignore#] true)
     (and (or (java9?) (java10?) (java11?) (java12-19?)) (or (mac?) (windows?)))
     `(let [^QuitHandler handler# (handler-code ~quit-listener!)
-          ^Desktop d# (Desktop/getDesktop)]
+           ^Desktop d# (Desktop/getDesktop)]
        (.setQuitHandler d# handler#) true)
     (mac?)
     `(let [^QuitHandler handler# (handler-code ~quit-listener!)
@@ -118,7 +118,9 @@
   "Quit handlers are confusing, and need to be tested on multiple os's.
    calls (quit-listener! e) and cancels the quit.
    The app then should add the quit request to it's event queue to handle it later."
-    (quit-request-listener-code quit-listener!))
+    (try (quit-request-listener-code quit-listener!)
+      (catch Exception e
+        (println "App quit handler on this version not working. App may (or may not) need to be force-quit."))))
 
 (defn fixed-width-font! [^Graphics2D g]
   "Why is the font so much bolder on the retina display?"

@@ -105,8 +105,10 @@
   (let [evt-type (get-evt-type java-e)]
     (let [clean-up #(dissoc % :Source :Component :Class)
           add-sc #(assoc % :ParamString (param-str java-e))
-          f0 #(assoc (clean-up (add-sc %)) :Type evt-type)] ; a default function.
-      (f0 (java-to-clj java-e nil simple-java-to-clj))))) ; direct java -> clj translation.
+          f0 #(assoc (clean-up (add-sc %)) :Type evt-type) ; a default function.
+          clj-e (cond (= evt-type :windowClosing) {} ; Throws a strange error in some versions.
+                  :else (java-to-clj java-e nil simple-java-to-clj))]
+      (f0 clj-e)))) ; direct java -> clj translation.
 
 (defn translate-generic [java-ob]
   (java-to-clj java-ob nil simple-java-to-clj))
