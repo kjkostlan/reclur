@@ -75,7 +75,7 @@
 
 (defn constrain-selection-piece0 [box]
   "The first piece is the only editable part."
-  (let [n0 (count (get-in box [:pieces :text 0]))]
+  (let [n0 (count (get-in box [:pieces 0 :text]))]
     (-> (update box :selection-start #(min % n0)) (update :selection-end #(min % n0)))))
 
 (defn get-summary [box]

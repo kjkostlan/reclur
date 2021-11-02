@@ -176,7 +176,6 @@
 ; Cmd bank is of the format (with the fns evaled and type cast/hints)
 ; {:drawString (fn [g x] (let [ar (count x)] (cond (if (= ar 3) (.drawString ...) :else (throw ...))))) ...}
 
-
 (def set-get-map ; map from :Color to :getColor, etc.
   (let [vs (filterv #(.startsWith (str %) ":get") (keys cmd-bank))]
     (zipmap (mapv #(keyword (subs (str %) 4)) vs) vs)))
@@ -186,8 +185,11 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn interpolate-img! [^Graphics2D g]
-  "Bilinear seems OK to almost as fast, but bicubic is very slow."
-  (let [^RenderingHints rh (RenderingHints. ^java.awt.RenderingHints.Key (RenderingHints/KEY_INTERPOLATION) ^java.awt.RenderingHints.Key (RenderingHints/VALUE_INTERPOLATION_BILINEAR))]
+  "Is bilinear better? Not if we have to do it in software, but hardware systems should uncomment."
+  (let [^java.util.HashMap rhs (java.util.HashMap.)
+        ;_ (.put rhs (RenderingHints/KEY_INTERPOLATION) (RenderingHints/VALUE_INTERPOLATION_BILINEAR))
+        _ (.put rhs (RenderingHints/KEY_RENDERING) (RenderingHints/VALUE_RENDER_SPEED))
+        ^RenderingHints rh (RenderingHints. rhs)]
     (.setRenderingHints g rh)))
 
 (defn healthy-stroke! [^Graphics2D g width]

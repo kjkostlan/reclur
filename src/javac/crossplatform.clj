@@ -6,6 +6,8 @@
   (:import [java.awt Graphics2D Font])
   (:require [javac.warnbox :as warnbox] [globals]))
 
+(def ^:dynamic *disable-inertial-scroll-mode* true) ; Switching to non-inertial mode can make it too slow.
+
 ;;;;;;;;;;;;;;;;;;;;; OS, Java version, and environment ;;;;;;;;;;;;;;;;;;;
 
 (def ^String os-name (.toLowerCase ^String (System/getProperty "os.name")))
@@ -74,7 +76,7 @@
 (defn inertial-scroll-guess? []
   "Are we on an inertial scroll or not? Best guess. Keep calling this, later guesses should be more accurate."
   (let [evts (get @globals/external-state-atom :scroll-unique-cache #{})]
-    (if (empty? evts) false (_inertial-scroll-guess-core? evts))))
+    (if (or *disable-inertial-scroll-mode* (empty? evts)) false (_inertial-scroll-guess-core? evts))))
 
 ;;;;;;;;;;;;;;;;;;;;; Platform dependent code ;;;;;;;;;;;;;;;;;;;;;;;
 
