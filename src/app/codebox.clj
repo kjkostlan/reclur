@@ -263,15 +263,17 @@
 ;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Interactions beyond the uasual rtext interactions.
 
-(defn hint-sym-qual [box]
-  "Most useful in the repl, where a symbol gets qualed."
+(defn hint-sym-qual [box return-box? quiet?]
+  "Returns the qualified symbol at the cursor. If return-box? is true it will return a modified box instead."
   (let [boxes [(select-twofour-click box false) (select-twofour-click (update box :cursor-ix inc) false) box]
         sel0s (mapv :selection-start boxes)
         sel1s (mapv :selection-end boxes)
         sel-strs (mapv #(subs (rtext/rendered-string %1) %2 %3) boxes sel0s sel1s)
         sym-ix (first (filter (fn [ix] (let [txt (nth sel-strs ix)]
                                          (and (> (count txt) 0) (not (re-find #"[\[\]{}\(\) ]" txt)))))
-                        (range (count sel-strs))))]
+                        (range (count sel-strs))))
+        maybe-pr (fn [& args] (if (not quiet?) (apply println args)))
+        fail (if return-box? box false)]
     (if sym-ix
       (let [sym-str (nth sel-strs sym-ix)
             strs (sort (mapv str (cbase/symaverse)))
@@ -279,10 +281,11 @@
             strs (concat (remove private? strs) (filter private? strs)) ; private later.
             matches (filterv #(string/includes? % sym-str) strs)]
         (if (= (count matches) 0)
-          (do (println "No matching fully qualified symbols [in loaded namespaces] to" sym-str) box)
-          (do (if (> (count matches) 1) (println "Multible matches to" sym-str "taking fist one."))
-            (update-precompute (rtext/edit box (nth sel0s sym-ix) (nth sel1s sym-ix) (first matches) [])))))
-      (do (println "What is at the cursor is not a symbol.") box))))
+          (do (maybe-pr "No matching fully qualified symbols [in loaded namespaces] to" sym-str) fail)
+          (do (if (> (count matches) 1) (maybe-pr "Multible matches to" sym-str ":" matches "taking fist one."))
+            (if (not return-box?) (first matches)
+              (update-precompute (rtext/edit box (nth sel0s sym-ix) (nth sel1s sym-ix) (first matches) []))))))
+      (do (maybe-pr "What is at the cursor is not a symbol.") fail))))
 
 (defn key-press [key-evt box]
   "Key-based interaction 101. Tab indents (shift-tab dedents) rather than whoops where did the block of code go.

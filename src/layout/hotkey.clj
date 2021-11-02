@@ -11,6 +11,7 @@
     [app.hintbox :as hintbox]
     [app.graphbox :as graphbox]
     [app.codebox :as codebox]
+    [app.varbox :as varbox]
     [app.iteration :as iteration]
     [app.multicomp :as multicomp]
     [app.rtext :as rtext]
@@ -97,6 +98,14 @@
     (if cam?
       (move-view s1 xform-total) (move-some-boxes s1 (:selected-comp-keys s) xform-total))))
 
+(defn open-var-at-cursor [s]
+  "Opens a variable with a varbox, assuming one is at the cursor.
+   Edits to the var-box will have temporary effects that disappear once it is closed."
+  (let [sel-k (first (:selected-comp-keys s)) box (get (:components s) sel-k)
+        sel-sym (codebox/hint-sym-qual box false false)]
+    (if sel-sym ((:add-component (:layout s)) s
+                  (varbox/load-var sel-sym) (gensym 'varbox)))))
+
 ;;;;; The hotkeys themselves ;;;;;
 
 (defn hotkeys-typing-mode []
@@ -124,7 +133,10 @@
    "C-S-g ^^" (fn [s] (funcjump/try-to-go-ups s false false))
    "C-M-p" (fn [s] (do-to-selected-box s #(lispy/wrap-at-cursor % "coder.logger/pr-reportm " "(" ")")))
    "C-p p" (fn [s] (orepl/log-and-toggle-viewlogbox! s))
-   "C-p ;" (fn [s] (orepl/add-cursor-lrepl s))})
+   "C-p ;" (fn [s] (orepl/add-cursor-lrepl s))
+   "C-r" (fn [s] (do-to-selected-box s #(codebox/hint-sym-qual % true false)
+                   #{:codebox :orepl :siconsole :varbox})) ;Don't worry about having to type the whole symbol
+   "C-e" (fn [s] (open-var-at-cursor s))})
 
 (defn hotkeys-notype-mode []
   "Only active when typing mode is INactive."
@@ -144,7 +156,6 @@
   "Active when both typing and non-typing mode is at play."
   {"C-w" close ; all these are (fn [s]).
    "esc" (fn [s] (assoc-in (toggle-typing s) [::hotkey-state :move-priors] {}))
-   "C-r" (fn [s] (do-to-selected-box s codebox/hint-sym-qual #{:codebox :orepl :siconsole})) ;Don't worry about having to type the whole symbol
    "C-S-r r r" #(if (warnbox/yes-no? "Relaunch app, losing any unsaved work?" false)
                   (do (future (eval 'core.launch-main-app!)) (throw (Exception. "This iteration is dead, reloading."))) %)
    "C-l" (fn [s] (layoutcore/next-layout s))

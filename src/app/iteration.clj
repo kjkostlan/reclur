@@ -3,7 +3,8 @@
 (ns app.iteration
   (:require [javac.file :as jfile] [javac.warnbox :as warnbox]
     [clojure.set :as set] globals
-    [app.multicomp :as multicomp] [app.fbrowser :as fbrowser] [app.orepl :as orepl] [app.siconsole :as siconsole]
+    [app.multicomp :as multicomp]
+    [app.fbrowser :as fbrowser] [app.orepl :as orepl] [app.siconsole :as siconsole] [app.varbox :as varbox]
     [coder.logger :as logger]))
 
 ;;;;;;;;;;;;;; Keeping files up to date ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -107,4 +108,6 @@
         renamed-map (:renamed-map fs)
         copied-map (:copied-map fs)
         deleted-files (:deleted-files fs)]
+    (mapv #(if (= (:type %) :varbox) (varbox/save-to-var! %))
+      (vals (:components s))) ; Not the disk but same idea.
     (_save-core!! s (apply hash-set (keys new2?old)) open2text new-files changed-files deleted-files missing-files renamed-map copied-map)))

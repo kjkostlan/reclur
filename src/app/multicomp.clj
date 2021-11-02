@@ -12,7 +12,8 @@
     [javac.gfx :as gfx]
     [app.multisync :as multisync]
     [app.stringdiff :as stringdiff]
-    [app.fbrowser :as fbrowser]))
+    [app.fbrowser :as fbrowser]
+    [app.varbox :as varbox]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Searching ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -202,6 +203,8 @@
         comps1 (close-component-vanilla-layout comps kwd)
         kys-gone (set/difference (set (keys comps)) (set (keys comps1)))
         s1 (assoc (assoc-in s [:precompute :desync-safe-mod?] true) :components comps1)] ; we handled all synching during the close.
+    (mapv #(let [box (get comps %)]
+             (if (= (:type box) :varbox) (varbox/revert-var! box))) kys-gone)
     (if clf
       (let [s2 (assoc s1 :components (merge comps comps1))
             s3 (clf s2 kys-gone)] ; The comps that were removed are doomed anyway.

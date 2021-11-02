@@ -242,7 +242,7 @@
     (apply str (interpose "." (if lang? (rest pieces) pieces)))))
 
 (defn sym2ns [qual-sym]
-  "Returns the namespace/class from a qualified symbol"
+  "Returns the namespace/class (as a symbol) from a qualified symbol"
   (cond (or (= qual-sym '/) (= qual-sym "/")) 'clojure.core
     (.contains ^String (str qual-sym) "/")
     (symbol (first (string/split (str qual-sym) #"\/")))))

@@ -114,7 +114,8 @@
         [beginning end]))))
 
 (defn corr-to-edits [s0 s1 corr]
-  "Converts to edits that can be applied in order, using our edge + chunked corr."
+  "Converts to edits that can be applied in order, using our edge + chunked corr.
+   Edits go from last to first."
   (let [corr (conj corr 0) n (count corr) ; pad so that we flush the edit before exiting the loop.
         ledits (loop [acc [] ix 0 ix0 0 ix1 0 cur-ed-count 0 cur-ed-type 0]
                  (if (= ix n) acc
@@ -129,7 +130,7 @@
 
 (defn edits-between [s0 s1]
   "Edits (as in what rtext calls an edit) to get from s0 to s1.
-   Edits must be applied in the order this fn gives them.
+   Edits must be applied in the order this fn gives them, which is from last to first.
    Tries to be minimalistic, i.e. heuristic toward minimal number of edits and
    total size of edits.
    TODO: improve combining edits."
@@ -139,15 +140,27 @@
           s0-mid (subs s0 e0 (- n0 e1))
           s1-mid (subs s1 e0 (- n1 e1))
           mid-edits (corr-to-edits s0-mid s1-mid (chunk-corr s0-mid s1-mid))]
-      (if (not= (apply-edits s0-mid mid-edits) ; DEBUG TODO remove when trusted.
-            (subs s1 e0 (- (count s1) e1))) (throw (Exception. "Edits-between fn failed"))) ; safety check.
       (mapv (fn [ed] (-> ed (update :ix0 #(+ % e0)) (update :ix1 #(+ % e0)))) mid-edits))))
 
-#_(let [s0 "foobarbaz"
-      s1 "zoozarzaaz"
-      edits (edits-between s0 s1)
-      wixs [0 2 6] wixs1 (conj (into [] (rest wixs)) (count s0))
-      pieces0 (mapv #(subs s0 %1 %2) wixs wixs1) n (count wixs)
-      eds (mapv #(window-edits edits %1 %2 (= %3 (dec n))) wixs wixs1 (range n))
-      pieces1 (mapv apply-edits pieces0 eds)
-] (println eds pieces0 pieces1))
+(defn last2first-first2last [edits]
+  "Converts edits from last2first ro first2last, shifting indexes."
+  (loop [acc [] sh 0 edits-head (reverse edits)]
+    (if (empty? edits-head) acc
+      (let [ed0 (first edits-head)
+            ed1 (-> ed0 (update :ix0 #(+ % sh)) (update :ix1 #(+ % sh)))
+            sh1 (+ sh (+ (count (:value ed0)) (- (:ix0 ed0) (:ix1 ed0))))]
+        (recur (conj acc ed1) sh1 (rest edits-head))))))
+
+(defn remove-edit-edits [orig-str edits rm-ix]
+  "Adds edits to the final string that undoes the ix'th edit, but keeps edits after the ix'th edit.
+   Any edits that are nested inside the removed edit will be deleted."
+  (let [string-just-b4 (apply-edits orig-str (subvec edits 0 rm-ix))
+        edits-after (subvec edits (inc rm-ix))
+        rm-edit (nth edits rm-ix) del (length-delta rm-edit)
+        dont-change? (fn [edit] (<= (min (:ix0 edit) (:ix1 edit)) (min (:ix0 rm-edit) (:ix1 rm-edit))))
+        shift? (fn [edit] (>= (min (:ix0 edit) (:ix1 edit)) (+ (:ix0 rm-edit) (count (:value rm-edit)))))
+        edits1-after (filter identity
+                       (mapv #(cond (dont-change? %) % (shift? %) (shift-edit % (- del)) :else false) edits-after))
+        final-string0 (apply-edits orig-str edits)
+        final-string1 (apply-edits string-just-b4 edits1-after)]
+    (edits-between final-string0 final-string1)))
