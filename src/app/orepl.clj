@@ -472,13 +472,17 @@
       (ka/emacs-hit? "S-^^" key-evt) (old-cmd-search box -1)
       (ka/emacs-hit? "S-vv" key-evt) (old-cmd-search box 1)
       :else
-      (codebox/key-press key-evt (constrain-selection-piece0 box)))))
+      (let [tyk (str (ka/typed-key key-evt))
+            need-constraint? (or (not (ka/c? key-evt))
+                               (= tyk "v") (= tyk "x"))]
+        (codebox/key-press key-evt (if need-constraint? (constrain-selection-piece0 box) box))))))
 
 (defn on-resize [evt box]
   (show-result box))
 
 (defn dispatch-heavy-doubleclick [s s1 k]
-  (let [file-ixs (funcjump/stack-click (get-in s [:components k]))
+  (let [file-ixs (try (funcjump/stack-click (get-in s [:components k]))
+                   (catch Exception e (do (println "No stack-click detected") false)))
         rm-sel #(assoc-in (assoc-in % [:components k :selection-start] 0) [:components k :selection-end] 0)]
     (if file-ixs
       (rm-sel (apply (:goto (:layout s)) s file-ixs)) s1)))
