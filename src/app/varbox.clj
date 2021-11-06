@@ -28,7 +28,7 @@
                       (if (= ix (count ren-strs)) (conj (apply c/vcat acc) sh)
                         (let [n (count (nth real-strs ix)) d (nth dark-matter ix)]
                           (recur (conj acc (repeat n sh)) (inc ix) (+ sh d)))))
-        re-ix #(- % (nth fold-shifts %))
+        re-ix #(- % (get fold-shifts % (last fold-shifts)))
         edits-render (mapv (fn [edit] (-> (update edit :ix0 re-ix) (update :ix1 re-ix))) real-string-edits)]
     edits-render))
 
@@ -81,7 +81,7 @@
   (let [box (new-varbox) sym-qual (symbol sym-qual)
         box (assoc box :sym-qual sym-qual)
         src (langs/var-source sym-qual)
-        txt (blit/vps src)
+        txt (binding [*print-meta* true] (blit/vps src))
         box (assoc box :source src :source-txt txt :pieces [{:text txt}])]
     box))
 
@@ -108,7 +108,12 @@
    :expand-child codebox/expand-child :contract-child codebox/contract-child
    :is-child? (fn [box] false)})
 
-; Extra var saving.
+;;;;;;;;;;;; Extra fns for var saving.
+
+(defn compile-err-report [^Exception e]
+  "Don't print the stack trace, just the cause."
+  (let [c (.getCause e)]
+    (.getMessage c)))
 
 (defn get-ns-obj [box]
   (let [ns-sym (textparse/sym2ns (:sym-qual box)) ns-obj (find-ns ns-sym)]
@@ -126,10 +131,13 @@
                (catch Exception e (println "Syntax err save-var" sym-qual (.getMessage e))))]
     (if (not (nil? code))
       (try (do (eval-box box code) (println "Var-tmp-save:" sym-qual))
-        (catch Exception e (println "Compile error" (.getMessage e)))))))
+        (catch Exception e (println "Compile error for" (str sym-qual ":\n ")
+                             (compile-err-report e)))))))
 
 (defn revert-var! [box]
   "When a box is closed, these changes which are temporary debugs are reverted"
   ; app/multisync when closed?
   (let [code0 (:source box)]
-    (eval-box box code0) box))
+    (try (eval-box box code0)
+      (catch Exception e
+        (println "Cannot revert var" (:sym-qual box) "original var has error in it."))) box))
