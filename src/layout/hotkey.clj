@@ -106,6 +106,11 @@
     (if sel-sym ((:add-component (:layout s)) s
                   (varbox/load-var sel-sym) (gensym 'varbox)))))
 
+(defn show-error+ [s]
+  "Shows the last thing that went into error+"
+  (let [code `(logger/get-error+) boxk ::hotkey-repl]
+    (orepl/add-repl s boxk code 0 true)))
+
 ;;;;; The hotkeys themselves ;;;;;
 
 (defn hotkeys-typing-mode []
@@ -167,6 +172,7 @@
    "C-p C-x" (fn [s] (do (logger/clear-logs!) ; clear logs
                        #_(println "Cleared all logs") s))
    "C-p ^^" (fn [s] (funcjump/try-to-go-ups s false true))
+   "M-p" (fn [s] (show-error+ s))
    "C-s" (fn [s] (iteration/save-state-to-disk!! s))
    "C-S-h" (fn [s] (hintbox/try-to-toggle-hint-box s))
    "C-S-g" (fn [s] (graphbox/try-to-toggle-graph-box s))

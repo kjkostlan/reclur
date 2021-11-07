@@ -549,3 +549,14 @@
   (let [k (if (first k) (first k) 1)
         s (map #(if (= (mod (inc %) k) 0) "\n" " ") (range))]
     (apply str (interleave x s))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;; Most interactive boxes are repls ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn add-repl [s boxk code cursor-place-f run-it-now?]
+  "Adds a repl with very-pretty-pritned code and selects it. cursor-place-f can be a number."
+  (let [code-string (binding [*print-meta* true] (layout.blit/vps code))
+        cursor-ix0 (if (number? cursor-place-f) cursor-place-f (cursor-place-f code-string))
+        new-box (assoc (new-repl code-string) :cursor-ix cursor-ix0)
+        s1 (assoc s :selected-comp-keys #{boxk} :typing-mode? true)
+        s2 ((:add-component (:layout s1)) s1 new-box boxk)]
+      (if run-it-now? (run-repl s2 boxk) s2)))

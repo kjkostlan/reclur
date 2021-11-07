@@ -25,8 +25,20 @@
 
 ;;;;; Error reporting ;;;;
 
-(defn error [& args] "Debug"
+(defn error [& args] "Throws error"
   (throw (Exception. (apply str args))))
+
+(defn error+ [msg x]
+  "Errors with msg, and logs x which should be too large for a simple message.
+   Msg can be a vector or str."
+  (let [msg (if (sequential? msg) (apply str msg) (str msg))
+        msg (str msg " [M-p opens dump].")]
+    (swap! globals/log-atom #(assoc % :error-plus x))
+    (throw (Exception. msg))))
+
+(defn get-error+ []
+  "Returns the thing logged as the last error."
+  (:error-plus @globals/log-atom))
 
 (defonce eval-lasterr (atom ""))
 

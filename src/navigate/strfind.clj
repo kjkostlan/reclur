@@ -127,7 +127,6 @@
     (if (= (count ckys) 0) (siconsole/log s "Must select a component to search within.")
       (let [boxk (keyword (gensym 'searchbox))
             m0 {:key "" :case? false :reverse? false :dumb-text? false :boxk 'core/*comp-k*}
-
             blit #(if (symbol? %) (symbol (str "'" %)) %)
             cky (first ckys)
             m (assoc m0 :target (blit cky))
@@ -135,9 +134,6 @@
             code (walk/postwalk #(if (= % 'm) m %) code)
             code (with-meta code {:global true})
 
-            code-string (binding [*print-meta* true] (layout.blit/vps code))
-            cursor-ix0 (+ (first (first (boring-find code-string ":key \"\"" false))) 6)
-            new-comp (assoc (orepl/new-repl code-string) :cursor-ix cursor-ix0)
-            s1 (assoc s :selected-comp-keys #{boxk} :typing-mode? true)
-            s2 (if (> (count ckys) 1) (siconsole/log s1 "Multible components selected, only selecting the first one.") s1)]
-        ((:add-component (:layout s2)) s2 new-comp boxk)))))
+            cursor-place-f #(+ (first (first (boring-find % ":key \"\"" false))) 6)
+            s1 (orepl/add-repl s boxk code cursor-place-f false)]
+     (if (> (count ckys) 1) (siconsole/log s1 "Multible components selected, only selecting the first one.") s1)))))
