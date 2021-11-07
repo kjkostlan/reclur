@@ -230,16 +230,19 @@
           s3 (diff-checkpoint s2 #(hk/global-hotkey-cycle % evt-g evt-c k))
           hk? (hk/global-hotkey-block? s3) ; A hotkey fn has been triggered.
           s3_5 (hk/global-remove-blocks s3)
-          s4 (if (= k :mousePressed) (update s3_5 :components #(tabgroup/tab-group-global-click % evt-c)) s3_5)]
+          s4 (if (= k :mousePressed) (tabgroup/tab-group-global-click+sel s3_5 evt-c) s3_5)
+          tab-override (not= (:selected-comp-keys s3_5) (:selected-comp-keys s4))]
       (#(update-hot-boxes (orepl/orepl-based-updates! s %))
-        (if hk? (send-off-resize-listeners s s4) ; hotkeys block other actions.
-            (let [; Typing mode forces single component use.
-                  s5 (if (and (:typing-mode? s4) (= k :mousePressed)) (single-select evt-c s4) s4)
-                  s6 (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c)))
-                      (maybe-use-tool evt-c s5 (selectmovesize/get-camera-tool))
-                      (:typing-mode? s5) (diff-checkpoint s5 #(single-comp-dispatches evt-c %))
-                      :else (diff-checkpoint s5 #(maybe-common-tools evt-c %)))]
-              (send-off-resize-listeners s s6)))))))
+        (cond hk? (send-off-resize-listeners s s4) ; hotkeys block other actions.
+          tab-override s4 ; user clicks a tab, it consumes the event, so do not send off said event.
+          :else
+          (let [; Typing mode forces single component use.
+                s5 (if (and (:typing-mode? s4) (= k :mousePressed)) (single-select evt-c s4) s4)
+                s6 (cond (and (= k :mouseDragged) (or (:ControlDown evt-c) (:MetaDown evt-c)))
+                    (maybe-use-tool evt-c s5 (selectmovesize/get-camera-tool))
+                    (:typing-mode? s5) (diff-checkpoint s5 #(single-comp-dispatches evt-c %))
+                    :else (diff-checkpoint s5 #(maybe-common-tools evt-c %)))]
+            (send-off-resize-listeners s s6)))))))
 
 ;;;;;;;;;;;;;;;; Rendering ;;;;;;;;;;;;;;;;;;;;;
 

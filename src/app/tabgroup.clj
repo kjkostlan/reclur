@@ -136,6 +136,14 @@
         super-vec1 (apply c/vcat groups1)]
     (merge boxes (zipmap (mapv ::tmp-key super-vec1) (mapv #(dissoc % ::tmp-key) super-vec1)))))
 
+(defn tab-group-global-click+sel [s m-evt]
+  "Selects a single box if at least one :z increased from the global-click"
+  (let [boxes0 (:components s) boxes1 (tab-group-global-click boxes0 m-evt)
+        >if #(and %1 %2 (> %1 %2))
+        kys-up (filterv #(>if (:z (get boxes1 %)) (:z (get boxes0 %))) (keys boxes1))
+        s1 (assoc s :components boxes1)]
+    (if (empty? kys-up) s1 (assoc s1 :selected-comp-keys #{(first (sort kys-up))}))))
+
 (defn sync-on-update [boxes0 boxes1]
   "Moving any box in the tab group moves all the boxes.
    New boxes are not added to the current tab group, but instead share thier own.
