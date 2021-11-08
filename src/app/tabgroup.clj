@@ -142,7 +142,7 @@
         >if #(and %1 %2 (> %1 %2))
         kys-up (filterv #(>if (:z (get boxes1 %)) (:z (get boxes0 %))) (keys boxes1))
         s1 (assoc s :components boxes1)]
-    (if (empty? kys-up) s1 (assoc s1 :selected-comp-keys #{(first (sort kys-up))}))))
+    (if (empty? kys-up) s1 (assoc s1 :selected-comp-keys #{(first (sort-by str kys-up))}))))
 
 (defn sync-on-update [boxes0 boxes1]
   "Moving any box in the tab group moves all the boxes.
