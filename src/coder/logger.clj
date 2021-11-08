@@ -40,6 +40,26 @@
   "Returns the thing logged as the last error."
   (:error-plus @globals/log-atom))
 
+(defn pr-stack [& to-string-instead]
+  "Sometimes multible paths go to the same function. It is helpful to see all paths."
+  (let [trace-elem-obs (.getStackTrace (Thread/currentThread))
+        ; This clean-up code is somewhat duplicated with unerror/pr-error
+        isolate-num (fn [txt] (string/replace (string/replace txt #"\(.*\.clj:" " ") ")" ""))
+        trace-elem-strs (mapv str trace-elem-obs)
+        trace-elems (mapv #(-> (str %)
+                             (string/replace "$" "/")
+                             (isolate-num)
+                             (string/replace "_BANG_" "!")
+                             (string/replace "_QMARK_" "?")
+                             (string/replace "_PLUS_" "+")
+                             (string/replace ".invokeStatic" "")
+                             (string/replace ".invoke" ""))
+                       trace-elem-obs)
+        ix-first-cpanel (first (filter #(string/includes? (nth trace-elem-strs %) "cpanel.clj") (range (count trace-elems))))
+        trace-elems (subvec trace-elems 4 ix-first-cpanel)]
+    (if (not (first to-string-instead))
+      (do (println "Stack:") (mapv #(println " " %) trace-elems)) trace-elems)))
+
 (defonce eval-lasterr (atom ""))
 
 (defn eval+ [code]
@@ -246,10 +266,10 @@
 
 ;;;;;;;;;;;;;;; High-level loggering ;;;;;;;;;;;;;;;;
 
-(defn with-log-paths [sym2paths sym2mexpand? var-obj & args]
+(defn with-log-paths [sym2paths sym2mexpand? sym-qual-or-fn & args]
   "Runs var-obj with temporarly adjusted log paths and returns the logs.
    var-obj can be a function, but a direct reference to a var will NOT get it's log-paths.
-   The result is in :result in the metadata, and is an Exception object if running it throws an error."
+   The result is in :result in the metadata."
   (let [syms (keys sym2paths)
         sym2mexpand? (if (map? sym2mexpand?) sym2mexpand?
                        (zipmap syms (repeat (boolean sym2mexpand?))))
@@ -257,11 +277,15 @@
         sym2old-paths (zipmap syms (mapv get-logpaths syms))
         sym2old-mexpand? (zipmap (keys sym2old-paths) (mapv #(:mexpand? (meta %)) (vals sym2old-paths)))
         _ (mapv set-logpaths! syms (mapv #(get sym2paths %) syms) (mapv #(get sym2mexpand? %) syms))
+        reset-logpaths (fn [] (mapv set-logpaths! syms (mapv #(get sym2old-paths %) syms) (mapv #(get sym2old-mexpand? %) syms)))
+        reset+err #(do (reset-logpaths) (error %))
+        reset-if-err (fn [f] (try (f) (catch Exception e (do (reset-logpaths) (throw e)))))
         tmp-atom (atom {})
-        result (binding [*log-atom* tmp-atom]
-                 (try (apply var-obj args) (catch Exception e e)))
-        our-logs (get @tmp-atom :logs [])
-        _ (mapv set-logpaths! syms (mapv #(get sym2old-paths %) syms) (mapv #(get sym2old-mexpand? %) syms))]
+        f-or-var (if (symbol? sym-qual-or-fn) (resolve sym-qual-or-fn) sym-qual-or-fn)
+        _ (if (nil? sym-qual-or-fn) (reset+err "Nil fn given"))
+        _ (if (nil? f-or-var) (reset+err "Cannot find: " sym-qual-or-fn))
+        result (binding [*log-atom* tmp-atom] (reset-if-err (fn [] (apply f-or-var args))))
+        our-logs (get @tmp-atom :logs [])]
     (with-meta our-logs {:result result})))
 
 (defn find-bad-logpaths [run-sym log-sym paths mexpand? throw? runtime-args]

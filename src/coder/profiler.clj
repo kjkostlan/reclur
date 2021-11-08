@@ -151,15 +151,13 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Runtime recording;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn _logss-with-debug! [log-syms log-pathss sym-qual runs]
+(defn _logs-with-debug! [log-syms log-pathss sym-qual the-fn runs]
   "Throws and reports various types of errors. No macroexpansion is performed.
    With no errors, it will run runs logging to to log-atom.
    Sets log paths (they should later be removed unless mutation is desired)."
   (binding [logger/*err-print-code?* true logger/*log-stack?* false]
-    (println "Setting log paths for these symbols:" log-syms)
-    (let [fn-to-run (eval sym-qual)
-          logss (mapv #(apply logger/with-log-paths (zipmap log-syms log-pathss) false fn-to-run %) runs)
-          results (mapv #(:results (meta %)) logss)
+    (let [logs (logger/with-log-paths (zipmap log-syms log-pathss) false the-fn runs)
+          results (:results (meta logs))
           is-exception? #(instance? java.lang.Exception %)
           err?s (mapv is-exception? results)]
       (mapv (fn [err? lsym lphs] ; Throws an exception if there is an error.
@@ -167,7 +165,7 @@
               (if err? (println "Warning! we only will detect compile time bad log paths!"))
               (if err? (logger/find-bad-logpaths sym-qual lsym lphs false true nil)))
         err?s log-syms log-pathss)
-      logss)))
+      logs)))
 
 (defn _log-organize [logs path-map-map]
   "Returns map from log path to vector of log :values with said path.
@@ -187,23 +185,18 @@
    Includes the dependent symbols of f, and gives logs in chronological order.
    Clears all logs in runs.
    Warning: slow! Use on tiny examples!"
-  (let [the-fn (eval sym-qual)
-        ;syms2code (cbase/varaverse)
+  (let [the-fn (fn [runs] (let [v-ob (resolve sym-qual)] (mapv #(apply v-ob %) runs)))
+
         ns-sym (textparse/sym2ns sym-qual)
         log-syms (apply set/union (mapv set (cbase/deep-used-by sym-qual)))
-        vanilla (try (mapv #(apply the-fn %) runs)
-                  (catch Exception e
-                    (str "Couldn't even run unmodified code: " sym-qual "\n"
-                      (unerror/pr-error e))))]
-    (if (string? vanilla) vanilla
-      (let [;_ (println "Deep profile covering:" (mapv textparse/unqual log-syms))
-            codes (mapv langs/var-source log-syms)
-            path-maps (mapv unexpanded-pathmap codes)
-            log-pathss (mapv #(into [] (set (vals %))) path-maps) ; Log the UNexpanded code.
+        vanilla (try (the-fn runs) (catch Exception e (do (println "Vanilla is not working") (throw e))))]
+    (let [codes (mapv langs/var-source log-syms)
+          path-maps (mapv unexpanded-pathmap codes)
+          log-pathss (mapv #(into [] (set (vals %))) path-maps) ; Log the UNexpanded code.
 
-            path-map-map (zipmap log-syms path-maps)
-            logs (apply c/vcat (_logss-with-debug! log-syms log-pathss sym-qual runs))]
-        (_log-organize logs path-map-map)))))
+          path-map-map (zipmap log-syms path-maps)
+          logs (_logs-with-debug! log-syms log-pathss sym-qual the-fn runs)]
+      (_log-organize logs path-map-map))))
 
 (defn food-profiles [sym-qual runs]
   "{fn-sym}[chronological][which-arg-ix] => value of argument.

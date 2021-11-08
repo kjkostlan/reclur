@@ -36,7 +36,7 @@
   "Tries to find the file and character ixs for a stack."
   (let [txt (rtext/rendered-string box)
         ixjx (rtext/cursor-ix-to-ugrid box) linenum-in-box (inc (second ixjx))
-        str-with-stacktrace (apply subs txt (textparse/line-to-string-ixs txt linenum-in-box false))
+        str-with-stacktrace (string/trim (apply subs txt (textparse/line-to-string-ixs txt linenum-in-box false)))
         x (stackelem-to-fixsym str-with-stacktrace)]
     (if x [(first x) (second x) (nth x 2)])))
 
