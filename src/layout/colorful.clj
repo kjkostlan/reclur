@@ -81,7 +81,6 @@
         hue (mod (+ (* depth hue-depth-speed) 999 (nth hue-shift shift-ix)) 1.0)
         saturation (+ (get token-tysat token-ty 1.0) (nth sat-shift shift-ix))
         lightness (+ (get token-lightness token-ty 0.5) (nth light-shift shift-ix))
-        lightness (if (< depth 2) (nth [0.5 0.75 1.0] (mod num-run-times 3)) lightness)
         ;lightness (if map-key-indicator (+ lightness 0.6) lightness)
         ;saturation (if map-key-indicator (- saturation 1.0) saturation)
         rgb (hsl2rgb [hue saturation lightness])

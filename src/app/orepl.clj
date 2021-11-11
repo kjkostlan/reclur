@@ -33,9 +33,14 @@
                      (mapv #(repeat (count %1) %2) tokens token-tys))
         inter-levels (langs/interstitial-depth txt :clojure)
         levels-inclusive (mapv max (butlast inter-levels) (rest inter-levels))
-        mapk-indics (parse-clojure/map-key-indicators txt char-token inter-levels)]
-    (mapv #(conj (colorful/repl-out-multicolor %1 %2 %3 num-run-times) 1)
-      levels-inclusive char-token mapk-indics)))
+        mapk-indics (parse-clojure/map-key-indicators txt char-token inter-levels)
+        rgbs (mapv #(conj (colorful/repl-out-multicolor %1 %2 %3 num-run-times) 1)
+               levels-inclusive char-token mapk-indics)
+        re-col (fn [rgb]
+                 (let [boost (nth [0 0.125 0.25] (mod num-run-times 3))]
+                    (colorful/clamp01 (mapv #(+ % boost) rgb))))]
+    (if (> (count rgbs) 1)
+      (-> rgbs (update 1 re-col) (update (dec (count rgbs)) re-col)) rgbs)))
 
 (defn colorize [box s piece-ix char-ix0 char-ix1]
   (let [txt0 (:text (first (:pieces box))) txt1 (:text (second (:pieces box)))
