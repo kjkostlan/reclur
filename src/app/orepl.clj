@@ -12,6 +12,7 @@
     [coder.profiler :as profiler]
     [coder.textparse :as textparse]
     [coder.crosslang.langs :as langs]
+    [coder.crosslang.langparsers.clojure :as parse-clojure]
     [coder.sunshine :as sunshine]
     [coder.unerror :as unerror]
     [javac.clipboard :as clipboard]
@@ -27,21 +28,20 @@
 
 (defn colorize-output [txt num-run-times]
   (let [txt (if txt txt "")
-        [tokens token-tys] (langs/tokenize txt :clojure)
+        [tokens token-tys] (langs/tokenize txt :clojure) ; the repl always uses :clojure to represent data.
         char-token (apply c/vcat
                      (mapv #(repeat (count %1) %2) tokens token-tys))
         inter-levels (langs/interstitial-depth txt :clojure)
-        rgba (conj (colorful/cmdix2rgb num-run-times) 1)
-        levels-inclusive (mapv max (butlast inter-levels) (rest inter-levels))]
-    (mapv #(conj (colorful/repl-out-multicolor %1 %2 num-run-times) 1)
-      levels-inclusive char-token)
-    #_(into [] (repeat (count txt) rgba))))
+        levels-inclusive (mapv max (butlast inter-levels) (rest inter-levels))
+        mapk-indics (parse-clojure/map-key-indicators txt char-token inter-levels)]
+    (mapv #(conj (colorful/repl-out-multicolor %1 %2 %3 num-run-times) 1)
+      levels-inclusive char-token mapk-indics)))
 
 (defn colorize [box s piece-ix char-ix0 char-ix1]
   (let [txt0 (:text (first (:pieces box))) txt1 (:text (second (:pieces box)))
-        cols-if-top (codebox/colorize box s piece-ix char-ix0 char-ix1)
-        cols-out (colorize-output txt1 (:num-run-times box))]
-    (c/vcat (subvec cols-if-top 0 (count txt0)) cols-out)))
+        cols-piece0 (codebox/colorize box s piece-ix 0 (count txt0))
+        cols-piece1 (colorize-output txt1 (:num-run-times box))]
+    (subvec (c/vcat cols-piece0 cols-piece1) char-ix0 char-ix1)))
 
 (defn limit-length [s]
   (let [max-len 10000 tmp "...<too long to show>"]

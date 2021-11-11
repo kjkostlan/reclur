@@ -22,7 +22,7 @@
 (defn hsl2rgb [hsl]
   ; l is on a 0-1 scale, 0 is always black and 1 is always white.
   (clamp01
-    (let [g 2.2 rgb (hsv2rgb [(first hsl) (second hsl) 1])
+    (let [hsl (clamp01 hsl) g 2.2 rgb (hsv2rgb [(first hsl) (second hsl) 1])
          w [0.241 0.691 0.068] ; weight must sum to 1.
          ; actual brightness
          lux (fn [c] (reduce + 0.0 (map #(* (Math/pow (double %1) (double %2)) %3) c (repeat g) w)))
@@ -64,21 +64,26 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Orepl coloring ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn cmdix2rgb [cmd-ix]
-  "Mono-color option, not currently used."
+  "Mono-color option, may be used in the future."
   (let [brt (mod (/ cmd-ix (double (num-cmd-cycle))) 1.0)]
     [(Math/pow brt 1.0) (+ 0.5 (* (Math/pow brt 0.5) 0.5)) (+ 0.95 (* (Math/pow brt 0.333) 0.04999))]))
 
-(defn repl-out-multicolor [depth token-ty num-run-times]
+(defn repl-out-multicolor [depth token-ty map-key-indicator num-run-times]
   (let [hue-depth-speed 0.1666667
         token-tysat     [0.40 0.40 0.20 0.20 1.00 1.00 0.40 0.40 0.40]
         token-lightness [0.70 0.70 0.70 0.70 0.60 0.60 0.70 0.70 0.70]
 
         hue-shift       [0 0.05 0.1 0.15 0.2 0.25]
-        light-shift     [-0.05 0.05 -0.05 0.05 -0.05 0.05]
+        light-shift     [0.0 0.0 0.0 0.0 0.0 0.0]
         sat-shift       [0.0 0.0 0.0 0.0 0.0 0.0]
 
         shift-ix (int (mod (+ 0.5 num-run-times) (count hue-shift)))
         hue (mod (+ (* depth hue-depth-speed) 999 (nth hue-shift shift-ix)) 1.0)
         saturation (+ (get token-tysat token-ty 1.0) (nth sat-shift shift-ix))
-        lightness (+ (get token-lightness token-ty 0.5) (nth light-shift shift-ix))]
-    (hsl2rgb [hue saturation lightness])))
+        lightness (+ (get token-lightness token-ty 0.5) (nth light-shift shift-ix))
+        lightness (if (< depth 2) (nth [0.5 0.75 1.0] (mod num-run-times 3)) lightness)
+        ;lightness (if map-key-indicator (+ lightness 0.6) lightness)
+        ;saturation (if map-key-indicator (- saturation 1.0) saturation)
+        rgb (hsl2rgb [hue saturation lightness])
+        rgb (clamp01 (mapv #(+ % (if map-key-indicator 0.2 0.0)) rgb))]
+    rgb))

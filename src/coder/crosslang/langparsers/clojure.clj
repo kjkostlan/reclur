@@ -132,3 +132,31 @@
 (defn interstitial-depth [s]
   "A fast parser used for indent hiliting et al."
   (into [] ^ints (interstitial-depth-ints (str s))))
+
+(defn _map-key-core [contents tok lev are-contents-map?]
+  "Subvecs, map-contents does not include the {}."
+  (let [l0 (first lev) n (count tok)]
+    (loop [acc [] ix 0 parity (if are-contents-map? 0 1)]
+      (if (= ix n) acc
+        (let [l (nth lev ix) ch (nth contents ix)
+              t (nth tok ix)
+              parity1 (if (and (= l l0) (= t 0) (> ix 0) (not= (nth tok (dec ix)) 0) are-contents-map?) (inc parity) parity)]
+          (if (even? parity)
+            (recur (conj acc are-contents-map?) (inc ix) parity1)
+            (let [map-open? (and (= ch \{) (or (= ix 0) (not= (nth contents (dec ix)) \#)))
+                  map-close (if map-open?
+                              (loop [jx (inc ix)]
+                                (if (= jx n) (dec jx)
+                                  (let [l1 (nth lev jx)]
+                                    (if (<= l1 l) (dec jx) (recur (inc jx)))))))]
+              (if map-open?
+                (recur (apply conj acc false
+                         (_map-key-core (subs contents (inc ix) map-close)
+                           (subvec tok (inc ix) map-close)
+                           (subvec lev (inc ix) map-close) true))
+                   map-close parity1)
+                (recur (conj acc false) (inc ix) parity1)))))))))
+(defn map-key-indicators [txt tok-val-each-char inter-levels]
+  "Vector that is true for map keys, used for repl hilighting but not much else.
+   False when not in a map."
+  (_map-key-core txt tok-val-each-char inter-levels false))

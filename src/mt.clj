@@ -54,13 +54,13 @@
   (_pmwalk f [] x))
 
 (defn m-unpack [x]
-  "Unpacks metadata with (^ meta-data bar), ^ is a symbol.
+  "Unpacks metadata with (| meta-data bar), | is a symbol which does not create read-string confusion the way ^ would.
    Only unpacks data which has metadata. This fn is most useful for reporting without needing *print-meta*."
   (walk/prewalk #(if-let [m (meta %)]
                    (let [no-meta (with-meta % nil)]
-                     (list (symbol "^") m no-meta)) %) x))
+                     (list (symbol "|") m no-meta)) %) x))
 
 (defn m-pack [x]
   "Packs metadata, undoing the effect of m-unpack."
-  (walk/prewalk #(if (and (list? %) (= (first %) (symbol "^")))
+  (walk/prewalk #(if (and (list? %) (= (first %) (symbol "|")))
                    (with-meta (c/third %) (second %)) %) x))

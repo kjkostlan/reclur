@@ -10,6 +10,7 @@
 (def ^:dynamic *shallow-digfurther-ratio* 8)
 (def ^:dynamic *target-fillchars* 512)
 (def ^:dynamic *min-child-fraction* 0.1)
+(def ^:dynamic *min-outerlevel-nshow* 64)
 ; Format examples:
 ; (1 2 3 ...(10-5)... 9 10), or [], or (), or #{}
 ; (1 2 3 ...???) ; (range)
@@ -48,7 +49,8 @@
         ch-frac (max ch-frac-min (/ 1.0 (if (number? n) n dig)))
         opts1 (assoc opts :target-fillchars (Math/ceil (* chars ch-frac))
                 :max-dig-range (Math/ceil (* dig ch-frac)))
-        mk2sym #(if m? (zipmap (mapv to-sym (keys %)) (vals %)) %)]
+        mk2sym #(if m? (zipmap (mapv to-sym (keys %)) (vals %)) %)
+        outer-lev? (= (count path) 0)]
     (loop [n-used 0 c-used 0 acc-head [] acc-tail (list) xhead (seq x) xtail (if from-tail? (reverse x))]
             ; Bi-directional loop.
       (let [subsummary (fn [xi k]
@@ -71,7 +73,7 @@
           (mk2sym (_as-counted (concat acc-head [(get-h)] acc-tail) x))
           (= (* n-used uno-dos) n)
           (mk2sym (_as-counted (concat acc-head acc-tail) x))
-          (and (> (count acc-head) 0) (> c-used (- chars 5)))
+          (and (> (count acc-head) 0) (> c-used (- chars 5)) (or (not outer-lev?) (>= (* n-used uno-dos) *min-outerlevel-nshow*)))
           (mk2sym (_as-counted (add-dot3) x))
           :else (let [h (if from-head? (_summarize (conj path k0) (first xhead) opts1))
                       t (if from-tail? (_summarize (conj path k1) (first xtail) opts1))
@@ -88,14 +90,15 @@
         n (cond (not (coll? x)) 1 (counted? x) (count x)
             :else (let [n0 (count (take dig x))] (if (< n0 dig) n0 "???")))
         sym+meta #(with-meta (to-sym %) {::path path})
+        coll+meta #(with-meta % {::path path})
         meta1 #(try (with-meta %1 (meta %2)) (catch Exception e %1))
         meta-kvs-if-map (fn [x1] (if (map? x1) (zipmap (mapv meta1 (keys x1) (vals x1))
                                                  (vals x1)) x1))]
     (cond
       (and (coll? x) (not= n "???"))
-      (meta-kvs-if-map (_summarize1 path x n true (or (vector? x) (< n (* dig shallow))) opts))
+      (coll+meta (meta-kvs-if-map (_summarize1 path x n true (or (vector? x) (< n (* dig shallow))) opts)))
       (coll? x) ; Uncounted colls, such as infinite sequences.
-      (_summarize1 path x n true false opts)
+      (coll+meta (_summarize1 path x n true false opts))
       :else (sym+meta x))))
 (defn summarize [x & opts]
   "Generates a human-friendly representation of x if x is large, and removes lazyness.
@@ -114,6 +117,7 @@
   (if-let [hot-path (into [] (rest (langs/stringlang-to-wpath x-summarized-txt cursor-ix :clojure)))]
     (let [_ (if (string/includes? (str (first hot-path)) "IAmUnique")
               (println "You must click on map values, not keys (bug)."))
+          hot-path (if (string/includes? (str (last hot-path)) "IAmUnique") (into [] (butlast hot-path)) hot-path)
           x-piece (reduce (fn [branch k]
                             (c/cget branch
                               (if (map? branch) (to-sym k) k)))
