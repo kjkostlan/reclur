@@ -240,3 +240,25 @@
                    :dispatch dispatch-fn :last-drawn-gfx nil :update-gfx-fn update-gfx-fn :render-fn render-fn)]
         (send globals/app-agent (fn [_] app0)))))
 
+;;;;;;;;;;;;;;;;;;;;; Useful functions post-setup ;;;;;;;;;;;;;;;;;;;;;
+
+(defn fullscreen! []
+  "Makes the window fullscreen. The global JFrame is a singleton."
+  (let [^JFrame frame (:JFrame @globals/external-state-atom)]
+    ; Dispose seems to free up the resources from the os without stopping us from using it.
+    ; https://stackoverflow.com/questions/875132/how-to-call-setundecorated-after-a-frame-is-made-visible
+    (.dispose frame)
+    (.setUndecorated frame true) (.setExtendedState frame JFrame/MAXIMIZED_BOTH)
+    (.setVisible frame true)))
+
+(defn windowed! []
+  "Makes the window fullscreen."
+  (let [^JFrame frame (:JFrame @globals/external-state-atom)]
+    (.dispose frame)
+    (.setUndecorated frame false) (.setExtendedState frame JFrame/NORMAL)
+    (.setVisible frame true)))
+
+(defn fullscreen? []
+  "Are we in fullscreen mode?"
+  (let [^JFrame frame (:JFrame @globals/external-state-atom)]
+    (boolean (.isUndecorated frame))))

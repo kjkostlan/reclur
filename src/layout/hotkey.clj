@@ -111,6 +111,12 @@
   (let [code `(logger/get-error+) boxk ::hotkey-repl]
     (orepl/add-repl s boxk code 0 true)))
 
+(defn toggle-fullscreen! [s]
+  "The titlebar is useless."
+  (let [full? (cpanel/fullscreen?)]
+    (println "Fullscreen toggled")
+    (if full? (cpanel/windowed!) (cpanel/fullscreen!)) s))
+
 ;;;;; The hotkeys themselves ;;;;;
 
 (defn hotkeys-typing-mode []
@@ -181,6 +187,7 @@
                        s1 (update s :components #(tabgroup/toggle-tabs-for-boxes-under-mouse % x y))
                        s2 (selectmovesize/seltool-mousepress mevt-c s1)
                        s3 (selectmovesize/seltool-mouserelease mevt-c s2)] s3))
+   "C-S-M-f" (fn [s] (toggle-fullscreen! s))
    "C-S-M-n ^^ ^^ vv vv << >> << >> b a" (fn [s] (println "We hope you enjoy this sandbox-genre game!") s)})
 
 (defn hotkey-cycle [evt-g evt-c hotkey-state k typing-mode?]
