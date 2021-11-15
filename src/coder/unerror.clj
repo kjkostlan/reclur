@@ -2,7 +2,7 @@
 ; Helps you remove bugs by catching *compile* time errors.
 
 (ns coder.unerror
-  (:require
+  (:require [globals]
     [clojure.set :as set]
     [clojure.string :as string]
     [layout.blit :as blit]
@@ -57,8 +57,16 @@
         msg (apply str (interpose "\ncompiling:" (string/split msg0 #", compiling:")))
         msg1 (apply str msg " (" (subs (str (type e)) 6) ")" "\n"
                (let [st (if (first hide-stack?) [] (:StackTrace e-clj))]
-                 (interpose "\n" st)))]
-    (-> msg1
+                 (interpose "\n" st)))
+        lines (string/split msg1 #"\n")
+        evals (get @globals/external-state-atom ::evals)
+        replace-eval (fn [line]
+                       (let [matches (mapv #(subs % 1 (dec (count %))) (re-seq #"\/[a-zA-Z0-9]+\/" line))
+                             ky (first (filter #(contains? evals %) matches))]
+                         (if ky (str (get evals ky) " <autogen>") line)))
+        lines1 (mapv replace-eval lines)
+        msg2 (apply str (interpose "\n" lines1))]
+    (-> msg2
       (string/replace "(clojure.lang.Compiler$CompilerException)" "")
       (string/replace "RuntimeException: " "")
       (string/replace "reading source at" "at"))))
@@ -359,6 +367,17 @@
     (catch Exception e
       (println "Compare to vanilla error [code shown unqualed above]: "
         (pr-error e)))))
+
+;;;;;;;;;;;; Mutation ;;;;;;;;;;;;
+
+(defn mark-autogen-var! [sym-qual fn-obj]
+  "Eval and nice error messages don't mix."
+  (let [txt (str fn-obj)
+        piece (re-find #"\$[a-zA-Z0-9]+\$" txt)
+        _ (if (< (count piece) 4) (throw (Exception. "Fn does not seem to be an autogen")))
+        piece (subs piece 1 (dec (count piece)))]
+    (swap! globals/external-state-atom
+      #(assoc-in % [::evals piece] sym-qual))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Testing ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
