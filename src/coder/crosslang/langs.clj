@@ -63,7 +63,7 @@
   (:require [coder.textparse :as textparse]
             [coder.crosslang.langparsers.clojure :as clojure]
             [coder.crosslang.langparsers.human :as human]
-            [c]
+            [c] [mt] [globals]
             [clojure.string :as string]
             [javac.file :as jfile]
             [clojure.set :as set]
@@ -74,7 +74,7 @@
 
 (defn errlang [fn-name langkwd]
   "One day this function will be removed. One day..."
-  (throw (Exception. (str "langs/" fn-name " not yet supported with " langkwd))))
+  (mt/error "langs/" fn-name " not (yet) supported with " langkwd))
 
 (defn unpacked-fn? [form]
   "Functions without packed arguments. Making all arguments packed can make things easier but changes the path."
@@ -100,7 +100,7 @@
   "Returns the code using the disk, if the file exists, nil otherwise.
    Reader macros are expanded but not vanilla macros."
   (let [file (str "./src/" file) txt (jfile/open file)
-        _ (if (and assert? (not txt)) (throw (Exception. (str file " not found"))))]
+        _ (if (and assert? (not txt)) (mt/error file " not found"))]
     (if txt
       (let [lines (string/split-lines txt)
             clip-txt (subs (apply str (interpose "\n" (subvec lines (dec line)))) (dec col))]
@@ -142,7 +142,7 @@
   (let [langkwd (ns2langkwd ns-sym)]
     (cond (= langkwd :clojure)
       (let [ns-ob (find-ns ns-sym)
-            _ (if (not ns-ob) (throw (Exception. (str "Namespace: " (pr-str ns-sym) " not found; the clj file must first be compiled at least once."))))
+            _ (if (not ns-ob) (mt/error "Namespace: " (pr-str ns-sym) " not found; the clj file must first be compiled at least once."))
             var-ob (ns-resolve ns-ob (symbol (str code-sym)))]
         (if var-ob (symbol (subs (str var-ob) 2))))
       (= langkwd :human) (symbol (str :human (textparse/rm-lang code-sym)))
@@ -160,7 +160,7 @@
                  :shell #{"sh" "bat"}
                  :human #{"txt" "md"}}
         langkwd (first (filter #(contains? (get ext-map %) ext) priority-order))]
-    (if langkwd langkwd (throw (Exception. (str "unrecognized file exension:" ext))))))
+    (if langkwd langkwd (mt/error "unrecognized file exension:" ext))))
 
 (defn langkwd2fileext [kwd]
   (let [m {:clojure "clj" :java "java" :javascript "js" :python "py"
@@ -204,19 +204,22 @@
   "Gets information about a var in the form of clojure datastructures.
    source? means look for the source as well, which can be a little slow."
   (let [langkwd (ns2langkwd (textparse/sym2ns qual-sym))]
-    (if (not (symbol? qual-sym)) (throw (Exception. (str "Qual-sym must be a symbol not a " (type qual-sym)))))
+    (if (not (symbol? qual-sym)) (mt/error "Qual-sym must be a symbol not a" (type qual-sym)))
     (if (not= langkwd :clojure)
       (errlang "var-info" langkwd)))
-  (let [ns-sym (textparse/sym2ns qual-sym) ns-obj (find-ns ns-sym)
-        _ (if (nil? ns-obj) (throw (Exception. (str "Namespace not found:" ns-sym))))
-        sym2var (ns-map ns-obj)
-        var-obj (get sym2var (textparse/unqual qual-sym))
-        out (meta var-obj) out (assoc out :ns ns-sym)
-        out (if (and source? (not (:source out)))
+  (if (string/includes? qual-sym "/") ; Ordinary vars have /, but java classes-as-symbols don't.
+    (let [ns-sym (textparse/sym2ns qual-sym)
+          ns-obj (find-ns ns-sym)
+          _ (if (nil? ns-obj) (mt/error "Namespace not found:" ns-sym))
+          sym2var (ns-map ns-obj)
+          var-obj (get sym2var (textparse/unqual qual-sym))
+          out (meta var-obj) out (assoc out :ns ns-sym)
+          out (if (and source? (not (:source out)))
               (let [src (get-code-clojure (:file out) (:line out) (:column out) false)]
                 (if src (assoc out :source src) out)) out)
-        out (if source? out (dissoc out :source))] ; consistancy.
-    out))
+          out (if source? out (dissoc out :source))] out) ; dissoc :source for consistancy.
+    (if-let [jsrc (get-in @globals/external-state-atom [::java-sources (textparse/remove-jdots qual-sym)])] ; For dynamic source generation.
+      {:source jsrc})))
 
 (defn var-source [qual-sym]
   "Source-code of qual-sym, no macro expansion or symbol qualification."
@@ -246,14 +249,6 @@
                    (keys as2ns) (vals as2ns)))]
     (c/vcat native foreign standard)))
 
-(defn defs [ns-sym]
-  "Not qualified."
-  (let [langkwd (ns2langkwd ns-sym)]
-    (cond (= langkwd :clojure)
-      (into [] (keys (ns-interns ns-sym)))
-      (= langkwd :human) []
-      :else (errlang "defs" langkwd))))
-
 (defn mexpand [ns-sym code]
   "Performs a macroexpand-all on the function, as well as some other minor steps to make
    the code easier to work with."
@@ -266,6 +261,69 @@
               (walk/macroexpand-all code)))
         (= langkwd :human) []
         :else (errlang "mexpand" langkwd))))))
+
+(defn mark-autogen-fn! [sym-qual fn-obj intern?]
+  "Use when setting a var to a function object that has been evaled outside of a def to get better error messages.
+   For evaling def(n) code (which is the more common case) use eval-intern+ instead."
+  (let [txt (str fn-obj)
+        piece (re-find #"\$[a-zA-Z0-9]+\$" txt)
+        _ (if (< (count piece) 4) (throw (Exception. "Fn does not seem to be an autogen")))
+        piece (subs piece 1 (dec (count piece)))]
+    (if intern? (intern (textparse/sym2ns sym-qual) (textparse/unqual sym-qual) fn-obj))
+    (swap! globals/external-state-atom #(assoc-in % [:var-evals piece] sym-qual))))
+
+(defn eval-intern+ [code ns-sym make-dummy-var-if-cant-compile?]
+  "Interns code into ns + more; use for autogenerated code. Returns var obj or java class or thows a compiler error.
+   If code is clojure def or defn: Stores source in :source in var metadata.
+   If code is clojure deftype or defmethod: Stores the source in [@globals/external-state-atom ::java-sources}
+   (TODO: more clojure defx's)
+   For other languages will store the :source as well (TODO)."
+  (let [langkwd (ns2langkwd ns-sym)
+        _ (if (not= langkwd :clojure) (errlang "eval-intern+" langkwd))
+        _ (if (not (c/listy? code)) (mt/error "Code to eval must be a list"))
+        c0 (first code)
+        mark-autogen-var! (fn [sym-qual fn-obj] ;Eval and nice error messages don't mix.
+                            (let [txt (str fn-obj)
+                                  piece (re-find #"\$[a-zA-Z0-9]+\$" txt)
+                                  _ (if (< (count piece) 4) (throw (Exception. "Fn does not seem to be an autogen")))
+                                  piece (subs piece 1 (dec (count piece)))]
+                              (swap! globals/external-state-atom
+                                #(assoc-in % [:var-evals piece] sym-qual))))
+
+        ns-obj (if-let [ns1 (find-ns ns-sym)] ns1 (create-ns ns-sym))]
+    (cond (contains? #{'def 'def* 'defn 'definline `defn `definline} c0) ; standard vars.
+      (let [code-ex1 (try (macroexpand-1 code) ; Extra error message.
+                       (catch Exception e
+                         (mt/error+ (str "Malformed def(x)code:" (.getCause e) "\n") code)))
+            var-ob-or-err (binding [*ns* ns-obj *warn-on-reflection* true]
+                            (try (eval code) (catch Exception e e)))
+            err? (instance? Exception var-ob-or-err)
+
+            sym-unqual (second code-ex1)
+            sym-qual (symbol (str ns-sym "/" sym-unqual))
+            var-ob (cond (not err?) var-ob-or-err
+                     make-dummy-var-if-cant-compile?
+                     (let [contents (fn [& args] (mt/error sym-qual " compilation failed so it cannot be used."))
+                           sym-unqual-no-meta (symbol (str sym-unqual))] ; Obscure bug with :arglists
+                       (intern ns-obj sym-unqual-no-meta contents)) :else nil)]
+        (if err?
+          (let [err-str (str "eval-code-error: \n" (.getCause var-ob-or-err))]
+            (if make-dummy-var-if-cant-compile?
+              (mt/error err-str (str "\n Inspect: " sym-qual))
+              (mt/error+ err-str))))
+        (if (or (not err?) make-dummy-var-if-cant-compile?)
+          (alter-meta! var-ob #(assoc % :source code)))
+        var-ob)
+      (contains? #{'deftype 'definterface `deftype `definterface} c0) ; Java vars
+      (let [contents (binding [*ns* ns-obj *warn-on-reflection* true]
+                       (try (eval code)
+                         (catch Exception e e)))
+            sym-qual (symbol (str ns-sym "." (second code)))
+            err? (instance? Exception contents)]
+        (if (or (not err?) make-dummy-var-if-cant-compile?)
+          (swap! globals/external-state-atom #(assoc-in % [::java-sources sym-qual] code))) ; Ignore make-dummy-var-if-cant-compile?
+        (if err? (mt/error "eval-jcode-error: \n" (.getCause contents) "\n Inspect:" sym-qual)) contents)
+      :else (mt/error "Code not a def(n), definterface, or deftype"))))
 
 ;;;;;;;;;;;;;;;;;;;;;; Functions that need to know which language to use ;;;;;;;;;;;;;;;;;
 

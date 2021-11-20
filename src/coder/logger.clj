@@ -23,23 +23,6 @@
 (def ^:dynamic *err-print-code?* false) ; It is expensive.
 (def ^:dynamic *log-stack?* false) ; Is it expensive?
 
-;;;;; Error reporting ;;;;
-
-(defn error [& args] "Throws error"
-  (throw (Exception. (apply str args))))
-
-(defn error+ [msg x]
-  "Errors with msg, and logs x which should be too large for a simple message.
-   Msg can be a vector or str."
-  (let [msg (if (sequential? msg) (apply str msg) (str msg))
-        msg (str msg " [M-p opens dump].")]
-    (swap! globals/log-atom #(assoc % :error-plus x))
-    (throw (Exception. msg))))
-
-(defn get-error+ []
-  "Returns the thing logged as the last error."
-  (:error-plus @globals/log-atom))
-
 (defn pr-stack [& to-string-instead]
   "Sometimes multible paths go to the same function. It is helpful to see all paths."
   (let [trace-elem-obs (.getStackTrace (Thread/currentThread))
@@ -278,7 +261,7 @@
         sym2old-mexpand? (zipmap (keys sym2old-paths) (mapv #(:mexpand? (meta %)) (vals sym2old-paths)))
         _ (mapv set-logpaths! syms (mapv #(get sym2paths %) syms) (mapv #(get sym2mexpand? %) syms))
         reset-logpaths (fn [] (mapv set-logpaths! syms (mapv #(get sym2old-paths %) syms) (mapv #(get sym2old-mexpand? %) syms)))
-        reset+err #(do (reset-logpaths) (error %))
+        reset+err #(do (reset-logpaths) (mt/error %))
         reset-if-err (fn [f] (try (f) (catch Exception e (do (reset-logpaths) (throw e)))))
         tmp-atom (atom {})
         f-or-var (if (symbol? sym-qual-or-fn) (resolve sym-qual-or-fn) sym-qual-or-fn)

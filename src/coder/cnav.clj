@@ -40,11 +40,11 @@
   "Makes leaves unuqie, unless exclude-f is true on the leaf."
   (let [a (atom 0)
         xform! #(let [ix (str @a) _ (swap! a inc)]
-                  (cond (and exclude-f (exclude-f %)) %
+                  (cond (coll? %) %
+                    (and exclude-f (exclude-f %)) %
                     (symbol? %) (symbol (str "sym" ix))
                     (string? %) (str ix)
                     (keyword? %) (keyword (str "kwd" ix))
-                    (coll? %) %
                     (number? %) ix
                     :else (str "leafy" ix)))]
     (walk/postwalk xform! x)))

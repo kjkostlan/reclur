@@ -313,10 +313,12 @@
     (if @_syntax-err?
       {:type :syntax-err :value (str "\nSyntax error:" (.getMessage code-or-e) " " (type code-or-e))}
       (try
-        (let [current-ns-sym (get-in s [:components repl-k :*ns*])
+        (let [current-ns-sym (if-let [r-ns0 (get-in s [:components repl-k :*ns*])]
+                               (symbol (str r-ns0)))
               r-ns1 (if current-ns-sym (find-ns current-ns-sym) r-ns)
+              r-ns1 (if (nil? r-ns1) (do (println "Warning: can't find repl :*ns* for:" current-ns-sym " will use default") r-ns) r-ns1)
               y (binding [*ns* r-ns1 *this-k* repl-k *world* s]
-                  (let [out (if full-state-run? ((eval code-or-e) s) (eval code-or-e))] (reset! tmp-namespace-atom *ns*) out))]
+                  (let [out (if full-state-run? ((eval code-or-e) s) (eval code-or-e))] (reset! tmp-namespace-atom (symbol (str *ns*))) out))]
           {:type :success :value y :full-state-run? full-state-run?})
         (catch Exception e
                 (if (wrapped-auto-require! e) (get-repl-result s repl-k txt tmp-namespace-atom)
@@ -343,7 +345,7 @@
       (if (:full-state-run? result) (:value result) ;The repl code was a fn that ran on s and returned a modified s.
         (let [repl (get-in s [:components repl-k])
               repl1 (-> (assoc repl :result result :view-path []) (show-result)
-                      (assoc :*ns* (textparse/sym2ns @new-ns-at))
+                      (assoc :*ns* @new-ns-at)
                       (update :num-run-times inc)
                       (update :cmd-history #(conj % txt)))]
           (assoc-in s [:components repl-k] (codebox/update-precompute repl1))))))

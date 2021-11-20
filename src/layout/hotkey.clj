@@ -108,7 +108,7 @@
 
 (defn show-error+ [s]
   "Shows the last thing that went into error+"
-  (let [code `(logger/get-error+) boxk ::hotkey-repl]
+  (let [code `(mt/get-error+) boxk ::hotkey-repl]
     (orepl/add-repl s boxk code 0 true)))
 
 (defn toggle-fullscreen! [s]

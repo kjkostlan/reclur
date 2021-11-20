@@ -6,7 +6,7 @@
 ; Thus we use agents, not atoms.
 (defonce app-agent (agent {}))
 
-; Stores information about the mouse, time, etc.
+; Stores information about the mouse, time, etc, as well as some JVM information.
 ; This singleton is mutated by actions in the physical world.
 (defonce external-state-atom (atom {}))
 

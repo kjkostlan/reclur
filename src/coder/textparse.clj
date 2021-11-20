@@ -224,11 +224,17 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Parsing symbols as strings ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn qual [ns-sym code-sym]
-  "If it already is quald it will double-qual"
-  (symbol (str ns-sym "/" code-sym)))
+(defn remove-jdots [sym]
+  "Removes the leading and trailing dots of qual-sym, which can happen in dot special java objects"
+  (let [txt (str sym)
+        txt1 (if (= (str (first txt)) ".") (subs txt 1) txt)]
+    (if (= (str (last txt1)) ".") (subs txt1 0 (dec (count txt1))) txt1)))
 
-(defn qual? [sym] (or (= sym 'clojure.core//) (> (count (string/split (str sym) #"/")) 1)))
+(defn qual [ns-sym code-sym & is-java?]
+  "If it already is quald it will double-qual. This one-line fn is so simple it is hard to justify using it."
+  (symbol (str ns-sym (if (first is-java?) "." "/") code-sym)))
+
+(defn qual? [sym] (or (= (symbol sym) 'clojure.core//) (> (count (string/split (str sym) #"[\/\.]")) 1)))
 
 (defn unqual [sym-qual]
   "The part after the /"
@@ -244,5 +250,5 @@
 (defn sym2ns [qual-sym]
   "Returns the namespace/class (as a symbol) from a qualified symbol"
   (cond (or (= qual-sym '/) (= qual-sym "/")) 'clojure.core
-    (.contains ^String (str qual-sym) "/")
-    (symbol (first (string/split (str qual-sym) #"\/")))))
+    (or (string/includes? (str qual-sym) "/") (string/includes? (str qual-sym) "."))
+    (symbol (apply str (interpose "." (butlast (string/split (str qual-sym) #"[\/\.]"))))) :else nil))

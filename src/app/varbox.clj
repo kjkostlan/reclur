@@ -138,6 +138,6 @@
   "When a box is closed, these changes which are temporary debugs are reverted"
   ; app/multisync when closed?
   (let [code0 (:source box)]
-    (try (eval-box box code0)
+    (try (do (eval-box box code0) (println "Reverted: " (:sym-qual box)))
       (catch Exception e
         (println "Cannot revert var" (:sym-qual box) "original var has error in it."))) box))

@@ -59,7 +59,7 @@
                (let [st (if (first hide-stack?) [] (:StackTrace e-clj))]
                  (interpose "\n" st)))
         lines (string/split msg1 #"\n")
-        evals (get @globals/external-state-atom ::evals)
+        evals (get @globals/external-state-atom :var-evals)
         replace-eval (fn [line]
                        (let [matches (mapv #(subs % 1 (dec (count %))) (re-seq #"\/[a-zA-Z0-9]+\/" line))
                              ky (first (filter #(contains? evals %) matches))]
@@ -367,17 +367,6 @@
     (catch Exception e
       (println "Compare to vanilla error [code shown unqualed above]: "
         (pr-error e)))))
-
-;;;;;;;;;;;; Mutation ;;;;;;;;;;;;
-
-(defn mark-autogen-var! [sym-qual fn-obj]
-  "Eval and nice error messages don't mix."
-  (let [txt (str fn-obj)
-        piece (re-find #"\$[a-zA-Z0-9]+\$" txt)
-        _ (if (< (count piece) 4) (throw (Exception. "Fn does not seem to be an autogen")))
-        piece (subs piece 1 (dec (count piece)))]
-    (swap! globals/external-state-atom
-      #(assoc-in % [::evals piece] sym-qual))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Testing ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

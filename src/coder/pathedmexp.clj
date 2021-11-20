@@ -32,15 +32,17 @@
 ;;;;;;;;;;;;;;;;;;;;;;; Core macro functions ;;;;;;;;;;;;;;;;;;;;;;
 
 (defn exclude-f? [x]
-  (or (contains? mexpand-these (textparse/unqual x))
-      (contains? #{'if '. '.. 'def 'quote 'var 'recur 'throw 'try 'monitor-enter 'monitor-exit '& '&env '&form} x)
-      (contains? #{:as :tag :or :pre :post} x))) ; special meaning macro kwds.
+  (and (symbol? x)
+    (or (contains? mexpand-these (textparse/unqual x))
+        (contains? #{'if '. '.. 'def 'quote 'var 'recur 'throw 'try 'monitor-enter 'monitor-exit '& '&env '&form} x)
+        (contains? #{:as :tag :or :pre :post} x)))) ; special meaning macro kwds.
 
 (defn pmexpand [code]
   "Macroexpands core constructs when helpful to do so. See 'dont-bother to see what isn't deemed helpful."
   (cond (map? code) (zipmap (keys code) (mapv pmexpand (vals code)))
     (vector? code) (mapv pmexpand code)
     (set? code) (set (mapv pmexpand code))
+    (and (coll? code) (not (symbol? (first code)))) code
     (coll? code) (let [code1 (apply list (mapv pmexpand code))
                        symu (textparse/unqual (first code))]
                    (if (contains? mexpand-these symu)
