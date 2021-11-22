@@ -36,7 +36,7 @@
   "Inserted (1), unchanged (0) and deleted (-1) regions on the rendered string. Uses stringdiff.
    Deleted regions cover the two characters before and after the edit."
   (let [edits-render (get-vis-edits-ascending box)
-        
+
         blanck (into [] (repeat (count (rtext/rendered-string box)) 0))
         slice-to (fn [x ix0 ix1 v] (reduce #(assoc %1 %2 v) x (range (max 0 ix0) (min (count x) ix1)))); Belongs in np?
         inserts (reduce (fn [statuss edit] (slice-to statuss (:ix0 edit) (+ (:ix0 edit) (count (:value edit))) 1))
@@ -76,14 +76,18 @@
       :type :varbox
       :colorize-fn (fn [& args] (apply colorize args))) (interact-fns))))
 
+(defn update-varbox [box]
+  "If the var changes, the box should change also."
+  (let [sym-qual (:sym-qual box)
+        src (langs/var-source sym-qual)
+        txt (binding [*print-meta* true] (blit/vps src))]
+    (assoc box :source src :source-txt txt)))
+
 (defn load-var [sym-qual]
   "Creates a new box set to the value of the var."
-  (let [box (new-varbox) sym-qual (symbol sym-qual)
-        box (assoc box :sym-qual sym-qual)
-        src (langs/var-source sym-qual)
-        txt (binding [*print-meta* true] (blit/vps src))
-        box (assoc box :source src :source-txt txt :pieces [{:text txt}])]
-    box))
+  (let [box (new-varbox)
+        box (update-varbox (assoc box :sym-qual (symbol sym-qual)))]
+    (assoc box :pieces [{:text (:source-txt box)}])))
 
 (defn key-press [kevt box]
   (let [c-back? (and (ka/backspace? kevt) (ka/c? kevt))]
@@ -120,17 +124,22 @@
     (if (not ns-obj) (throw (Exception. (str "Can't find namespace to modify code in: " ns-sym)))) ns-obj))
 
 (defn eval-box [box code] "What the code inside the box evals to."
-  (let [ns-obj (get-ns-obj box)]
-    (binding [*ns* ns-obj] (eval code))))
+  (let [ns-obj (get-ns-obj box)
+        sym-qual (:sym-qual box)
+        var-ob (resolve sym-qual) meta0 (meta var-ob)]
+    (binding [*ns* ns-obj]
+      (let [out (eval code)] (reset-meta! var-ob meta0) out))))
 
-(defn save-to-var! [box]
+(defn save-to-var! [box & quiet]
   "Saves what is in the box to the var, but does not modify the :source.
-   Prints an exception if the var cannot be evaled."
+   Prints an exception if the var cannot be evaled.
+   Note: this is called by langs/eval-intern+"
   (let [sym-qual (:sym-qual box)
         code (try (read-string (codebox/real-string box))
                (catch Exception e (println "Syntax err save-var" sym-qual (.getMessage e))))]
     (if (not (nil? code))
-      (try (do (eval-box box code) (println "Var-tmp-save:" sym-qual))
+      (try (do (eval-box box code)
+             (if (not (first quiet)) (println "Var-tmp-save:" sym-qual)))
         (catch Exception e (println "Compile error for" (str sym-qual ":\n ")
                              (compile-err-report e)))))))
 
@@ -141,3 +150,13 @@
     (try (do (eval-box box code0) (println "Reverted: " (:sym-qual box)))
       (catch Exception e
         (println "Cannot revert var" (:sym-qual box) "original var has error in it."))) box))
+
+(defn update-and-impose! [s & quiet]
+  "Updates all the var boxes in s, and imposes the value of each varbox into s."
+  (mapv #(if (= (:type %) :varbox) (save-to-var! % (first quiet)))
+    (vals (:components s)))
+  (let [boxes (:components s)
+        boxes1 (reduce #(let [box (get %1 %2)]
+                          (if (= (:type box) :varbox) (update %1 %2 update-varbox) %1))
+                 boxes (keys boxes))]
+    (assoc s :components boxes1)))

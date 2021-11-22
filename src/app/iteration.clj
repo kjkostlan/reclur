@@ -107,7 +107,6 @@
         missing-files (:missing-files fs)
         renamed-map (:renamed-map fs)
         copied-map (:copied-map fs)
-        deleted-files (:deleted-files fs)]
-    (mapv #(if (= (:type %) :varbox) (varbox/save-to-var! %))
-      (vals (:components s))) ; Not the disk but same idea.
-    (_save-core!! s (apply hash-set (keys new2?old)) open2text new-files changed-files deleted-files missing-files renamed-map copied-map)))
+        deleted-files (:deleted-files fs)
+        s1 (_save-core!! s (apply hash-set (keys new2?old)) open2text new-files changed-files deleted-files missing-files renamed-map copied-map)]
+    (varbox/update-and-impose! s1)))

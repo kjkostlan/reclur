@@ -116,7 +116,7 @@
 
         leaf-txts (mapv (fn [box]
                           (let [tl (get box :path "")
-                                tl (if (string? tl) tl (last tl))]
+                                tl (if (string? tl) tl (str (last tl)))]
                             (last (string/split tl #"/")))) box-vector)
 
         strings (mapv #(vector :drawString [(str %1) (+ %2 5) (- y0 5)] {:Color [0 0 0 1] :FontSize 12})

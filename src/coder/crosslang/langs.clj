@@ -215,8 +215,8 @@
           var-obj (get sym2var (textparse/unqual qual-sym))
           out (meta var-obj) out (assoc out :ns ns-sym)
           out (if (and source? (not (:source out)))
-              (let [src (get-code-clojure (:file out) (:line out) (:column out) false)]
-                (if src (assoc out :source src) out)) out)
+                (let [src (get-code-clojure (:file out) (:line out) (:column out) false)]
+                  (if src (assoc out :source src) out)) out)
           out (if source? out (dissoc out :source))] out) ; dissoc :source for consistancy.
     (if-let [jsrc (get-in @globals/external-state-atom [::java-sources (textparse/remove-jdots qual-sym)])] ; For dynamic source generation.
       {:source jsrc})))
@@ -290,7 +290,10 @@
                               (swap! globals/external-state-atom
                                 #(assoc-in % [:var-evals piece] sym-qual))))
 
-        ns-obj (if-let [ns1 (find-ns ns-sym)] ns1 (create-ns ns-sym))]
+        ns-obj (if-let [ns1 (find-ns ns-sym)] ns1 (create-ns ns-sym))
+        ; 99% of circular dependencies are just a matter of refactor. This feels like the 1%, so we are keeping it.
+        hard-to-break-circle-depend (resolve 'app.varbox/update-and-impose!)]
+  (#(do (hard-to-break-circle-depend (:app-state @globals/app-agent) true) %) ; Does the agent without a future await cause a race condition?
     (cond (contains? #{'def 'def* 'defn 'definline `defn `definline} c0) ; standard vars.
       (let [code-ex1 (try (macroexpand-1 code) ; Extra error message.
                        (catch Exception e
@@ -323,7 +326,7 @@
         (if (or (not err?) make-dummy-var-if-cant-compile?)
           (swap! globals/external-state-atom #(assoc-in % [::java-sources sym-qual] code))) ; Ignore make-dummy-var-if-cant-compile?
         (if err? (mt/error "eval-jcode-error: \n" (.getCause contents) "\n Inspect:" sym-qual)) contents)
-      :else (mt/error "Code not a def(n), definterface, or deftype"))))
+      :else (mt/error "Code not a def(n), definterface, or deftype")))))
 
 ;;;;;;;;;;;;;;;;;;;;;; Functions that need to know which language to use ;;;;;;;;;;;;;;;;;
 
