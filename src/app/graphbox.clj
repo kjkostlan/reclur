@@ -69,14 +69,12 @@
 
 (defn try-to-toggle-graph-box [s]
   (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
-    (if (or (= (:type fc) :codebox) (= (:type fc) :orepl))
-      (if-let [gb (add-graph-box s fc)]
-        (if (get-in s [:components ::graphbox])
-          (update s :components
-            #(dissoc % ::graphbox))
-          (assoc-in s [:components ::graphbox] gb))
-        (do (println "A nonlocal symbol needs to be aimed at.") s))
-      (do (println "A codebox or orepl needs to be selected.") s))
+    (if-let [gb (add-graph-box s fc)]
+      (if (get-in s [:components ::graphbox])
+        (update s :components
+          #(dissoc % ::graphbox))
+        (assoc-in s [:components ::graphbox] gb))
+      (do (println "A nonlocal symbol needs to be aimed at.") s))
     (do (println "No components selected.") s)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;

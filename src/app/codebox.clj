@@ -454,7 +454,7 @@
    Tries to return a valid result even if the code is broken (TODO: it will try to qualify local symbols)."
   (let [ns-sym (generic-ns-sym box)
         txt (real-string box) ix (cursor-to-real-string box)
-        thingy (langs/x-at-stringlang txt ix (:langkwd box))]
+        thingy (langs/x-at-stringlang txt ix (get box :langkwd :clojure))]
     (if (symbol? thingy) (if-let [xq (langs/resolved ns-sym thingy)] xq thingy) thingy)))
 
 ;;;;;;;;;;;;;;;;;;;;; other child UI functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

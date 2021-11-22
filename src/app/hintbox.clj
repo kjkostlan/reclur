@@ -123,15 +123,13 @@
 (defn try-to-toggle-hint-box [s]
   "If it can't add a hintbox and none exists it returns the unmodified s."
   (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
-    (if (or (= (:type fc) :codebox) (= (:type fc) :orepl))
-      (if-let [hb (codebox-hint s fc)]
-        (if (let [hb0 (get-in s [:components ::hintbox])]
-              (and hb0 (= (mapv int (:position hb0)) (mapv int (:position hb)))))
-          (update s :components
-            #(dissoc % ::hintbox))
-          (assoc-in s [:components ::hintbox] hb))
-          (do (println "No hint found at location") s))
-        (do (println "A codebox or orepl needs to be selected.") s))
+    (if-let [hb (codebox-hint s fc)]
+      (if (let [hb0 (get-in s [:components ::hintbox])]
+            (and hb0 (= (mapv int (:position hb0)) (mapv int (:position hb)))))
+        (update s :components
+          #(dissoc % ::hintbox))
+        (assoc-in s [:components ::hintbox] hb))
+      (do (println "No hint found at location") s))
     (do (println "No components selected.") s)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Interaction functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;
