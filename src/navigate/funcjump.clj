@@ -68,43 +68,39 @@
   "Tries to go to all places one level above (all places = opens multiple codeboxes).
    Returns unmodified s if it can't do so."
   (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
-     (if (contains? #{:codebox :orepl :graphbox} (:type fc))
-       (let [x (codebox/x-qual-at-cursor fc)]
-         (if (and (symbol? x) (string/includes? (str x) "/"))
-           (let [lys (:gotos (:layout s))
-                 syms-qual (if (not log?) (cbase/uses-of x))
-                 goto-me-log (if log? (try (log-up-trace-fixs x) (catch Exception e (println "Logged-based traceback not working."))))
-                 f01s (cond (and shallow? (not log?))
-                        (mapv cbase/defpath-fstr-ixs syms-qual)
-                        (not log?)
-                        (apply c/vcat
-                          (mapv (fn [sq] (let [source (:source (langs/var-info sq true))
-                                               ns-sym (textparse/sym2ns sq)
-                                               source-qual (sunshine/deshadow-qual ns-sym source)
-                                               subdefpaths (t/find-values-in source-qual x false)]
-                                           (mapv #(cbase/subdefpath-fstr-ixs sq %) subdefpaths)))
-                            syms-qual))
-                        (not goto-me-log) [] ; log goto fail.
-                        (not shallow?) [(subvec goto-me-log 0 3)]
-                        :else (let [dest-sym-qual (last (goto-me-log))]
-                                (cbase/defpath-fstr-ixs dest-sym-qual)))
-                 fnames (mapv first f01s) ix0s (mapv second f01s) ix1s (mapv last f01s)]
-             (if (> (count fnames) 0) (lys s fnames ix0s ix1s)
-               (do (if (not log?) (println "No uses of this symbol found.")) s)))
-            (do (println "A non-local symbol needs to be aimed at.") s)))
-        (do (println "A codebox, repl, or graphbox needs to be selected.") s))
+     (let [x (codebox/x-qual-at-cursor fc)]
+       (if (and (symbol? x) (string/includes? (str x) "/"))
+         (let [lys (:gotos (:layout s))
+               syms-qual (if (not log?) (cbase/uses-of x))
+               goto-me-log (if log? (try (log-up-trace-fixs x) (catch Exception e (println "Logged-based traceback not working."))))
+               f01s (cond (and shallow? (not log?))
+                      (mapv cbase/defpath-fstr-ixs syms-qual)
+                      (not log?)
+                      (apply c/vcat
+                        (mapv (fn [sq] (let [source (:source (langs/var-info sq true))
+                                             ns-sym (textparse/sym2ns sq)
+                                             source-qual (sunshine/deshadow-qual ns-sym source)
+                                             subdefpaths (t/find-values-in source-qual x false)]
+                                         (mapv #(cbase/subdefpath-fstr-ixs sq %) subdefpaths)))
+                          syms-qual))
+                      (not goto-me-log) [] ; log goto fail.
+                      (not shallow?) [(subvec goto-me-log 0 3)]
+                      :else (let [dest-sym-qual (last (goto-me-log))]
+                              (cbase/defpath-fstr-ixs dest-sym-qual)))
+               fnames (mapv first f01s) ix0s (mapv second f01s) ix1s (mapv last f01s)]
+           (if (> (count fnames) 0) (lys s fnames ix0s ix1s)
+             (do (if (not log?) (println "No uses of this symbol found.")) s)))
+         (do (println "A non-local symbol needs to be aimed at.") s)))
     (do (println "No components selected.") s)))
 
 (defn try-to-go-into [s]
   "Tries to go into the symbol that is currently bieng spotlighted by whatever is selected in the state s.
    Returns unmodified s if it can't do so."
   (if-let [fc (get (:components s) (first (:selected-comp-keys s)))]
-     (if (contains? #{:codebox :orepl :graphbox} (:type fc))
-       (let [x (codebox/x-qual-at-cursor fc)]
-         (if (and (symbol? x) (string/includes? (str x) "/"))
-           (let [f01 (cbase/defpath-fstr-ixs x) ly (:goto (:layout s))
-                 fname (first f01) ix0 (second f01) ix1 (last f01)]
-             (ly s fname ix0 ix1))
-           (do (println "A nonlocal symbol needs to be aimed at.") s)))
-       (do (println "A codebox, repl, or graphbox needs to be selected.") s))
+     (let [x (codebox/x-qual-at-cursor fc)]
+       (if (and (symbol? x) (string/includes? (str x) "/"))
+         (let [f01 (cbase/defpath-fstr-ixs x) ly (:goto (:layout s))
+               fname (first f01) ix0 (second f01) ix1 (last f01)]
+           (ly s fname ix0 ix1))
+         (do (println "A nonlocal symbol needs to be aimed at.") s)))
     (do (println "No components selected.") s)))
