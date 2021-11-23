@@ -161,7 +161,9 @@
    "C-a" (fn [s] (selectmovesize/update-selection-box
                    (assoc s :selected-comp-keys (set (selectmovesize/onscreen-kys s)))))
    "tab" (fn [s] (tab-toggle s 1))
-   "S-tab" (fn [s] (tab-toggle s -1))})
+   "S-tab" (fn [s] (tab-toggle s -1))
+   "S-ret" (fn [s] (println "Running all repls")
+             (reduce orepl/run-repl s (filterv #(= (get-in s [:components % :type]) :orepl) (keys (:components s)))))})
 
 (defn hotkeys-both-modes [] ; fn [s] => s, where s is the state.
   "Active when both typing and non-typing mode is at play."

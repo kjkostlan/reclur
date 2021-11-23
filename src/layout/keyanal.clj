@@ -60,7 +60,7 @@
       (and (enter? kevt) (= txtl "ret"))
       (and (escape? kevt) (= txtl "esc"))
       (and (tab? kevt) (= txtl "tab"))
-      (and (space? kevt) (= txtl "spv"))
+      (and (space? kevt) (= txtl "spc"))
       (and (tilda? kevt) (or (= txtl "`") (= txtl "~")))
       (and (backspace? kevt) (= txtl "bsp")))))
 
