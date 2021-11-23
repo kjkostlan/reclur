@@ -309,13 +309,13 @@
                      (let [contents (fn [& args] (mt/error sym-qual " compilation failed so it cannot be used."))
                            sym-unqual-no-meta (symbol (str sym-unqual))] ; Obscure bug with :arglists
                        (intern ns-obj sym-unqual-no-meta contents)) :else nil)]
+        (if (or (not err?) make-dummy-var-if-cant-compile?)
+          (alter-meta! var-ob #(assoc % :source code)))
         (if err?
           (let [err-str (str "eval-code-error: \n" (.getCause var-ob-or-err))]
             (if make-dummy-var-if-cant-compile?
               (mt/error err-str (str "\n Inspect: " sym-qual))
               (mt/error+ err-str))))
-        (if (or (not err?) make-dummy-var-if-cant-compile?)
-          (alter-meta! var-ob #(assoc % :source code)))
         var-ob)
       (contains? #{'deftype 'definterface `deftype `definterface} c0) ; Java vars
       (let [contents (binding [*ns* ns-obj *warn-on-reflection* true]
