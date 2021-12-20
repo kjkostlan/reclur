@@ -103,8 +103,11 @@
    Edits to the var-box will have temporary effects that disappear once it is closed."
   (let [sel-k (first (:selected-comp-keys s)) box (get (:components s) sel-k)
         sel-sym (codebox/hint-sym-qual box false false)]
-    (if sel-sym ((:add-component (:layout s)) s
-                  (varbox/load-var sel-sym) (gensym 'varbox)))))
+    (if sel-sym
+      (let [add-f (:add-component (:layout s))
+            boxk (gensym 'varbox)
+            boxv (varbox/load-var sel-sym)]
+        (add-f s boxv boxk)) s)))
 
 (defn show-error+ [s]
   "Shows the last thing that went into error+"
