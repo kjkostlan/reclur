@@ -177,7 +177,8 @@
 ;;;;;;;; Clojure-aware, vector of paths return ;;;;;;
 
 (defn fnargpack-paths [defn-code]
-  "Paths to the argpacks in code. Returns a vector with only one element for single arity functions."
+  "Paths to each of the [arg1 arg2 arg3]'s in code.
+   Returns a vector with only one element for single arity functions."
   (if (contains? #{'def 'def*} (first defn-code))
     (let [ix (dec (count defn-code))]
       (mapv #(c/vcat [ix] %) (fnargpack-paths (last defn-code))))

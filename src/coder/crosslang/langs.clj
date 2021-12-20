@@ -144,7 +144,9 @@
       (let [ns-ob (find-ns ns-sym)
             _ (if (not ns-ob) (mt/error "Namespace: " (pr-str ns-sym) " not found; the clj file must first be compiled at least once."))
             var-ob (ns-resolve ns-ob (symbol (str code-sym)))]
-        (if var-ob (symbol (subs (str var-ob) 2))))
+        (if var-ob (symbol (subs (str var-ob) 2))
+          (if (get-in @globals/external-state-atom [::java-sources (textparse/remove-jdots code-sym)])
+            (textparse/remove-jdots code-sym))))
       (= langkwd :human) (symbol (str :human (textparse/rm-lang code-sym)))
       :else (errlang "resolved" langkwd))))
 
@@ -199,6 +201,11 @@
       (boolean (find-ns ns-sym))
       (= langkwd :human) true
       :else (errlang "findable-ns?" langkwd))))
+
+(defn evaled-java-sources []
+  "Java variables made with eval-intern+ are stored in the external state.
+   In contrast to evaled clj vars that allow us to store the :source in the meta, or source clj vars with a .clj file."
+  (::java-sources @globals/external-state-atom))
 
 (defn var-info [qual-sym source?]
   "Gets information about a var in the form of clojure datastructures.
@@ -321,7 +328,7 @@
       (let [contents (binding [*ns* ns-obj *warn-on-reflection* true]
                        (try (eval code)
                          (catch Exception e e)))
-            sym-qual (symbol (str ns-sym "." (second code)))
+            sym-qual (textparse/remove-jdots (symbol (str ns-sym "." (second code)))) ; extra call to remove-jdots just in case.
             err? (instance? Exception contents)]
         (if (or (not err?) make-dummy-var-if-cant-compile?)
           (swap! globals/external-state-atom #(assoc-in % [::java-sources sym-qual] code))) ; Ignore make-dummy-var-if-cant-compile?

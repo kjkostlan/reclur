@@ -148,7 +148,8 @@
                               (loop [jx (inc ix)]
                                 (if (= jx n) (dec jx)
                                   (let [l1 (nth lev jx)]
-                                    (if (<= l1 l) (dec jx) (recur (inc jx)))))))]
+                                    (if (<= l1 l) (dec jx) (recur (inc jx)))))))
+                  map-close (if map-close (max (inc ix) map-close))] ; anti out-of-bounds.
               (if map-open?
                 (recur (apply conj acc false
                          (_map-key-core (subs contents (inc ix) map-close)
