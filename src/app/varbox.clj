@@ -149,7 +149,7 @@
   (let [code0 (:source box)]
     (try (do (eval-box box code0) (println "Reverted: " (:sym-qual box)))
       (catch Exception e
-        (println "Cannot revert var" (:sym-qual box) "original var has error in it."))) box))
+        (println "Cannot compile reverted var" (:sym-qual box) "original var has error in it."))) box))
 
 (defn update-and-impose! [s & quiet]
   "Updates all the var boxes in s, and imposes the value of each varbox into s."
