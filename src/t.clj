@@ -1,6 +1,6 @@
 ; T = Trees. Functions specalized to work with trees, i.e. those that go multiple levels.
 
-(ns t (:require [c]))
+(ns t (:require [c] [clojure.walk :as walk]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Support functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -140,6 +140,15 @@
 (defn dpwalk [f x max-depth] "Depth-limited pathwalk that applies (f path subform).
                               Max-depth zero means just applying f to [] the entire collection."
   (_dpwalk f [] x max-depth))
+
+(defn reduce-walk [f test val x]
+  "Like reduce but applies (f acc xi) when (test xi) for all paths in x.
+   TODO: replace atom+walk usages in code with this fn."
+  (let [tmp (atom val)
+        test (if (fn? test) test (fn [_] true))]
+    (walk/postwalk (fn [xi] (if (test xi)
+                              (swap! tmp #(f % xi)))
+                     xi) x) @tmp))
 
 ;;;;;;;;;;;;;;;; Reshuffling array structure functions ;;;;;;;;;;;;;;;;
 
