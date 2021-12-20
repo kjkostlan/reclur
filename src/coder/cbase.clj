@@ -117,8 +117,8 @@
 (defn symaverse []
   "All qualified syms in loaded namespaces builtin and user. About 8 times faster than (set (keys (varaverse)))"
   (let [nms (into [] (langs/get-all-loaded-ns))]
-    (set (apply concat (mapv (fn [ns-sym]
-                               (mapv #(textparse/qual ns-sym %) (keys (ns-interns (find-ns ns-sym))))) nms)))))
+    (set (apply concat (mapv textparse/remove-jdots (keys (langs/evaled-java-sources)))
+           (mapv (fn [ns-sym] (mapv #(textparse/qual ns-sym %) (keys (ns-interns (find-ns ns-sym))))) nms)))))
 
 (defn nonlocal-syms [code ns-sym]
   "Set of external symbols, i.e. symbols that point outside of the code, all qualified."

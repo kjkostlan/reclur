@@ -228,7 +228,7 @@
   "Removes the leading and trailing dots of qual-sym, which can happen in dot special java objects"
   (let [txt (str sym)
         txt1 (if (= (str (first txt)) ".") (subs txt 1) txt)]
-    (if (= (str (last txt1)) ".") (subs txt1 0 (dec (count txt1))) txt1)))
+    (symbol (if (= (str (last txt1)) ".") (subs txt1 0 (dec (count txt1))) txt1))))
 
 (defn qual [ns-sym code-sym & is-java?]
   "If it already is quald it will double-qual. This one-line fn is so simple it is hard to justify using it."
