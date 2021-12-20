@@ -258,7 +258,7 @@
                         all? (first all-logs)]
                     (if all? (logger/all-logs-of sym-qual logpath)
                       (:value (logger/last-log-of sym-qual logpath)))))
-        log-val (if log-val log-val "<No logs in cursor-clicked places yet>")
+        log-val (if log-val log-val "<No or falsey-valued logs in cursor-clicked places yet>")
         result {:type :success :value log-val :full-state-run? false}]
     (remove-closed-repl-logpaths! s)
     (update-in s [:components repl-k] #(show-result (assoc (update % :num-run-times inc) :result result)))))
@@ -340,7 +340,8 @@
     (let [txt (rtext/rendered-string (get-in s [:components repl-k]))
           new-ns-at (atom r-ns)
           result (get-repl-result s repl-k txt new-ns-at)]
-      (if (string/includes? txt "*print-meta*")
+      (if (and (string/includes? txt "*print-meta*")
+            (string/includes? txt "set!"))
         (print "*print-meta* does not work from the repl, use mt/m-unpack instead."))
       (if (:full-state-run? result) (:value result) ;The repl code was a fn that ran on s and returned a modified s.
         (let [repl (get-in s [:components repl-k])
