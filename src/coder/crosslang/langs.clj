@@ -228,9 +228,14 @@
     (if-let [jsrc (get-in @globals/external-state-atom [::java-sources (textparse/remove-jdots qual-sym)])] ; For dynamic source generation.
       {:source jsrc})))
 
-(defn var-source [qual-sym]
-  "Source-code of qual-sym, no macro expansion or symbol qualification."
-  (:source (var-info qual-sym true)))
+(defn var-source [qual-sym & make-deterministic]
+  "Source-code of qual-sym, no macro expansion or symbol qualification.
+   Option to make the code deterministic, for clojures gensym readers."
+  (let [src (:source (var-info qual-sym true))]
+    (if make-deterministic
+      (let [langkwd (ns2langkwd (textparse/sym2ns qual-sym))]
+        (cond (= langkwd :clojure) (clojure/clean-sym-block src)
+          :else (errlang "var-source" langkwd))) src)))
 
 (defn defs [ns-sym]
   "Not qualified."
@@ -331,7 +336,7 @@
             sym-qual (textparse/remove-jdots (symbol (str ns-sym "." (second code)))) ; extra call to remove-jdots just in case.
             err? (instance? Exception contents)]
         (if (or (not err?) make-dummy-var-if-cant-compile?)
-          (swap! globals/external-state-atom #(assoc-in % [::java-sources sym-qual] code))) ; Ignore make-dummy-var-if-cant-compile?
+          (swap! globals/external-state-atom #(assoc-in % [::java-sources sym-qual] code)))
         (if err? (mt/error "eval-jcode-error: \n" (.getCause contents) "\n Inspect:" sym-qual)) contents)
       :else (mt/error "Code not a def(n), definterface, or deftype")))))
 

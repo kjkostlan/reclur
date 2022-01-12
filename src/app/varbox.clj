@@ -79,7 +79,7 @@
 (defn update-varbox [box]
   "If the var changes, the box should change also."
   (let [sym-qual (:sym-qual box)
-        src (langs/var-source sym-qual)
+        src (langs/var-source sym-qual true)
         txt (binding [*print-meta* true] (blit/vps src))]
     (assoc box :source src :source-txt txt)))
 

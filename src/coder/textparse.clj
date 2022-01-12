@@ -238,8 +238,9 @@
 
 (defn unqual [sym-qual]
   "The part after the /"
-  (cond (not (qual? sym-qual)) sym-qual (= sym-qual 'clojure.core//) '/
-   :else (symbol (last (string/split (str sym-qual) #"\/")))))
+  (symbol
+    (cond (not (qual? sym-qual)) sym-qual (= (symbol sym-qual) 'clojure.core//) '/
+     :else (last (string/split (str sym-qual) #"[\/\.]")))))
 
 (defn rm-lang [sym]
   "Removes the ! part at the start of sym (which can be a qualed or unqualled sym), if any is present."

@@ -2,7 +2,8 @@
 ; In general finite-state parsers are fast and simple for parsing languages at a rough syntax level.
 
 (ns coder.crosslang.langparsers.clojure
-  (:require [coder.javar :as javar]))
+  (:require [coder.javar :as javar] [mt]
+    [clojure.string :as string]))
 
 #_(defn vstr [x] "Collection tokens may have a string or a vector in thier head."
   (if (vector? x) (apply str x) x))
@@ -161,3 +162,62 @@
   "Vector that is true for map keys, used for repl hilighting but not much else.
    False when not in a map."
   (_map-key-core txt tok-val-each-char inter-levels false))
+
+(defn clean-sym [sym]
+  "Unique to clojure, the reader macro makes the code's value non-deterministic and read-string thus impure.
+   Lets fix this!
+   Remove all gensym numbers with clean:
+   p1__12345# => %1
+   foo12345 => foo
+   foo__12345__auto__ => foo
+   Later we can make a block of code deshadowed by adding numbers starting at 1,2,3,...."
+  (let [s (str sym) s0 (first s) s1 (second s) s2 (get s 2) n (count s)
+        num? #(string/includes? "0123456789" (str %))
+        sclean (cond (re-find #"p\d+__\d+" s) ; inline fns.
+                 (if (num? s2) (str "%" s1 s2) (str "%" s1))
+                 (and (> n 4) (num? (get s (dec n))) (num? (get s (- n 2))) (num? (get s (- n 3))) (num? (get s (- n 4)))) ; gensyms.
+                 (subs s 0 (loop [ix (dec n)] (if (and (> ix -1) (num? (get s ix))) (recur (dec ix)) (inc ix))))
+                 (string/includes? s "__auto__") ; Hygenic macros.
+                 (string/replace s #"__\d+__auto__" "")
+                 :else (str sym))]
+    (with-meta (symbol sclean) (meta sym))))
+
+(defn clean-sym-block [x]
+  "Cleans all symbols in x, but in a way that appends numbers to (determinstically) avoid shadowing.
+   In rare cases, non-generated symbols may also be 'cleaned' but this will not create shadows."
+  (let [trail-num-str (fn [x]
+                        (if (string/includes? "0123456789" (str (last (str x))))
+                          (last (re-seq #"\d+" (str x))) ""))
+        trail-num #(let [trail-ns (trail-num-str %)]
+                     (if (> (count trail-ns) 0) (Integer/parseInt trail-ns) -1)) ; -1 for no trailing number.
+        remove-trail-num #(with-meta (symbol (subs (str %) 0 (- (count (str %)) (count (trail-num-str %))))) (meta %))
+        syms (set (t/reduce-walk conj symbol? [] x))
+        sym2clean (zipmap syms (mapv clean-sym syms))
+
+        ; Function arity consistancy (without which the % could get confusing):
+        %gen-order (fn [sym] (if (re-find #"p\d+__\d+" (str sym))
+                               (let [num-str (last (re-seq #"\d+" (str sym)))]
+                                 (Integer/parseInt num-str)) false))
+        syms% (sort-by %gen-order (filterv %gen-order syms))
+        addons (c/vcat [""] (mapv str "abcdefghijklmnopqrstuvwxyz"))
+        %sym2clean (loop [acc {} ix 0 last-px 0 symsr (seq syms%)]
+                     (if (empty? symsr) acc
+                       (let [sym (first symsr)
+                             px (Integer/parseInt (first (re-seq #"\d+" (str sym))))
+                             increment? (<= px last-px)
+                             ix1 (if increment? (inc ix) ix)
+                             addon (get addons ix1 (str "0" ix1))
+                             sym-clean1 (with-meta (symbol (str (get sym2clean sym) addon)) (meta sym))]
+                         (recur (assoc acc sym sym-clean1)
+                           ix1 px (rest symsr)))))
+        sym2clean (merge sym2clean %sym2clean)
+
+        ; Handling collisions:
+        clean2sym1 (reduce (fn [acc sym]
+                             (let [sym-clean (get sym2clean sym)
+                                   syms-clean (conj (map #(with-meta (symbol (str sym-clean %)) (meta sym)) (range)) sym-clean)
+                                   sym-clean1 (first (remove #(contains? acc %) syms-clean))]
+                               (assoc acc sym-clean1 sym))) {} (sort syms))
+        sym2clean1 (zipmap (vals clean2sym1) (keys clean2sym1))
+        replace-f #(if (symbol? %) (with-meta (get sym2clean1 % %) (meta %)) %)] ; Extra careful with that metadata!
+    (mt/m-postwalk replace-f x)))

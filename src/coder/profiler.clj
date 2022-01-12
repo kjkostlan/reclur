@@ -190,7 +190,7 @@
         ns-sym (textparse/sym2ns sym-qual)
         log-syms (apply set/union (mapv set (cbase/deep-used-by sym-qual)))
         vanilla (try (the-fn runs) (catch Exception e (do (println "Vanilla is not working") (throw e))))]
-    (let [codes (mapv langs/var-source log-syms)
+    (let [codes (mapv #(langs/var-source % true) log-syms)
           path-maps (mapv unexpanded-pathmap codes)
           log-pathss (mapv #(into [] (set (vals %))) path-maps) ; Log the UNexpanded code.
 

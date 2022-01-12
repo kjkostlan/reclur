@@ -275,11 +275,11 @@
         maybe-pr (fn [& args] (if (not quiet?) (apply println args)))
         fail (if return-box? box false)]
     (if sym-ix
-      (let [sym-str (nth sel-strs sym-ix)
+      (let [sym-str (string/trim (nth sel-strs sym-ix)) sym-strj (string/replace sym-str "/" ".")
             strs (sort (mapv str (cbase/symaverse)))
             private? #(let [u (str (textparse/unqual (symbol %)))] (or (string/starts-with? u "-") (string/starts-with? u "_")))
             strs (concat (remove private? strs) (filter private? strs)) ; private later.
-            matches (filterv #(string/includes? % sym-str) strs)]
+            matches (filterv #(or (string/includes? % sym-str) (string/includes? % sym-strj)) strs)]
         (if (= (count matches) 0)
           (do (maybe-pr "No matching fully qualified symbols [in loaded namespaces] to" sym-str) fail)
           (do (if (> (count matches) 1) (maybe-pr "Multible matches to" sym-str ":" matches "taking fist one."))
