@@ -5,6 +5,7 @@
     [clojure.walk :as walk]
     [coder.cnav :as cnav]
     [coder.crosslang.langs :as langs]
+    [coder.crosslang.langparsers.clojure :as cljparse]
     [coder.textparse :as textparse]
     [c]))
 
@@ -131,22 +132,10 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;; Symbol substitution ;;;;;;;;;;;;;;;;;;;;
 
-(defn clean-sym [sym]
-  "Clojure's singleton nondeterministic symbol generation definitly makes macros easier, but no one says it is easy to read.
-   Symbols are guarenteed not to end in a number; this is so that
-   No two clean symbols can map to the same deshadow-sym'ed symbol."
-  (let [s (str sym) s0 (first s) s1 (second s) s2 (get s 2) n (count s)
-        num? #(string/includes? "0123456789" (str %))
-        sclean (cond (re-find #"p\d+__\d+" s) ; inline fns.
-              (if (num? s2) (str "%" s1 s2) (str "%" s1))
-              (and (> n 4) (num? (get s (dec n))) (num? (get s (- n 2))) (num? (get s (- n 3))) (num? (get s (- n 4)))) ; gensyms.
-              (subs s 0 (loop [ix (dec n)] (if (and (> ix -1) (num? (get s ix))) (recur (dec ix)) (inc ix))))
-              (string/includes? s "__auto__") ; Hygenic macros.
-              (string/replace s #"__\d+__auto__" "")
-              :else (str sym))
-        sclean (str sclean)
-        nc (count sclean)]
-    (symbol (if (num? (last sclean)) (str sclean "$") sclean))))
+(defn append-dollarsign-numend [sym]
+  "foo1 => foo1$, so no symbols end in numbers."
+  (if (string/includes? "0123456789" (str (last (str sym))))
+    (with-meta (symbol (str sym "$")) (meta sym)) sym))
 
 (defn deshadow-sym [sym n-uses]
   "Nice-looking removal of shadows."
@@ -160,7 +149,7 @@
   ; In other words, (deshadow-sym (clean x) n) must not equal core symbols over all possible x and n.
   ; To ensure this we need to extract the highest number.
   (let [syms (into [] (keys (ns-map 'clojure.core)))
-        syms-clean (mapv clean-sym syms)
+        syms-clean (mapv #(append-dollarsign-numend (cljparse/clean-sym %)) syms)
         counts (mapv (fn [sym] (Integer/parseInt (str "0" (string/replace sym #"\D" "")))) syms)]
     (reduce (fn [acc ix]
               (let [cl (nth syms-clean ix)
@@ -172,7 +161,9 @@
    Cleaning is applied after local-sym-modify-f?, not ideal but safer."
   (let [n (count tokens)
         qual-fn #(langs/resolved ns-sym %) ; Qualification for clojure or other namespaces.
-        clean-fn (if local-sym-modify-f? #(clean-sym (local-sym-modify-f? %)) #(clean-sym %))
+        clean-fn (if local-sym-modify-f? #(append-dollarsign-numend
+                                            (cljparse/clean-sym (local-sym-modify-f? %)))
+                   #(append-dollarsign-numend (cljparse/clean-sym %)))
         open-closes (set (mapv symbol ["(" ")" "{" "}" "[" "]" "#{" "}"]))
         pair (loop [ix 0 toks tokens clean2count core-clean2count bounds #{}] ; Add non-local symbols
                (if (= ix n) [clean2count toks]
@@ -221,7 +212,7 @@
         form-swap1 (unflat tokens1)]
     (let-swap form-swap1)))
 
-(defn simple-qual [ns-sym code & assert-deshadowed?]
+(defn simple-qual [ns-sym code]
   "Qualifies all non-local symbols in the code."
   (let [ns-sym (if (symbol? ns-sym) ns-sym (symbol (str ns-sym)))
         form-swap (let-swap code)
