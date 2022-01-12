@@ -176,27 +176,22 @@
 
 ;;;;;;;; Clojure-aware, vector of paths return ;;;;;;
 
-(defn fnargpack-paths [defn-code]
+(defn fnargpack-paths [code]
   "Paths to each of the [arg1 arg2 arg3]'s in code.
+   Flexible: Handles fn, defn, and def+fn and (fn [x]) and (fn ([x])) codes.
    Returns a vector with only one element for single arity functions."
-  (if (contains? #{'def 'def*} (first defn-code))
-    (let [ix (dec (count defn-code))]
-      (mapv #(c/vcat [ix] %) (fnargpack-paths (last defn-code))))
-    (if-let [ix (first (c/where vector? defn-code))] [[ix]]
-      (let [ixs (filterv #(c/listy? (c/cget defn-code %)) (range (count defn-code)))]
+  (if (contains? #{'def 'def*} (first code))
+    (let [ix (dec (count code))]
+      (mapv #(c/vcat [ix] %) (fnargpack-paths (last code))))
+    (if-let [ix (first (c/where vector? code))] [[ix]]
+      (let [ixs (filterv #(c/listy? (c/cget code %)) (range (count code)))]
         (mapv #(conj [%] 0) ixs)))))
 
 (defn fnresult-paths [code]
-  "Log paths to the function's result. One path per each arity. Flexible to macroexpanding vs not and other formatting."
-  (let [cl (last code) cl0 (if (coll? cl) (first cl))
-        explicit-fn? (contains? #{'fn* `fn 'fn} cl0) ; Is it (def ... (fn ...))
-        prepend (if explicit-fn? [(dec (count code))] [])
-        fcode (t/cget-in code prepend)
-        packed? (not (first (filter vector? fcode))); (fn ([a b] ...)) vs (fn [a b] ...)
-        paths-in-fcode (if packed? (mapv #(vector % (dec (count (c/cget fcode %))))
-                                     (filterv #(c/listy? (c/cget fcode %)) (range (count fcode))))
-                         [[(dec (count fcode))]])]
-    (mapv #(c/vcat prepend %) paths-in-fcode)))
+  "Paths to the function's result. Handles fn, defn, and def+fn."
+  (let [enclosing-paths (mapv butlast (fnargpack-paths code))
+        enclosing-counts (mapv #(count (t/cget-in code %)) enclosing-paths)]
+    (mapv #(conj (into [] %1) (dec %2)) enclosing-paths enclosing-counts)))
 
 (defonce _core-stuff (set (keys (ns-map (find-ns 'clojure.core)))))
 (defn fncall-paths [code & ns-sym]
