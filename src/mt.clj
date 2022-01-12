@@ -40,6 +40,17 @@
                      (f (reset-meta form2)))
       :else (f form))))
 
+(defn m-postwalk-acc [f form x0]
+  "m-postwalk but the hikers remember all the beutiful scenery they pass by.
+   Calls (f acc form) which returns [acc1 form1], in the order of postwalk.
+   We start acc at x0.
+    TODO: refactor uses of atom+walking with this."
+  (let [at (atom x0)
+        f1! (fn [xi]
+              (let [[acc1 xi1] (f @at xi)]
+                (reset! at acc1) xi1))]
+    (m-postwalk f1! form)))
+
 (defn _pmwalk [f ph x]
   (f ph
     (#(if (meta x) (with-meta % (meta x)) x)
@@ -145,7 +156,7 @@
    It still runs at runtime, not macro-expansion time, and is usually used for functions that generate code."
   ;m-quotes [x env ns-sym]
   (let [env-code (zipmap (mapv #(list 'quote %) (keys &env)) (keys &env))]
-    `(m-quotes ~(list 'quote x) ~env-code nil))) ; Use nil, do not pass in the namespace sym as it does not exist during compile.
+    `(m-quotes ~(list 'quote x) ~env-code ~*ns*))) ; Use nil, do not pass in the namespace sym as it does not exist during compile.
 
 (defn meta-unshortcut [& args]
   "Returns a map with ^foo is a :tag, ^:bar is :bar true, etc."
@@ -178,3 +189,7 @@
 (defn get-error+ []
   "Returns the thing logged as the last error."
   (::error-plus @globals/log-atom))
+
+(defmacro pri [x]
+  "Println + ident (the 'i'), outputs unmodified x."
+  `(do (let [the-x# ~x] (println the-x#) the-x#)))
