@@ -22,13 +22,23 @@ Reclur is functional from the ground up and employs several unique UI design pri
 
 We have left pre-alpha with the commit on 2021-Sept-17!
 
-This means that catastrophic bugs with crashing is fixed. Also, basic file-safety such as "really delete?" or "save changes?" is present.
+This means that catastrophic bugs with crashing is fixed. Also, basic file-safety such as "really delete?" or "save changes?" is present, but no backups are autosaved so be careful.
 
 A few common features are still missing and minor bugs are fairly common, but we are at least *usable*.
 
-## Other active (~90 days or less) clojure editors as of fall 2021 ##
+## How to install and use ##
 
-**LightTable/LightTable**: Enables vary real-time coding. Also handles javascript and has an extensive plugin system. This branch is the development branch.
+1. Install clojure and [leiningen](https://leiningen.org/).
+
+2. Run the reclur.bat file (windows) or the reclur.sh (mac and linux). It will download a few dependencies.
+
+3. Save your project in src/client/yourProject. Anything in client is .gitignored. Clojure thinks it is all one project, however, so namespaces must be qualified to be in client.yourProject.yourCljFile, and dependencies must be added to the global.lein file. You can add src/startup.clj file which runs on launch and will also be .gitignored.
+
+4. This software is licensed under the [MIT license](https://choosealicense.com/licenses/mit/), with "copyright 2022 Kevin Kostlan" applying to all files in this repo except assets/forest.jpg. This is a [permissive license](https://en.wikipedia.org/wiki/Permissive_software_license), so feel free to use it for either opensource or commercial closed-source products. Just ascribe credit if a significant amount of this codebase ends up in your project. It is my opinion that the open source and commercial worlds should work with each-other with checks-and-balances rather than an either-or dichotomy.
+
+## Or you can check out these other active (~90 days or less) clojure editors (as of fall 2021) ##
+
+**LightTable/LightTable**: Enables *very* real-time coding. Also handles javascript and has an extensive plugin system. This branch is the development branch.
 
 **mogenslund/liquid**: Another attempt to make a pure clojure editor which minimizes mutation. Based out of the terminal.
 
