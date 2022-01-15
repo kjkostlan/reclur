@@ -34,7 +34,8 @@
     [coder.cnav :as cnav]
     [coder.cbase :as cbase]
     [coder.unerror :as unerror]
-    [coder.plurality :as plurality]))
+    [coder.plurality :as plurality]
+    [test.summary :as unittest])) ; Load the test ns so we can use it.
 
 (declare launch-main-app!) ; avoids a circular dependency with launch main app depending on earlier fns.
 

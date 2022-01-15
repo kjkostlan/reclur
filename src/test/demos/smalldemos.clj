@@ -1,6 +1,6 @@
 ; Misc demos
 
-(ns test.demo
+(ns test.demos.smalldemos
   (:require [coder.cbase :as cbase]
     [clojure.walk :as walk]
     [clojure.pprint :as pprint]
@@ -41,7 +41,6 @@
     (println "")
     (println "VERY PRETTY PRINT:" (str "simulated annealing is a bit expensive, took: " (/ (- t1 t0) 1e9) "s"))
     (println vp)))
-
 
 (defn find-compile-error []
   "Show us a compile-time-error.

@@ -1,6 +1,6 @@
 ; What does a game written in a functional programming paradigm look like?
 
-(ns test.demopong)
+(ns test.demos.demopong)
 
 ;^:global (fn [s] (mapv load ["../test/demogui" "../test/demopong"]) ((resolve 'test.demogui/add-box) s ((resolve 'test.demopong/pong-game))))))
 

@@ -1,6 +1,6 @@
 ; GUI demos, so it is more clear how to get the gui changed.
 
-(ns test.demogui
+(ns test.demos.demogui
   (:require [globals]
     [app.rtext :as rtext]
     [clojure.set :as set]))
