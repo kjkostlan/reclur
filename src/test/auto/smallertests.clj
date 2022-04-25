@@ -2,7 +2,10 @@
   (:require [t]
     [clojure.test :as test]))
 
-(defn fnargpack-test []
+(defn do-not-test-this []
+  (throw (Exception. "The testing code should only test test/deftest calls.")))
+
+(test/deftest fnargpack-test ; Simple test.
   (test/is
     (let [;        Test, argvecs, resultvecs
           triplets '[(fn [x] :a :out) [[x]] [:out]
@@ -23,4 +26,3 @@
           green-argpacks (mapv #(multi-get-in % (coder.cnav/fnargpack-paths %)) fn-codes)
           green-result-forms (mapv #(multi-get-in % (coder.cnav/fnresult-paths %)) fn-codes)]
       (boolean (and (= gold-argpacks green-argpacks) (= gold-result-forms green-result-forms))))))
-

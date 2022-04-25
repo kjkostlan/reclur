@@ -3,7 +3,7 @@
 ; We are NOT: Functions specalized in trees (use t).
 ; We are NOT: Functions specalized for handling metadata (use mt). However, some functions here are better at preserving metadata.
 
-(ns c (:require [clojure.set :as set]))
+(ns c (:require [clojure.set :as set] [clojure.walk :as walk]))
 
 ;;;;;;;;;;;;;;;; Foundational functions ;;;;;;;;;;;;;;
 
@@ -34,11 +34,12 @@
     (integer? k) (get (into [] (take (inc k) x)) k)
     :else nil))
 
-(defn cpeek [x]
-  (if (sequential? x) (peek x) (first x)))
+(defn cpeek [x] "Peek does not work on ranges or maps, this does."
+  (cond (vector? x) (peek x)
+    (and (map? x) (not (empty? x))) (into [] (first x)) :else (first x)))
 
 (defn get-
-  "Python would be x[k] for k < 0. Plenty of (dec (count x)) code could be easier."
+  "Pythonic x[k] for k < 0; returns nil if k>=0. Plenty of (dec (count x)) code could be easier."
   ([x k] (get- x k nil))
   ([x k not-found]
     (if (and (sequential? x) (< k 0))
@@ -50,8 +51,9 @@
       (contains? x k)))
 
 (defn cfind [x k]
-  (if (and (not (vector? x)) (sequential? x)) (find (into [] x) k)
-      (find x k)))
+  "Returns vectors not map entries. Also works on listy collections."
+  (if-let [result (if (and (not (vector? x)) (sequential? x))
+                    (find (into [] x) k) (find x k))] (into [] result)))
 
 (defn juice-1 [pred coll]
   "Returns the first result of pred applied to coll.
@@ -67,15 +69,8 @@
 
 ;;;;;;;;;;;;;;;; Small modification fns, i.e. most elements unchanged may be shifted ;;;;;;;;;;;;;;;;
 
-(defn update- [x k f & args]
-  "Python would be x[k]=f(x[k]) for k < 0. Plenty of (dec (count x)) code could be easier."
-  (let [k (+ (count x) k)
-        v? (vector? x) x1 (if v? x (into [] x))
-        v (apply f (get x k) args)
-        x2 (assoc x k v)]
-    (if v? x2 (apply list x2))))
-
 (defn cpop [x]
+  "Works also for sets and maps."
   (cond (nil? x) nil
         (sequential? x) (pop x)
         (map? x) (dissoc x (first (first x)))
@@ -113,6 +108,7 @@
   (assoc m k (conj (get m k []) v)))
 
 (defn cdissoc [x k & ks]
+  "Works for sequentials also, putting nil in the deleted ix."
   (if (empty? ks)
     (let [metax (meta x)]
       (with-meta
@@ -129,9 +125,22 @@
               :else (wtf x))
         metax)) (apply cdissoc (cdissoc x k) ks)))
 
+(defn assoc- [x k v]
+  "Pythonic x[k]=f(x[k]) for k < 0; goes off the end of the array if k>=0. Plenty of (dec (count x)) code could be easier."
+  (let [k (+ (count x) k)
+        v? (vector? x) x1 (if v? x (into [] x))
+        x2 (cassoc x k v)]
+    (if v? x2 (apply list x2))))
+
+(defn update- [x k f & args]
+  "Pythonic x[k]=f(x[k]) for k < 0; does not work for k>=0. Plenty of (dec (count x)) code could be easier."
+  (let [v (apply f (get- x k) args)]
+    (assoc- x k v)))
+
 ;;;;;;;;;;;;;;;; Large extraction fns (e.g. take many elements) ;;;;;;;;;;;;;;;;
 
 (defn cselect-keys [x kys]
+  "Works on sequentials as well."
   (let [metax (meta x)]
     (with-meta
       (cond (nil? x) {}
@@ -159,13 +168,14 @@
         (set? x) (apply list x)
         :else (vals x)))
 
-(defn cfilter [f x]
+(defn cfilter [pred x]
+  "Filters map values if given a map, ignoring the keys."
   (with-meta
     (cond (nil? x) ()
-          (vector? x) (filterv f x)
-          (sequential? x) (apply list (filterv f x))
-          (set? x) (set (filterv f x))
-          (map? x) (reduce #(assoc %1 %2 (get x %2)) {} (filterv #(f (get x %)) (keys x)))
+          (vector? x) (filterv pred x)
+          (sequential? x) (apply list (filterv pred x))
+          (set? x) (set (filterv pred x))
+          (map? x) (reduce #(assoc %1 %2 (get x %2)) {} (filterv #(pred (get x %)) (keys x)))
           :else (wtf x))
     (meta x)))
 
@@ -191,7 +201,14 @@
 
 (defn reduce-unchecked "Doesn't check if ^clojure.lang.IReduce, which is true for most vector or listy collections."
   ([f coll] (.reduce ^clojure.lang.IReduce coll f))
-  ([f val coll] (println "Coll is:" coll) (.reduce ^clojure.lang.IReduceInit coll f val)))
+  ([f val coll] (.reduce ^clojure.lang.IReduceInit coll f val)))
+
+(defn c= [x y]
+  "Lists are not equal to vectors even if they have the same elements."
+  (let [unique-sym (symbol (str "_listy_" 123123))
+        f #(if (listy? %) (into [] (conj % unique-sym)) %)
+        x1 (walk/postwalk f x) y1 (walk/postwalk f y)]
+    (= x1 y1)))
 
 ;;;;;;;;;;;;;;;; Large modification fns, i.e. combining collections ;;;;;;;;;;;;;;;;
 
@@ -205,7 +222,7 @@
 (def vconcat vcat)
 
 (defn cmap [f x & xs]
-  "cmap treats map entries as [k v] vectors, passing them into f."
+  "Preserves the listy/vectory-ness of x. Treats map entries as [k v] vectors, passing them into f."
   (with-meta
     (cond (nil? x) ()
       (sequential? x)
@@ -235,13 +252,14 @@
           :else (wtf x))
     (meta x)))
 
-(defn creverse [x] ; doesnt affect maps or sets.
+(defn creverse [x]
+  "Preserves list/vector and doesnt affect maps or sets."
   (cond (vector? x) (with-meta (into [] (reverse x)) (meta x))
     (sequential? x) (reverse x)
     :else x))
 
 (defn cmerge [& xs]
-  "Metadata also merged, the type of the first element determines the output type."
+  "Treats vectors like maps with integer keys. Metadata also merged, the type of the first element determines the output type."
   (let [xs (mapv #(if % % {}) xs)
         metax (apply merge (mapv meta xs)) ; merge metamaps.
         xms (mapv #(cond (set? %) (zipmap % %) (map? %) % :else (zipmap (range) (into [] %))) xs)
@@ -260,7 +278,7 @@
           metax))))
 
 (defn cmerge-with [f & xs]
-  "Metadata also merged, the type of the first element determines the output type."
+  "Combines merge-with and cmerge."
   (let [xs (mapv #(if % % {}) xs)
         metax (apply merge (mapv meta xs)) ; merge metamaps.
         xms (mapv #(cond (set? %) (zipmap % %) (map? %) % :else (zipmap (range) (into [] %))) xs)
@@ -281,7 +299,7 @@
 (def cunion cmerge)
 
 (defn cdifference [x & xs]
-  "Keps the metadata of the first x. Uses keys not vals for non-set colls."
+  "Keps the metadata of the first x. Uses keys/integer-ixs (not vals) for non-set colls."
   (if x
   (let [x (if x x #{}) xs (mapv (fn [xi] (if xi xi #{})) xs)
         shadow (apply cmerge xs)
