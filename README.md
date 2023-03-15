@@ -1,32 +1,39 @@
-# 99% pure, functional, immutable clojure editor #
+# Reclur
 
-Reclur is functional from the ground up and employs several unique UI design principles.
+**Reclur** is a Clojure editor with a highly custom UI. It has some of the standard features one would expect in an IDE along with these more unique aspects:
 
-**Persistent Data Structures:** Mutation is only at the top level or for entities that live outside the app state (files, logging, reloading namespaces). The vast majority of functions are vanilla clojure. Of course, some functions use local atoms or java arrays internally which isn't meaningfully "mutation".
+## The most of space
 
-**Hand-rolled GUI:** The entire GUI is vanilla clojure, drawn on a single JPanel. The only interaction with java is receiving events, file I/O, and rendering graphics.
+Since when did GUI's have to be so *clumsy*?
 
-**Clojurized:** Java events such as mousePressed are immediately converted into clojure maps. After that, any function that processes these events is blissfully unaware that Java even exists. Similarly, rendering shapes and text start out as clojure up until the point it gets rendered to java's Graphics2D.
+**Large virtual desktop:** Set up many workspaces and pan/zoom your view between them. Move, copy and paste windows or even whole workspaces at once. Combine or release windows from tabs at-will.
 
-**Large virtual desktop:** Set up many workspaces and pan/zoom your view between them. Move, copy and paste windows or even whole workspaces at once.
-
-**No wasted real-estate:** Line-numbers, scollbars, titlebars, and more take up little space. Windows are slightly transparent which allows getting a sense of what is underneath (hotkey to toggle which is on top) but still shows the top one clearly. Note: scrollbars cannot be dragged, but we use mouse-wheel acceleration to move quickly.
-
-**Logging system:** Put loggers almost anywhere inside of functions to see what is going on. It's easy to add several logger-repls, or add a logger-repl that always points to the last codebox cursor-location you clicked.
-
-**Browse large repl reports:** Have a complicated nested map? Click on the repl's output to zoom in. It can handle infinite data-structures like (range).
+**No wasted real-estate:** Scroll bars take up two pixels. Line numbers are squeezed in and take little space.
+The title bar is minimal. Windows are slightly transparent which allows getting a sense of what is underneath while still showing the top one clearly.
 
 **Multiple views:** A single file can have multiple views open, editing one edits all in sync, code-folded or not.
 
-## Currently in alpha ##
+## The depths of Clojure
 
-We have left pre-alpha with the commit on 2021-Sept-17!
+Reclur is a very pure Clojure editor with little Java interop.
 
-This means that catastrophic bugs with crashing is fixed. Also, basic file-safety such as "really delete?" or "save changes?" is present, but no backups are autosaved so be careful.
+**Hand-rolled GUI:** The entire GUI is vanilla Clojure drawn on a single JPanel. The only interaction with Java widgets is receiving events, file I/O, and rendering graphics.
 
-A few common features are still missing and minor bugs are fairly common, but we are at least *usable*.
+**Persistent Data Structures:** Mutation is only at the top level and bottom levels. At the bottom there is high-performance functions that use arrays internally. At the top there is a global app-state and external entities (files, logging, reloading namespaces). Everything else lives in the world of persistent data structures.
 
-## How to install and use ##
+**Leave Java first, enter last:** Java events such as awt.event.mousePressed are immediately converted into Clojure maps. Similarly, the graphics are stored as Clojure data structures up until the very last moment where they get rendered to java's Graphics2D.
+
+## Introspection
+
+Self-awareness is vital... for both human being or and computer programs!
+
+**Logging system:** Put loggers almost anywhere inside of functions to see what is going on. It's easy to add several logger-REPLs, or add a logger-REPL that always points to the last codebox cursor-location you clicked.
+
+**Browse large REPL reports:** Have a complicated nested map? Click on the REPL's output to zoom in. Complete with a "smart" pretty printer. Handles infinite data structures.
+
+**Auto-update:** Automatically updates namespaces when saved.
+
+## Setup guide
 
 1. Install clojure and [leiningen](https://leiningen.org/).
 
@@ -34,9 +41,14 @@ A few common features are still missing and minor bugs are fairly common, but we
 
 3. Save your project in src/client/yourProject. Anything in client is .gitignored. Clojure thinks it is all one project, however, so namespaces must be qualified to be in client.yourProject.yourCljFile, and dependencies must be added to the global.lein file. You can add src/startup.clj file which runs on launch and will also be .gitignored.
 
-4. This software is licensed under the [MIT license](https://choosealicense.com/licenses/mit/), with "copyright 2022 Kevin Kostlan" applying to all files in this repo except assets/forest.jpg. This is a [permissive license](https://en.wikipedia.org/wiki/Permissive_software_license), so feel free to use it for either opensource or commercial closed-source products. Just ascribe credit if a significant amount of this codebase ends up in your project. It is my opinion that the open source and commercial worlds should work with each-other with checks-and-balances rather than an either-or dichotomy.
+## Development status
+This project is **Alpha/Beta** and development is *on hold* since I have migrated to Python. Major bugs should be worked out (it won't hurt to backup your data just in case) and a few "standard" features are missing.
 
-## Or you can check out these other active (~90 days or less) clojure editors (as of fall 2021) ##
+**I plan on recapturing the beauty of Clojure and the features of Reclur in my newer TuringCreate project**
+
+## Other interesting Clojure editors
+
+All of these have been active as of 2021 and some are still active to this day.
 
 **LightTable/LightTable**: Enables *very* real-time coding. Also handles javascript and has an extensive plugin system. This branch is the development branch.
 
@@ -44,7 +56,7 @@ A few common features are still missing and minor bugs are fairly common, but we
 
 oakes/Paravim: A vim clojure plugin.
 
-clojure-emacs/cider-nrepl: An emacs must-have for clojure programmers. Very active.
+clojure-emacs/cider-nREPL: An emacs must-have for clojure programmers. Very active.
 
 eerohele/Tutkain: A sublime text clojure plugin written in Python. Very active.
 
