@@ -25,7 +25,7 @@ Reclur is a very pure Clojure editor with little Java interop.
 
 ## Introspection
 
-Self-awareness is vital... for both human being or and computer programs!
+Self-awareness is vital... for both human beings and computer programs!
 
 **Logging system:** Put loggers almost anywhere inside of functions to see what is going on. It's easy to add several logger-REPLs, or add a logger-REPL that always points to the last codebox cursor-location you clicked.
 
